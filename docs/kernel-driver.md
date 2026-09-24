@@ -73,6 +73,14 @@ niri tends to report most of the screen as damaged; for desktop use only a
 sixth of that actually changes. With video most pixels really change, and the
 link (~40 MB/s) still has headroom.
 
+Stage timing (91 s of video, `ms diff/encode/usb` in the stats): diffing
+0.13 s, RLE encoding 4.7 s (~2.3 ms per update), USB 49 s (~24 ms per update);
+the worker was idle ~40% of the time, and USB ran at 38 MB/s while busy
+(~43-44 MB/s is the link maximum). Keeping several URBs in flight (as udl does)
+and overlapping encode with transfer would raise the full-screen ceiling by
+roughly 15-20%, which only matters for content changing the whole screen at
+more than ~38 fps. Not done for now.
+
 ## Features added 2026-09-24 (driver 0.2)
 
 - **Trimmed init**: 78 transfers, ~1 s from cold (see `docs/init-sequence.md`), black
