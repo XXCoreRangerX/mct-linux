@@ -367,7 +367,15 @@ static void on_mode(struct evdi_mode mode, void *ud)
 }
 
 static void on_update(int buf, void *ud) { (void)buf; ((struct ctx *)ud)->update_ready = 1; }
-static void on_dpms(int mode, void *ud) { (void)ud; logf_("dpms %d", mode); }
+/* DPMS: fcf6 = pixel-clock PLL enable; 0 makes the panel switch its backlight off */
+static void on_dpms(int mode, void *ud)
+{
+	unsigned char cmd[6] = { 0x02, 0x00, 0x01, 0xfc, 0xf6, mode == 0 ? 1 : 0 };
+
+	(void)ud;
+	logf_("dpms %d -> panel %s", mode, mode == 0 ? "on" : "off");
+	bulk_out(EP_CMD, cmd, sizeof(cmd), 5000);
+}
 static void on_crtc(int st, void *ud) { (void)ud; logf_("crtc state %d", st); }
 
 static void evdi_log(void *ud, const char *fmt, ...)

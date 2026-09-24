@@ -50,6 +50,13 @@ By default this installs the `mct_t2` kernel driver. `hardware.mct-t2.driver = "
 instead loads the patched EVDI module, adds a udev rule, and runs `t2d` as a
 systemd user service.
 
+### NixOS (plain configuration.nix)
+
+```nix
+imports = [ /path/to/mct-t2-linux/nix/nixos.nix ];
+hardware.mct-t2.enable = true;
+```
+
 ### Manual
 
 ```bash
