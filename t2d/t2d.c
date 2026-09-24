@@ -111,6 +111,18 @@ static int send_cmd(const unsigned char *hdr, int hlen, const unsigned char *pay
 	return 0;
 }
 
+static int send_rect(uint32_t base, const unsigned char *src, int stride, int dx, int dy, int w, int h);
+
+/* 8051 pacing rule, validated from cold (docs/init-sequence.md) */
+static unsigned pace_us(unsigned ep, const unsigned char *p)
+{
+	if (ep == EP_FB)
+		return 0;
+	if (ep == EP_CMD && p[0] == 0x02)	/* single register write */
+		return p[3] == 0xfe && (p[4] == 0xb0 || p[4] == 0xb1) ? 50000 : 2000;
+	return 20000;
+}
+
 static int run_init(const char *path)
 {
 	static unsigned char zeros[65536];
@@ -141,13 +153,24 @@ static int run_init(const char *path)
 		}
 		if (flags & 2 && fread(&rdlen, 4, 1, f) != 1)
 			goto bad;
+		/*
+		 * 0x14 display enable scans out buffer A: put a black frame there first
+		 * (the trimmed init no longer clears video memory).
+		 */
+		if (ep == EP_CMD && p[0] == 0x14) {
+			unsigned char *blk = calloc((size_t)W * H, 4);
+
+			if (!blk || send_rect(FB_A, blk, W * 4, 0, 0, W, H) < 0) {
+				free(blk);
+				goto bad;
+			}
+			free(blk);
+		}
 		if (bulk_out(ep, p, len, 30000))
 			goto bad;
 		if (flags & 2 && bulk_in(rdlen))
 			goto bad;
-		/* firmware needs pacing on the control pipes */
-		if (ep != EP_FB || len < 64)
-			usleep(ep == EP_FB ? 5000 : 20000);
+		usleep(pace_us(ep, p));
 		n++;
 	}
 	fclose(f);

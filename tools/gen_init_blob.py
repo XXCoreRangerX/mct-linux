@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Extract the Windows init (redir2.bin) up to and incl. the 0x14 display-enable
-into t2d/init.bin for the daemon. Record format (little-endian):
+into t2d/init-full.bin (verbatim vendor sequence; t2d/init.bin is the trimmed
+version made by gen_init_min.py). Record format (little-endian):
   u8 ep | u8 flags | u32 len | data[len if not ZERO]
   flags: 1 = ZERO (send `len` zero bytes, no data stored)
          2 = READ (after this OUT, read `rdlen` from EP 0x81; rdlen = u32 after data)
@@ -25,5 +26,5 @@ for ep, data in ops:
     out += extra; n += 1
     if ep == 3 and data[0] == 0x14:
         break
-open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "t2d", "init.bin"), "wb").write(out)
-print(f"{n} records, {len(out)} bytes -> t2d/init.bin")
+open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "t2d", "init-full.bin"), "wb").write(out)
+print(f"{n} records, {len(out)} bytes -> t2d/init-full.bin")

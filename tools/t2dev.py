@@ -32,6 +32,15 @@ def port_cycle(off_s=3.0):
     open(PORT_DISABLE, "w").write("0")
 
 
+def pace_for(ep, data):
+    """Selective pacing for the 8051 firmware (validated cold, see docs/init-sequence.md)."""
+    if ep == 2:
+        return 0.0
+    if ep == 3 and data[0] == 0x02:                      # single register write
+        return 0.05 if data[3] == 0xFE and data[4] in (0xB0, 0xB1) else 0.002
+    return 0.02                                          # lists, timing/mode packets, 0x0a, 0x90, 0x1d, EP4
+
+
 class T2:
     def __init__(self, wait=15.0):
         t0 = time.time()
@@ -66,13 +75,15 @@ class T2:
         self.out(3, bytes([0x02, 0x00, 0x01, addr >> 8, addr & 0xFF, val]))
 
     # --- init
-    def run_init(self, recs, pace_ctrl=0.02, pace_fb=0.005, log=None):
+    def run_init(self, recs, pace_ctrl=0.02, pace_fb=0.005, log=None, smart=False):
         for i, (ep, fl, d, ln, rd) in enumerate(recs):
             data = bytes(ln) if fl & 1 else d
             self.out(ep, data, 30000)
             if fl & 2:
                 self.read(rd)
-            if ep != 2 or ln < 64:
+            if smart:
+                time.sleep(pace_for(ep, data))
+            elif ep != 2 or ln < 64:
                 time.sleep(pace_ctrl if ep != 2 else pace_fb)
             if log:
                 log(i)
