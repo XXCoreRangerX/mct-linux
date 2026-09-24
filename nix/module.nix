@@ -54,7 +54,7 @@ in
       # the USB alias autoloads mct_t2 when the tablet appears
       # raw device access for the logged-in user (tools/, after unbinding the driver)
       services.udev.extraRules = ''
-        SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="520d", TAG+="uaccess"
+        SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d", TAG+="uaccess"
       '';
     })
 
@@ -66,7 +66,7 @@ in
 
       # video function of the tablet: accessible to the logged-in user, pulls in the daemon
       services.udev.extraRules = ''
-        SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="520d", TAG+="uaccess", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="t2d.service"
+        SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d", TAG+="uaccess", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="t2d.service"
       '';
 
       environment.systemPackages = [ t2d ];

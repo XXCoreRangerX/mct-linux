@@ -1069,7 +1069,9 @@ static int t2_resume(struct usb_interface *interface)
 }
 
 static const struct usb_device_id id_table[] = {
-	{ USB_DEVICE_INTERFACE_NUMBER(0x0711, 0x520d, 0) },	/* Wacom DTU-1031X */
+	/* Wacom DTU-1031X; it has been seen enumerating with either ID */
+	{ USB_DEVICE_INTERFACE_NUMBER(0x0711, 0x5209, 0) },
+	{ USB_DEVICE_INTERFACE_NUMBER(0x0711, 0x520d, 0) },
 	{},
 };
 MODULE_DEVICE_TABLE(usb, id_table);

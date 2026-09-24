@@ -1,5 +1,5 @@
 /*
- * t2d: Wacom DTU-1031X (MCT Trigger II, USB 0711:520d) display daemon.
+ * t2d: Wacom DTU-1031X (MCT Trigger II, USB 0711:5209 or 0711:520d) display daemon.
  *
  * EVDI gives the compositor a real 1024x600@60 connector (panel EDID); this
  * daemon grabs damaged pixels from it and streams them to the tablet:
@@ -524,8 +524,10 @@ int main(int argc, char **argv)
 	if (libusb_init(NULL))
 		return 1;
 	usb = libusb_open_device_with_vid_pid(NULL, 0x0711, 0x520d);
+	if (!usb)
+		usb = libusb_open_device_with_vid_pid(NULL, 0x0711, 0x5209);
 	if (!usb) {
-		logf_("tablet 0711:520d not found / no permission");
+		logf_("tablet 0711:5209/520d not found / no permission");
 		goto done;
 	}
 	if (libusb_claim_interface(usb, 0)) {

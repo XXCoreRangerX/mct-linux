@@ -45,7 +45,7 @@ class T2:
     def __init__(self, wait=15.0):
         t0 = time.time()
         while True:
-            self.dev = usb.core.find(idVendor=0x0711, idProduct=0x520d)
+            self.dev = usb.core.find(idVendor=0x0711, custom_match=lambda d: d.idProduct in (0x5209, 0x520d))
             if self.dev is not None:
                 try:
                     usb.util.claim_interface(self.dev, 0)
