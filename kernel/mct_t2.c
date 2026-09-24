@@ -62,7 +62,7 @@
 
 static int lossy;
 module_param(lossy, int, 0644);
-MODULE_PARM_DESC(lossy, "Lossy tolerance (1-8) for large updates, refined to lossless once motion stops; 0 = always lossless (default)");
+MODULE_PARM_DESC(lossy, "Lossy tolerance (1-8) for updates too big to send losslessly within a frame, refined to lossless once motion stops; 0 = always lossless (default)");
 
 #define DRIVER_NAME	"mct_t2"
 #define DRIVER_DESC	"MCT Trigger II USB display"
@@ -95,6 +95,8 @@ MODULE_PARM_DESC(lossy, "Lossy tolerance (1-8) for large updates, refined to los
 
 /* refine lossy frames to lossless this long after the last lossy update */
 #define T2_REFINE_MS	150
+/* bytes the device takes in one 60 Hz frame (~38 MB/s); beyond this, go lossy */
+#define T2_FRAME_BUDGET	(600 * 1024)
 
 struct mct_t2 {
 	struct drm_device dev;
@@ -292,12 +294,23 @@ static int t2_encode(struct mct_t2 *t2, u8 *src, int dx, int dy, int w, int h, i
 	return len;
 }
 
+/*
+ * tol > 0 allows lossy encoding, used only if the lossless result would push
+ * this update's total (*sent) past the frame budget. Returns the tolerance
+ * actually used through *used.
+ */
 static int t2_send_rect(struct mct_t2 *t2, u8 *src, u32 base, int dx, int dy, int w, int h,
-			int tol)
+			int tol, long *sent, int *used)
 {
 	u32 a = (base + dy * T2_STRIDE + dx * 3) << 8;
 	ktime_t t0 = ktime_get();
-	int len = t2_encode(t2, src, dx, dy, w, h, tol);
+	int len = t2_encode(t2, src, dx, dy, w, h, 0);
+
+	if (tol && *sent + len > T2_FRAME_BUDGET) {
+		len = t2_encode(t2, src, dx, dy, w, h, tol);
+		*used = tol;
+	}
+	*sent += len;
 	ktime_t t1 = ktime_get();
 	u8 hdr[36];
 	int ret;
@@ -348,7 +361,7 @@ static u32 t2_buf_addr(int buf)
  * rounded up but never past the buffer (that would write into the other one).
  */
 static int t2_send_visible_rect(struct mct_t2 *t2, u8 *src, u32 base,
-				const struct drm_rect *r, int tol)
+				const struct drm_rect *r, int tol, long *sent, int *used)
 {
 	int dx1 = round_down(T2_WIDTH - r->x2, 64), dx2 = round_up(T2_WIDTH - r->x1, 64);
 	int dy1 = T2_HEIGHT - r->y2, rows = drm_rect_height(r);
@@ -365,7 +378,7 @@ static int t2_send_visible_rect(struct mct_t2 *t2, u8 *src, u32 base,
 	h = roundup(rows, 16 / gcd(w / 64, 16));
 	if (dy1 + h > T2_HEIGHT)
 		dy1 = T2_HEIGHT - h;
-	return t2_send_rect(t2, src, base, dx1, dy1, w, h, tol);
+	return t2_send_rect(t2, src, base, dx1, dy1, w, h, tol, sent, used);
 }
 
 /*
@@ -413,8 +426,8 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 	struct drm_rect bands[T2_MAX_BANDS];
 	int back = t2->front == T2_FB_A ? 1 : 0;
 	u32 base = t2_buf_addr(back);
-	int i, n, tol = 0, ret = 0;
-	long area = 0;
+	int i, n, tol = 0, used = 0, ret = 0;
+	long sent = 0;
 	u8 *tmp;
 
 	ktime_t t0 = ktime_get();
@@ -427,24 +440,22 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 	}
 	t2->stats.ns_diff += ktime_to_ns(ktime_sub(ktime_get(), t0));
 
-	/* big changes may go lossy while things move; refined once they stop */
-	for (i = 0; i < n; i++)
-		area += (long)drm_rect_width(&bands[i]) * drm_rect_height(&bands[i]);
-	if (!lossless && lossy > 0 && area * 3 > (long)T2_WIDTH * T2_HEIGHT)
+	/* updates too big for one frame may go lossy; refined once motion stops */
+	if (!lossless && lossy > 0)
 		tol = clamp(lossy, 1, 8);
 
 	t2->hw_valid[back] = false;
 	for (i = 0; i < n && !ret; i++)
-		ret = t2_send_visible_rect(t2, t2->snap, base, &bands[i], tol);
+		ret = t2_send_visible_rect(t2, t2->snap, base, &bands[i], tol, &sent, &used);
 	if (!ret)
 		ret = t2_flip(t2, base);
 	if (ret)
 		return ret;
 
 	t2->stats.updates++;
-	if (tol)
+	if (used)
 		t2->stats.lossy_updates++;
-	*went_lossy = tol;
+	*went_lossy = used;
 	t2->front = base;
 	tmp = t2->hw[back];
 	t2->hw[back] = t2->snap;
@@ -528,7 +539,11 @@ static int t2_hw_init(struct mct_t2 *t2)
 		 */
 		if (ep == T2_EP_CMD && data && data[0] == 0x14) {
 			/* shadow: zeroed at probe, last image on resume */
-			ret = t2_send_rect(t2, t2->shadow, T2_FB_A, 0, 0, T2_WIDTH, T2_HEIGHT, 0);
+			long sent = 0;
+			int used = 0;
+
+			ret = t2_send_rect(t2, t2->shadow, T2_FB_A, 0, 0, T2_WIDTH, T2_HEIGHT, 0,
+					   &sent, &used);
 			if (ret)
 				goto err;
 			t2->front = T2_FB_A;
