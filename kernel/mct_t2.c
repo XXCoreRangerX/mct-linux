@@ -107,6 +107,7 @@ struct mct_t2 {
 
 	struct {			/* debugfs statistics */
 		u64 updates, rects, px_damage, px_sent, bytes;
+		u64 ns_diff, ns_encode, ns_usb;	/* time spent per stage */
 		ktime_t since;
 	} stats;
 	const struct drm_edid *edid;	/* read from the device at init */
@@ -259,8 +260,11 @@ static int t2_encode(struct mct_t2 *t2, const u8 *src, int dx, int dy, int w, in
 static int t2_send_rect(struct mct_t2 *t2, const u8 *src, u32 base, int dx, int dy, int w, int h)
 {
 	u32 a = (base + dy * T2_STRIDE + dx * 3) << 8;
+	ktime_t t0 = ktime_get();
 	int len = t2_encode(t2, src, dx, dy, w, h);
+	ktime_t t1 = ktime_get();
 	u8 hdr[36];
+	int ret;
 
 	t2->stats.rects++;
 	t2->stats.px_sent += w * h;
@@ -278,7 +282,10 @@ static int t2_send_rect(struct mct_t2 *t2, const u8 *src, u32 base, int dx, int 
 	put_unaligned_le24(w * h * 3, hdr + 27);
 	put_unaligned_le24(len, hdr + 30);
 	memcpy(hdr + 33, "\x30\x05\x28", 3);
-	return t2_cmd(t2, hdr, sizeof(hdr), t2->enc, len);
+	ret = t2_cmd(t2, hdr, sizeof(hdr), t2->enc, len);
+	t2->stats.ns_encode += ktime_to_ns(ktime_sub(t1, t0));
+	t2->stats.ns_usb += ktime_to_ns(ktime_sub(ktime_get(), t1));
+	return ret;
 }
 
 /* 0x15 register batch: scanout address (>> 2) + latch */
@@ -373,12 +380,15 @@ static int t2_present(struct mct_t2 *t2)
 	int i, n, ret = 0;
 	u8 *tmp;
 
+	ktime_t t0 = ktime_get();
+
 	if (t2->hw_valid[back]) {
 		n = t2_diff_bands(t2->snap, t2->hw[back], bands);
 	} else {
 		drm_rect_init(&bands[0], 0, 0, T2_WIDTH, T2_HEIGHT);
 		n = 1;
 	}
+	t2->stats.ns_diff += ktime_to_ns(ktime_sub(ktime_get(), t0));
 	t2->hw_valid[back] = false;
 	for (i = 0; i < n && !ret; i++)
 		ret = t2_send_visible_rect(t2, t2->snap, base, &bands[i]);
@@ -1035,6 +1045,11 @@ static int t2_stats_show(struct seq_file *m, void *data)
 		   div64_u64(t2->stats.px_sent * 100, max_t(u64, t2->stats.px_damage, 1)));
 	seq_printf(m, "usb bytes        %llu (avg %llu KB/s)\n",
 		   t2->stats.bytes, div64_u64(t2->stats.bytes, ms));
+	seq_printf(m, "ms diff/encode/usb  %llu / %llu / %llu\n",
+		   div64_u64(t2->stats.ns_diff, 1000000), div64_u64(t2->stats.ns_encode, 1000000),
+		   div64_u64(t2->stats.ns_usb, 1000000));
+	seq_printf(m, "usb MB/s while busy %llu\n",
+		   div64_u64(t2->stats.bytes * 1000, max_t(u64, t2->stats.ns_usb, 1)));
 	return 0;
 }
 
