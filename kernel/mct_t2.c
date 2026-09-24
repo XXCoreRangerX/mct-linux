@@ -61,7 +61,7 @@
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	3
+#define DRIVER_PATCH	4
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -98,6 +98,7 @@ struct mct_t2 {
 	u8 *enc;			/* RLE output */
 	u8 *shadow;			/* XRGB8888 copy of the visible image */
 	const struct drm_edid *edid;	/* read from the device at init */
+	struct backlight_device *bl;
 	u32 front;			/* framebuffer address currently scanned out */
 	bool first;			/* next update must be a full frame */
 
@@ -488,7 +489,11 @@ static const struct backlight_ops t2_bl_ops = {
 	.get_brightness = t2_bl_get_brightness,
 };
 
-static void t2_backlight_init(struct mct_t2 *t2, struct usb_interface *interface)
+/*
+ * The backlight hangs off the DRM connector (like laptop panels do), so
+ * userspace can tell which output it belongs to.
+ */
+static int t2_backlight_register(struct mct_t2 *t2)
 {
 	struct backlight_properties props = {
 		.type = BACKLIGHT_RAW,
@@ -507,10 +512,19 @@ static void t2_backlight_init(struct mct_t2 *t2, struct usb_interface *interface
 	if (!t2_bl_xfer(t2, false, &level))
 		props.brightness = min_t(int, level, T2_BL_MAX);
 	snprintf(name, sizeof(name), "mct_t2-%d", t2->dev.primary->index);
-	bd = devm_backlight_device_register(&interface->dev, name, &interface->dev, t2,
-					    &t2_bl_ops, &props);
-	if (IS_ERR(bd))
+	bd = backlight_device_register(name, t2->conn.kdev, t2, &t2_bl_ops, &props);
+	if (IS_ERR(bd)) {
 		drm_warn(&t2->dev, "backlight registration failed: %ld\n", PTR_ERR(bd));
+		return 0;	/* not fatal */
+	}
+	t2->bl = bd;
+	return 0;
+}
+
+static void t2_backlight_unregister(struct mct_t2 *t2)
+{
+	backlight_device_unregister(t2->bl);
+	t2->bl = NULL;
 }
 
 /* ------------------------------------------------------------------ */
@@ -889,7 +903,19 @@ static const struct drm_connector_helper_funcs t2_conn_helper_funcs = {
 	.mode_valid = t2_conn_mode_valid,
 };
 
+static int t2_conn_late_register(struct drm_connector *connector)
+{
+	return t2_backlight_register(to_t2(connector->dev));
+}
+
+static void t2_conn_early_unregister(struct drm_connector *connector)
+{
+	t2_backlight_unregister(to_t2(connector->dev));
+}
+
 static const struct drm_connector_funcs t2_conn_funcs = {
+	.late_register = t2_conn_late_register,
+	.early_unregister = t2_conn_early_unregister,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = drm_connector_cleanup,
 	.reset = drm_atomic_helper_connector_reset,
@@ -1043,7 +1069,6 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 		return ret;
 
 	drm_client_setup(dev, NULL);
-	t2_backlight_init(t2, interface);
 	return 0;
 }
 
