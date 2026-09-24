@@ -79,7 +79,14 @@ the worker was idle ~40% of the time, and USB ran at 38 MB/s while busy
 (~43-44 MB/s is the link maximum). Keeping several URBs in flight (as udl does)
 and overlapping encode with transfer would raise the full-screen ceiling by
 roughly 15-20%, which only matters for content changing the whole screen at
-more than ~38 fps. Not done for now.
+more than ~38 fps.
+
+Tried on branch `async-urbs` (8 URBs in flight, ~32-row strips so encoding
+overlaps transfer): no gain. Per update 28.0 ms vs 26.4 ms for the same data,
+37 vs 38 MB/s while busy. The T2 accepts RLE data at about 37-40 MB/s no matter
+how the host queues it (the Python benchmark with whole-frame transfers topped
+out at ~44 MB/s including idle-free pyusb writes), so the synchronous design
+already runs at the device's limit. The branch is kept for reference, unmerged.
 
 ## Features added 2026-09-24 (driver 0.2)
 
