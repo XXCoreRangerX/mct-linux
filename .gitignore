@@ -12,3 +12,11 @@ vm/t2/
 captures/*
 !captures/redir2.bin
 !captures/frame1_rle.bin
+# kernel module build output
+kernel/*.o
+kernel/*.ko
+kernel/*.mod
+kernel/*.mod.c
+kernel/.*.cmd
+kernel/Module.symvers
+kernel/modules.order

@@ -1,128 +1,74 @@
-# mct-t2-linux
+mct-t2-linux
+============
 
-Linux display support for **MCT Trigger II (T2)** USB graphics, the chip
-inside the **Wacom DTU-1031X** 10.1" pen display (`1024x600`, USB `0711:520d`).
-The vendor only ships a Windows driver. Everything here came from USB
-captures of that driver plus disassembly, then live testing on the hardware.
+Linux support for USB displays built on the MCT Trigger II (T2) chip, such as
+the Wacom DTU-1031X pen display (1024x600, USB 0711:520d). The vendor only
+provides a Windows driver; the protocol was worked out from USB captures of
+that driver, its disassembly, and testing on real hardware.
 
-**Status:** the tablet works as a normal 60 Hz monitor under Linux (tested with niri
-26.04 on Linux 7.2). There are two working implementations:
+The pen (056a:032f) is a separate USB function handled by the in-kernel
+wacom driver.
 
-1. **`kernel/`: native DRM driver `mct_t2`** (recommended). A real DRM device with
-   fbdev emulation, so it works in Wayland/X11 *and* on the text console.
-   Hardware cursor, monitor power-off (DPMS), ~1 s init.
-2. **EVDI + `t2d/`**: userspace daemon on top of DisplayLink's virtual DRM
-   driver. Useful for development, since iterating needs no kernel reloads.
+Contents
+--------
 
-Both stream only damaged regions over USB 2.0 using the T2's RLE codec.
+  kernel/   mct_t2, a DRM/KMS driver. Works with Wayland/X11 and the text
+            console, hardware cursor, DPMS. This is the one to use.
+  t2d/      userspace daemon on top of EVDI. Older, handy for protocol work
+            since it needs no kernel module reloads.
+  nix/      flake packages and a NixOS module.
+  tools/    Python tools used during reverse engineering (codec, init
+            replay, capture parsing, live register experiments).
+  docs/     protocol and research notes.
+  captures/ USB capture of the Windows driver's init.
+  vm/       Windows VM setup used for captures (vendor driver not included).
 
-The pen digitizer (`056a:032f`) is a separate USB function and already works
-with the in-kernel `wacom` driver.
+Building
+--------
 
-## How it works
+Kernel module, out of tree:
 
-```
-compositor --> EVDI virtual connector (panel EDID, 1024x600@60)
-                    | damage rects + XRGB8888
-                    v
-               t2d (userspace, libusb) --> USB bulk --> T2-285A --> panel
-```
+    make -C kernel KDIR=/lib/modules/$(uname -r)/build
+    sudo insmod kernel/mct_t2.ko
 
-- [EVDI](https://github.com/DisplayLink/evdi) provides the virtual DRM connector.
-  It needs `nix/evdi-linux-7.2.patch` to build on Linux >= 7.2.
-- `t2d/` is the daemon. It replays the device init (359 USB transfers, ~3 s) and
-  then encodes damaged regions with the T2 RLE codec: full frames go through double
-  buffering and a flip, small damage becomes partial updates.
-- `kernel/mct_t2.c` does the same inside the kernel (see [docs/kernel-driver.md](docs/kernel-driver.md)).
+The driver binds to the tablet automatically and shows up as a USB-n
+connector. To put a text console on it, map a VT to its framebuffer, e.g.
+`con2fbmap 2 1`.
 
-## Install
+NixOS, plain configuration.nix:
 
-### NixOS (flake)
+    imports = [ /path/to/mct-t2-linux/nix/nixos.nix ];
+    hardware.mct-t2.enable = true;
 
-```nix
-# flake.nix of your system
-inputs.mct-t2.url = "github:<you>/mct-t2-linux";
-# in your nixosSystem modules:
-modules = [ inputs.mct-t2.nixosModules.default { hardware.mct-t2.enable = true; } ];
-```
+or with flakes, add this repository as an input and use
+`nixosModules.default` with the same option. `hardware.mct-t2.driver =
+"evdi"` selects the EVDI + t2d setup instead of the kernel driver.
 
-By default this installs the `mct_t2` kernel driver. `hardware.mct-t2.driver = "evdi";`
-instead loads the patched EVDI module, adds a udev rule, and runs `t2d` as a
-systemd user service.
+t2d needs EVDI; on Linux 7.2 and later EVDI requires nix/evdi-linux-7.2.patch.
 
-### NixOS (plain configuration.nix)
+Documentation
+-------------
 
-```nix
-imports = [ /path/to/mct-t2-linux/nix/nixos.nix ];
-hardware.mct-t2.enable = true;
-```
+docs/protocol-t2.md is the protocol reference: transfer framing, frame
+updates, the RLE codec, the hardware cursor and panel power. The other files
+cover the init sequence, the hardware, the vendor driver, the capture setup,
+and notes on both drivers.
 
-### Manual
+Credits
+-------
 
-```bash
-# EVDI kernel module (patched for Linux >= 7.2), then:
-sudo modprobe evdi initial_device_count=1
-cd t2d && make EVDI_INC=/path/to/evdi/library && ./t2d
-```
+cyrozap's notes at https://github.com/cyrozap/mct-usb-display-adapter-re
+(doc/Protocol-T2.md) were the starting point for the protocol documentation.
+https://github.com/JingYenLoh/trigger6 is a separate Linux driver for the
+Trigger 6.
 
-`./t2d -t pattern` sends a test pattern without EVDI. Use it to check the USB side.
+Mainline Linux has no driver for MCT's Trigger display chips. MCT's USB vendor
+ID shows up there only for the mct_u232 serial adapter, some SiS-based
+sisusbvga adapters, an ax88179 Ethernet adapter and an audio quirk for the
+Trigger 5.
 
-## Protocol documentation
+License
+-------
 
-| Doc | Contents |
-|---|---|
-| [docs/protocol-t2.md](docs/protocol-t2.md) | Bulk protocol: commands, **transfer framing**, `0x13` frames, `0x15` flip, **RLE codec**, partial updates, HW cursor |
-| [docs/init-sequence.md](docs/init-sequence.md) | The Windows driver's init sequence, step by step |
-| [docs/device-dtu1031x.md](docs/device-dtu1031x.md) | Hardware: USB IDs, endpoints, EDID, registers |
-| [docs/driver-analysis.md](docs/driver-analysis.md) | Vendor driver structure (`TrgIdd.dll` / `T2Indisp.dll`), function map |
-| [docs/capture.md](docs/capture.md) | Getting complete USB traffic from a Windows VM (usbredir tee) |
-| [docs/first-light.md](docs/first-light.md) | How the first image was reached: root causes, experiment log |
-| [docs/kernel-driver.md](docs/kernel-driver.md) | Native DRM driver `mct_t2`: design, build, console, known issues |
-| [docs/display-driver.md](docs/display-driver.md) | EVDI + t2d design, measurements, limits |
-
-Key facts, in brief:
-
-- The firmware parses EP2 **per USB transfer**. Command headers must be their own
-  transfer; payload goes in separate transfers.
-- Frames go into one of two framebuffers (`0x00C000`, `0x1CE000`). A `0x15`
-  register batch flips scanout.
-- `0x13` payload: planar RLE in 1024-pixel units (R, G, B lines). A literal byte is one pixel;
-  `30 NN VV` = `NN+1` x `VV`.
-- The panel scans out **rotated 180 degrees**.
-
-## Repository layout
-
-- `kernel/`: DRM kernel driver `mct_t2` (+ generated init table)
-- `t2d/`: display daemon (C), init blob, panel EDID
-- `nix/`: flake packages, NixOS module, EVDI patch
-- `tools/`: Python protocol tools. `t2rle.py` (codec), `replay.py` (init replay + test
-  frames), `show_image.py`, capture parsers (`tee.py`, `parse_redir.py`,
-  `redir_ops.py`, `timeline.py`), RE helpers (`xref.py`, `locfunc.py`, `vft.py`)
-- `captures/redir2.bin`: full usbredir capture of the Windows init (source of `t2d/init.bin`)
-- `data/`: EDID, device info blob, register sweep
-- `vm/`: Windows VM recipe for re-capturing (vendor driver not included)
-
-Python tools: `nix develop` (or `pip install pyusb pillow`).
-
-## Related work and credits
-
-- [cyrozap/mct-usb-display-adapter-re](https://github.com/cyrozap/mct-usb-display-adapter-re):
-  reverse-engineering notes for MCT Trigger II, 5 and 6. Its
-  [Protocol-T2.md](https://github.com/cyrozap/mct-usb-display-adapter-re/blob/master/doc/Protocol-T2.md)
-  was the starting point for `docs/protocol-t2.md` (command set, `0x11`/`0x13` layout,
-  endpoints). Thanks to cyrozap.
-- [JingYenLoh/trigger6](https://github.com/JingYenLoh/trigger6): an out-of-tree Linux
-  driver for the Trigger 6. Different chip; not used here, but relevant for anyone
-  looking at other Trigger generations.
-- In mainline Linux (checked on 7.2), MCT (USB vendor `0x0711`) appears only as
-  the `mct_u232` USB serial adapter, some SiS-based `sisusbvga` VGA adapters, an
-  `ax88179` Ethernet adapter and an audio quirk for the Trigger 5. No Trigger display
-  driver exists there.
-
-## Legal
-
-Interoperability research on hardware I own. No vendor code or binaries are
-included; the vendor driver is only referenced by function address.
-Code: GPL-2.0 (see `LICENSE`). The EVDI patch applies to MIT-licensed EVDI.
-Documentation in `docs/`: CC BY-SA 4.0, since `docs/protocol-t2.md` builds on
-cyrozap's notes, which use that license.
+Code is GPL-2.0 (see LICENSE). The documentation in docs/ is CC BY-SA 4.0,
+as it builds on cyrozap's notes. No vendor code or binaries are included.
