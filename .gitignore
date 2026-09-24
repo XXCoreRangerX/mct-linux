@@ -1,0 +1,14 @@
+result
+result-*
+t2d/t2d
+__pycache__/
+*.pyc
+# VM artefacts / vendor files (never commit)
+vm/*.qcow2
+vm/*.iso
+vm/*.fd
+vm/qmp.sock
+vm/t2/
+captures/*
+!captures/redir2.bin
+!captures/frame1_rle.bin

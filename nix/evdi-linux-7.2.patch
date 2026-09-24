@@ -1,0 +1,70 @@
+diff --git a/module/evdi_fb.c b/module/evdi_fb.c
+index a6a2edc..eff3f3a 100644
+--- a/module/evdi_fb.c
++++ b/module/evdi_fb.c
+@@ -102,7 +102,7 @@ static int evdi_user_framebuffer_dirty(
+ 	struct evdi_device *evdi = dev->dev_private;
+ 
+ 	struct drm_modeset_acquire_ctx ctx;
+-	struct drm_atomic_state *state;
++	struct drm_atomic_commit *state;
+ 	struct drm_plane *plane;
+ 	int ret = 0;
+ 	unsigned int i;
+@@ -116,7 +116,7 @@ static int evdi_user_framebuffer_dirty(
+ 		 */
+ 		file_priv ? DRM_MODESET_ACQUIRE_INTERRUPTIBLE :	0);
+ 
+-	state = drm_atomic_state_alloc(fb->dev);
++	state = drm_atomic_commit_alloc(fb->dev);
+ 	if (!state) {
+ 		ret = -ENOMEM;
+ 		goto out;
+@@ -150,14 +150,14 @@ retry:
+ 
+ out:
+ 	if (ret == -EDEADLK) {
+-		drm_atomic_state_clear(state);
++		drm_atomic_commit_clear(state);
+ 		ret = drm_modeset_backoff(&ctx);
+ 		if (!ret)
+ 			goto retry;
+ 	}
+ 
+ 	if (state)
+-		drm_atomic_state_put(state);
++		drm_atomic_commit_put(state);
+ 
+ 	drm_modeset_drop_locks(&ctx);
+ 	drm_modeset_acquire_fini(&ctx);
+diff --git a/module/evdi_modeset.c b/module/evdi_modeset.c
+index fd7e31a..6e2c2f9 100644
+--- a/module/evdi_modeset.c
++++ b/module/evdi_modeset.c
+@@ -66,7 +66,7 @@ static void evdi_crtc_set_nofb(__always_unused struct drm_crtc *crtc)
+ static void evdi_crtc_atomic_flush(
+ 	struct drm_crtc *crtc
+ #if KERNEL_VERSION(5, 11, 0) <= LINUX_VERSION_CODE || defined(RPI) || defined(EL8)
+-	, struct drm_atomic_state *state
++	, struct drm_atomic_commit *state
+ #else
+ 	, __always_unused struct drm_crtc_state *old_state
+ #endif
+@@ -219,7 +219,7 @@ static const struct drm_crtc_funcs evdi_crtc_funcs = {
+ 
+ static void evdi_plane_atomic_update(struct drm_plane *plane,
+ #if KERNEL_VERSION(5, 13, 0) <= LINUX_VERSION_CODE || defined(EL8)
+-				     struct drm_atomic_state *atom_state
++				     struct drm_atomic_commit *atom_state
+ #else
+ 				     struct drm_plane_state *old_state
+ #endif
+@@ -317,7 +317,7 @@ static void evdi_cursor_atomic_get_rect(struct drm_clip_rect *rect,
+ 
+ static void evdi_cursor_atomic_update(struct drm_plane *plane,
+ #if KERNEL_VERSION(5, 13, 0) <= LINUX_VERSION_CODE || defined(EL8)
+-				     struct drm_atomic_state *atom_state
++				     struct drm_atomic_commit *atom_state
+ #else
+ 				     struct drm_plane_state *old_state
+ #endif
