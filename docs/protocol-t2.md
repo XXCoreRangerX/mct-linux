@@ -133,11 +133,41 @@ re-encoding it **byte-identically** (`tools/t2rle.py`).
   Small change → partials straight into the **front** buffer, no flip.
   All 172 frames in `captures/redir4.bin` decode under this model.
 
-## EP `0x04` hardware cursor (from `redir4.bin`)
+## Hardware cursor (verified live 2026-09-24, `tools/cursor_test.py`)
 
-`05 0e  38 XL 39 XH 3a YL 3b YH 44 00 45 00 36 07` — cursor position regs
-`0x38/0x39` = x, `0x3a/0x3b` = y (sent at mouse-move rate). `05 02 36 24` /
-`05 02 36 04` toggle cursor enable. Optional for a Linux driver.
+The T2 has a 64×64 ARGB cursor overlay, drawn by the chip on top of scanout.
+
+**Shape upload** (EP `0x02`, found in `redir4.bin`: 39 uploads, 6 distinct shapes):
+
+```
+12 00 00 00 00 00 40 00 00 40 00 00 01 25      (14 B header, own transfer; sent verbatim)
++ 16384 B = 64×64 pixels, 4 B each: A, B, G, R  (DRM_FORMAT_RGBA8888)
+```
+
+- Stored at video address 0 (below framebuffer A at `0xC000`). The header fields
+  presumably encode address 0 and length `0x4000`.
+- The image is in **device orientation**, like the framebuffer. For the 180° panel,
+  reverse the pixel order: the arrow's tip ends up at the bottom-right of the stored box.
+- Windows uses alpha `0xFE` for opaque pixels and `0x00` for transparent ones.
+
+**Position / enable** (EP `0x04`, `05 <n> (reg val)…` register list, like the MC8032 write):
+
+```
+05 12  34 40 35 40  38 XL 39 XH  3a YL 3b YH  44 00 45 00  36 07   (first time: size 0x40 × 0x40)
+05 0e  38 XL 39 XH  3a YL 3b YH  44 00 45 00  36 07                (every move)
+05 02  36 04  /  05 02  36 24                                      (hide / transient during shape change)
+```
+
+- `0x38/0x39` = x, `0x3a/0x3b` = y: **device-space top-left of the 64×64 box**.
+  (0,0) puts the whole box in the visible bottom-right corner.
+- Coordinates must be ≥ 0. Negative (two's complement) values make the cursor vanish.
+  The chip clips boxes that run past the far edges (x > 960 / y > 536).
+- `0x44` / `0x45` shrink the drawn box from the **far** end (e.g. `0x44 = 32` →
+  only image columns 0–31 are drawn). This is not an image offset.
+- `0x36`: `07` = cursor shown, `04` = hidden (verified by blinking). Windows
+  writes `24` then `04` around some shape changes.
+- To show a cursor hanging off the visible right/bottom edge (negative device
+  coordinates), upload a copy shifted by the overhang, with transparent fill, and position it at 0.
 
 ## Gaps (resolved by usbredir capture — kept for history)
 
