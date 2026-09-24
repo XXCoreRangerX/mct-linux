@@ -61,6 +61,7 @@ in
 
     (lib.mkIf (cfg.driver == "kernel") {
       boot.extraModulePackages = [ kmod ];
+      boot.extraModprobeConfig = lib.mkIf (cfg.lossy != 0) "options mct_t2 lossy=${toString cfg.lossy}";
       # swap in the module of the current generation without rebooting
       environment.systemPackages = [
         (pkgs.writeShellScriptBin "mct-t2-reload" ''
