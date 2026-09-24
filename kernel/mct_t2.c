@@ -62,7 +62,7 @@
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	5
+#define DRIVER_PATCH	6
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -83,8 +83,9 @@
 #define T2_CUR		64			/* hardware cursor is 64x64 */
 #define T2_CUR_BYTES	(T2_CUR * T2_CUR * 4)
 
-/* full frame + flip when the damage covers more than 1/FULL_DIV of the screen */
-#define T2_FULL_DIV	3
+/* rows of unchanged pixels that still get merged into one update rect */
+#define T2_BAND_GAP	16
+#define T2_MAX_BANDS	16
 
 struct mct_t2 {
 	struct drm_device dev;
@@ -97,18 +98,19 @@ struct mct_t2 {
 	struct mutex io_lock;		/* EP2 command sequences + bounce */
 	u8 *bounce;			/* DMA-able transfer buffer */
 	u8 *enc;			/* RLE output */
-	u8 *shadow;			/* XRGB8888 copy of the visible image */
+	u8 *shadow;			/* XRGB8888 image as committed by userspace */
+	u8 *snap;			/* shadow snapshot being sent */
+	u8 *hw[2];			/* what device buffers A and B hold */
+	bool hw_valid[2];
 	const struct drm_edid *edid;	/* read from the device at init */
 	struct backlight_device *bl;
 	struct mutex power_lock;		/* crtc_on + bl_off -> pixel clock */
 	bool crtc_on, bl_off;
 	u32 front;			/* framebuffer address currently scanned out */
-	bool first;			/* next update must be a full frame */
 
 	struct {
 		struct work_struct work;
-		struct mutex lock;	/* protects shadow writes + rect/dirty */
-		struct drm_rect rect;	/* accumulated damage, visible coordinates */
+		struct mutex lock;	/* protects shadow + dirty */
 		bool dirty;
 	} upd;
 
@@ -214,11 +216,11 @@ static int t2_rle_line(const u8 *v, int n, u8 *out)
 }
 
 /*
- * Encode device rect (dx, dy, w, h) from the visible XRGB8888 shadow image,
+ * Encode device rect (dx, dy, w, h) from a visible-orientation XRGB8888 image,
  * rotating by 180 degrees. Pixels stream row-major in 1024-pixel units, each
  * unit as R, G, B lines. Rows past the panel (alignment overshoot) are black.
  */
-static int t2_encode(struct mct_t2 *t2, int dx, int dy, int w, int h)
+static int t2_encode(struct mct_t2 *t2, const u8 *src, int dx, int dy, int w, int h)
 {
 	static u8 ch[3][1024];	/* only used with io_lock held */
 	int x, y, k = 0, len = 0, c;
@@ -226,7 +228,7 @@ static int t2_encode(struct mct_t2 *t2, int dx, int dy, int w, int h)
 	for (y = dy; y < dy + h; y++) {
 		for (x = dx; x < dx + w; x++) {
 			if (y < T2_HEIGHT) {
-				const u8 *px = t2->shadow +
+				const u8 *px = src +
 					((T2_HEIGHT - 1 - y) * T2_WIDTH + (T2_WIDTH - 1 - x)) * 4;
 
 				ch[0][k] = px[2];
@@ -247,10 +249,10 @@ static int t2_encode(struct mct_t2 *t2, int dx, int dy, int w, int h)
 	return len;
 }
 
-static int t2_send_rect(struct mct_t2 *t2, u32 base, int dx, int dy, int w, int h)
+static int t2_send_rect(struct mct_t2 *t2, const u8 *src, u32 base, int dx, int dy, int w, int h)
 {
 	u32 a = (base + dy * T2_STRIDE + dx * 3) << 8;
-	int len = t2_encode(t2, dx, dy, w, h);
+	int len = t2_encode(t2, src, dx, dy, w, h);
 	u8 hdr[36];
 
 	hdr[0] = 0x13;
@@ -281,34 +283,105 @@ static int t2_flip(struct mct_t2 *t2, u32 base)
 	return t2_out(t2, T2_EP_FB, cmd, sizeof(cmd));
 }
 
-static int t2_show_full(struct mct_t2 *t2)
+static u32 t2_buf_addr(int buf)
 {
-	u32 back = t2->front == T2_FB_A ? T2_FB_B : T2_FB_A;
-	int ret;
-
-	ret = t2_send_rect(t2, back, 0, 0, T2_WIDTH, T2_HEIGHT);
-	if (!ret)
-		ret = t2_flip(t2, back);
-	if (!ret)
-		t2->front = back;
-	return ret;
+	return buf ? T2_FB_B : T2_FB_A;
 }
 
-/* visible-space rect -> aligned device rect, written into the front buffer */
-static int t2_show_partial(struct mct_t2 *t2, const struct drm_rect *r)
+/*
+ * Send the visible-space rect r of src into device buffer base. The device
+ * wants x and w in 64-pixel units and w * h a multiple of 1024; rows are
+ * rounded up but never past the buffer (that would write into the other one).
+ */
+static int t2_send_visible_rect(struct mct_t2 *t2, const u8 *src, u32 base,
+				const struct drm_rect *r)
 {
-	int dx1 = T2_WIDTH - r->x2, dx2 = T2_WIDTH - r->x1;
-	int dy1 = T2_HEIGHT - r->y2, dy2 = T2_HEIGHT - r->y1;
-	int w, h, m;
+	int dx1 = round_down(T2_WIDTH - r->x2, 64), dx2 = round_up(T2_WIDTH - r->x1, 64);
+	int dy1 = T2_HEIGHT - r->y2, rows = drm_rect_height(r);
+	int w, h;
 
-	dx1 = round_down(dx1, 64);
-	dx2 = round_up(dx2, 64);
+	if (roundup(rows, 16 / gcd((dx2 - dx1) / 64, 16)) > T2_HEIGHT && ((dx2 - dx1) / 64) & 1) {
+		/* full-height rect: an even number of 64-px columns makes h = 600 legal */
+		if (dx2 < T2_WIDTH)
+			dx2 += 64;
+		else
+			dx1 -= 64;
+	}
 	w = dx2 - dx1;
-	m = 16 / gcd(w / 64, 16);	/* w * h must be a multiple of 1024 */
-	h = roundup(dy2 - dy1, m);
+	h = roundup(rows, 16 / gcd(w / 64, 16));
 	if (dy1 + h > T2_HEIGHT)
-		dy1 = max(T2_HEIGHT - h, 0);
-	return t2_send_rect(t2, t2->front, dx1, dy1, w, h);
+		dy1 = T2_HEIGHT - h;
+	return t2_send_rect(t2, src, base, dx1, dy1, w, h);
+}
+
+/*
+ * Rows of cur that differ from old, grouped into bands (a gap of fewer than
+ * T2_BAND_GAP unchanged rows keeps a band going). Returns the band count,
+ * 0 if nothing changed.
+ */
+static int t2_diff_bands(const u8 *cur, const u8 *old, struct drm_rect *bands)
+{
+	int n = 0, y, x1, x2, last = -T2_BAND_GAP - 1;
+
+	for (y = 0; y < T2_HEIGHT; y++) {
+		const u32 *a = (const u32 *)(cur + y * T2_WIDTH * 4);
+		const u32 *b = (const u32 *)(old + y * T2_WIDTH * 4);
+
+		if (!memcmp(a, b, T2_WIDTH * 4))
+			continue;
+		for (x1 = 0; a[x1] == b[x1]; x1++)
+			;
+		for (x2 = T2_WIDTH; a[x2 - 1] == b[x2 - 1]; x2--)
+			;
+		if (n && y - last <= T2_BAND_GAP) {
+			bands[n - 1].x1 = min(bands[n - 1].x1, x1);
+			bands[n - 1].x2 = max(bands[n - 1].x2, x2);
+			bands[n - 1].y2 = y + 1;
+		} else if (n < T2_MAX_BANDS) {
+			drm_rect_init(&bands[n++], x1, y, x2 - x1, 1);
+		} else {
+			/* too fragmented: one rect spanning everything */
+			drm_rect_init(&bands[0], 0, bands[0].y1, T2_WIDTH, y + 1 - bands[0].y1);
+			n = 1;
+		}
+		last = y;
+	}
+	return n;
+}
+
+/*
+ * Every update goes to the back buffer followed by a flip, so there is no
+ * tearing. Only pixels that differ from what the back buffer already holds
+ * (the image from two updates ago) are sent.
+ */
+static int t2_present(struct mct_t2 *t2)
+{
+	struct drm_rect bands[T2_MAX_BANDS];
+	int back = t2->front == T2_FB_A ? 1 : 0;
+	u32 base = t2_buf_addr(back);
+	int i, n, ret = 0;
+	u8 *tmp;
+
+	if (t2->hw_valid[back]) {
+		n = t2_diff_bands(t2->snap, t2->hw[back], bands);
+	} else {
+		drm_rect_init(&bands[0], 0, 0, T2_WIDTH, T2_HEIGHT);
+		n = 1;
+	}
+	t2->hw_valid[back] = false;
+	for (i = 0; i < n && !ret; i++)
+		ret = t2_send_visible_rect(t2, t2->snap, base, &bands[i]);
+	if (!ret)
+		ret = t2_flip(t2, base);
+	if (ret)
+		return ret;
+
+	t2->front = base;
+	tmp = t2->hw[back];
+	t2->hw[back] = t2->snap;
+	t2->snap = tmp;
+	t2->hw_valid[back] = true;
+	return 0;
 }
 
 /* single register write on EP3: 02 00 01 <hi> <lo> <val> */
@@ -386,10 +459,13 @@ static int t2_hw_init(struct mct_t2 *t2)
 		 */
 		if (ep == T2_EP_CMD && data && data[0] == 0x14) {
 			/* shadow: zeroed at probe, last image on resume */
-			ret = t2_send_rect(t2, T2_FB_A, 0, 0, T2_WIDTH, T2_HEIGHT);
+			ret = t2_send_rect(t2, t2->shadow, T2_FB_A, 0, 0, T2_WIDTH, T2_HEIGHT);
 			if (ret)
 				goto err;
 			t2->front = T2_FB_A;
+			memcpy(t2->hw[0], t2->shadow, T2_WIDTH * T2_HEIGHT * 4);
+			t2->hw_valid[0] = true;
+			t2->hw_valid[1] = false;
 		}
 
 		ret = t2_out(t2, ep, data, len);
@@ -556,8 +632,6 @@ static void t2_backlight_unregister(struct mct_t2 *t2)
 static void t2_update_work(struct work_struct *work)
 {
 	struct mct_t2 *t2 = container_of(work, struct mct_t2, upd.work);
-	struct drm_rect rect;
-	bool full;
 	int idx, ret;
 
 	mutex_lock(&t2->upd.lock);
@@ -565,28 +639,18 @@ static void t2_update_work(struct work_struct *work)
 		mutex_unlock(&t2->upd.lock);
 		return;
 	}
-	rect = t2->upd.rect;
 	t2->upd.dirty = false;
+	mutex_lock(&t2->io_lock);
+	memcpy(t2->snap, t2->shadow, T2_WIDTH * T2_HEIGHT * 4);
 	mutex_unlock(&t2->upd.lock);
 
-	if (!drm_dev_enter(&t2->dev, &idx))
-		return;
-
-	/*
-	 * Encoding reads the shadow without upd.lock: a concurrent update may
-	 * tear this transfer, but it re-queues its own damage right after.
-	 */
-	full = t2->first || (long)drm_rect_width(&rect) * drm_rect_height(&rect) * T2_FULL_DIV >
-			    (long)T2_WIDTH * T2_HEIGHT;
-	mutex_lock(&t2->io_lock);
-	ret = full ? t2_show_full(t2) : t2_show_partial(t2, &rect);
+	if (drm_dev_enter(&t2->dev, &idx)) {
+		ret = t2_present(t2);
+		if (ret && ret != -ENODEV && ret != -ECONNRESET && ret != -ESHUTDOWN)
+			drm_err_ratelimited(&t2->dev, "frame update error: %d\n", ret);
+		drm_dev_exit(idx);
+	}
 	mutex_unlock(&t2->io_lock);
-	if (!ret)
-		t2->first = false;
-	else if (ret != -ENODEV && ret != -ECONNRESET && ret != -ESHUTDOWN)
-		drm_err_ratelimited(&t2->dev, "frame update error: %d\n", ret);
-
-	drm_dev_exit(idx);
 }
 
 /* copy damage from the (mapped) framebuffer into the shadow and kick the worker */
@@ -601,17 +665,7 @@ static void t2_mark_dirty(struct mct_t2 *t2, struct drm_framebuffer *fb,
 		memcpy(t2->shadow + (y * T2_WIDTH + dirty->x1) * 4,
 		       src + y * fb->pitches[0] + dirty->x1 * 4,
 		       drm_rect_width(dirty) * 4);
-	if (t2->upd.dirty) {
-		struct drm_rect *r = &t2->upd.rect;
-
-		r->x1 = min(r->x1, dirty->x1);
-		r->y1 = min(r->y1, dirty->y1);
-		r->x2 = max(r->x2, dirty->x2);
-		r->y2 = max(r->y2, dirty->y2);
-	} else {
-		t2->upd.rect = *dirty;
-		t2->upd.dirty = true;
-	}
+	t2->upd.dirty = true;
 	mutex_unlock(&t2->upd.lock);
 
 	queue_work(system_long_wq, &t2->upd.work);
@@ -848,7 +902,6 @@ static void t2_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commi
 	struct mct_t2 *t2 = to_t2(crtc->dev);
 	int idx;
 
-	t2->first = true;	/* primary plane update follows with full damage */
 	t2->crtc_on = true;
 	if (drm_dev_enter(crtc->dev, &idx)) {
 		t2_update_panel_power(t2);
@@ -1036,6 +1089,9 @@ static void t2_release(struct drm_device *dev, void *res)
 
 	kvfree(t2->enc);
 	kvfree(t2->shadow);
+	kvfree(t2->snap);
+	kvfree(t2->hw[0]);
+	kvfree(t2->hw[1]);
 	drm_edid_free(t2->edid);
 }
 
@@ -1074,11 +1130,14 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	t2->cur.shown = drmm_kmalloc(dev, T2_CUR_BYTES, GFP_KERNEL);
 	t2->enc = kvmalloc(T2_ENC_MAX, GFP_KERNEL);
 	t2->shadow = kvzalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
+	t2->snap = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
+	t2->hw[0] = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
+	t2->hw[1] = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
 	ret = drmm_add_action_or_reset(dev, t2_release, NULL);
 	if (ret)
 		return ret;
 	if (!t2->bounce || !t2->cur.buf || !t2->cur.img || !t2->cur.shown ||
-	    !t2->enc || !t2->shadow)
+	    !t2->enc || !t2->shadow || !t2->snap || !t2->hw[0] || !t2->hw[1])
 		return -ENOMEM;
 
 	ret = t2_hw_init(t2);
