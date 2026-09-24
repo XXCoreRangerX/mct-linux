@@ -62,7 +62,7 @@
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	6
+#define DRIVER_PATCH	7
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -1194,6 +1194,12 @@ static struct usb_driver t2_usb_driver = {
 	.probe = t2_usb_probe,
 	.disconnect = t2_usb_disconnect,
 	.id_table = id_table,
+	/*
+	 * Keep URBs alive on a software unbind (sysfs, rmmod): disconnect waits
+	 * for the in-flight frame, so the firmware is never left halfway through
+	 * a command's payload, which garbles the next init.
+	 */
+	.soft_unbind = 1,
 	.suspend = pm_ptr(t2_suspend),
 	.resume = pm_ptr(t2_resume),
 	.reset_resume = pm_ptr(t2_resume),
