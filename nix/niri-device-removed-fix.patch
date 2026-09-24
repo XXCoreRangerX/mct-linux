@@ -1,0 +1,28 @@
+--- a/src/backend/tty.rs
++++ b/src/backend/tty.rs
+@@ -1123,16 +1123,18 @@
+     fn device_removed(&mut self, device_id: dev_t, niri: &mut Niri) {
+         debug!("removing device: {device_id}");
+ 
+-        let Ok(node) = DrmNode::from_dev_id(device_id) else {
+-            warn!("error creating DrmNode");
++        // The device is already gone from sysfs on removal, so DrmNode::from_dev_id() would
++        // fail. Look it up among the tracked (primary) devices instead.
++        let Some(node) = self
++            .devices
++            .keys()
++            .find(|node| node.dev_id() == device_id)
++            .copied()
++        else {
++            debug!("not a tracked primary node, skipping");
+             return;
+         };
+ 
+-        if node.ty() != NodeType::Primary {
+-            debug!("not a primary node, skipping");
+-            return;
+-        }
+-
+         let Some(device) = self.devices.get_mut(&node) else {
+             warn!("unknown device");
+             return;

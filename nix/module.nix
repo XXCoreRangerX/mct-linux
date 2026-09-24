@@ -22,6 +22,15 @@ in
         fbcon applies it when the tablet's framebuffer registers during boot.
       '';
     };
+    niriFix = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Build niri with nix/niri-device-removed-fix.patch. niri 26.04 fails to
+        clean up a removed DRM device ("error creating DrmNode"), which leaves
+        stale outputs behind after unplugging a USB display.
+      '';
+    };
     driver = lib.mkOption {
       type = lib.types.enum [ "kernel" "evdi" ];
       default = "kernel";
@@ -33,6 +42,12 @@ in
   };
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
+    (lib.mkIf cfg.niriFix {
+      programs.niri.package = pkgs.niri.overrideAttrs (o: {
+        patches = (o.patches or [ ]) ++ [ ./niri-device-removed-fix.patch ];
+      });
+    })
+
     (lib.mkIf (cfg.driver == "kernel") {
       boot.extraModulePackages = [ kmod ];
       boot.kernelParams = lib.optional (cfg.consoleMap != null) "fbcon=map:${cfg.consoleMap}";
