@@ -44,6 +44,10 @@ or with flakes, add this repository as an input and use
 `nixosModules.default` with the same option. `hardware.mct-t2.driver =
 "evdi"` selects the EVDI + t2d setup instead of the kernel driver.
 
+`hardware.mct-t2.consoleMap = "01";` adds fbcon=map:01 to the kernel command
+line, which puts every second VT (tty2, tty4, ...) on the tablet once its
+framebuffer appears (assuming the GPU is fb0 and the tablet fb1).
+
 t2d needs EVDI; on Linux 7.2 and later EVDI requires nix/evdi-linux-7.2.patch.
 
 Documentation

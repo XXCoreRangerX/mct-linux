@@ -44,6 +44,9 @@ sudo insmod mct_t2.ko                              # binds the tablet automatica
 
 Console on the tablet: `con2fbmap <tty> <fb>` (from `fbset`), or boot with
 `fbcon=map:<digits>` (one fb index per console).
+The NixOS option `hardware.mct-t2.consoleMap` sets the latter. fbcon applies the
+boot map when the tablet's framebuffer registers, which happens after the GPU's, so
+the mapped consoles move over as soon as the driver has probed.
 
 ## Features added 2026-09-24 (driver 0.2)
 

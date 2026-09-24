@@ -11,6 +11,17 @@ in
 {
   options.hardware.mct-t2 = {
     enable = lib.mkEnableOption "MCT Trigger II USB display support";
+    consoleMap = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      example = "01";
+      description = ''
+        Value for the fbcon=map: kernel parameter, one framebuffer index per
+        console, repeated. With the GPU on fb0 and the tablet on fb1, "01"
+        puts tty2, tty4, ... on the tablet and "1" moves every console there.
+        fbcon applies it when the tablet's framebuffer registers during boot.
+      '';
+    };
     driver = lib.mkOption {
       type = lib.types.enum [ "kernel" "evdi" ];
       default = "kernel";
@@ -24,6 +35,7 @@ in
   config = lib.mkIf cfg.enable (lib.mkMerge [
     (lib.mkIf (cfg.driver == "kernel") {
       boot.extraModulePackages = [ kmod ];
+      boot.kernelParams = lib.optional (cfg.consoleMap != null) "fbcon=map:${cfg.consoleMap}";
       # the USB alias autoloads mct_t2 when the tablet appears
     })
 
