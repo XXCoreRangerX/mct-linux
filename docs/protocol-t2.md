@@ -1,6 +1,7 @@
 # Trigger II (T2) bulk protocol
 
-Source: cyrozap `Protocol-T2.md` + live probing + `T2Indisp.dll` disassembly
+Source: cyrozap's [Protocol-T2.md](https://github.com/cyrozap/mct-usb-display-adapter-re/blob/master/doc/Protocol-T2.md)
+(CC BY-SA 4.0) + live probing + `T2Indisp.dll` disassembly
 + Win11 VM usbmon capture. All multi-byte fields little-endian unless noted.
 
 Commands go to EP `0x03` (control-ish) or `0x02` (framebuffer); replies on

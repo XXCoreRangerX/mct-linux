@@ -104,8 +104,25 @@ Key facts, in brief:
 
 Python tools: `nix develop` (or `pip install pyusb pillow`).
 
+## Related work and credits
+
+- [cyrozap/mct-usb-display-adapter-re](https://github.com/cyrozap/mct-usb-display-adapter-re):
+  reverse-engineering notes for MCT Trigger II, 5 and 6. Its
+  [Protocol-T2.md](https://github.com/cyrozap/mct-usb-display-adapter-re/blob/master/doc/Protocol-T2.md)
+  was the starting point for `docs/protocol-t2.md` (command set, `0x11`/`0x13` layout,
+  endpoints). Thanks to cyrozap.
+- [JingYenLoh/trigger6](https://github.com/JingYenLoh/trigger6): an out-of-tree Linux
+  driver for the Trigger 6. Different chip; not used here, but relevant for anyone
+  looking at other Trigger generations.
+- In mainline Linux (checked on 7.2), MCT (USB vendor `0x0711`) appears only as
+  the `mct_u232` USB serial adapter, some SiS-based `sisusbvga` VGA adapters, an
+  `ax88179` Ethernet adapter and an audio quirk for the Trigger 5. No Trigger display
+  driver exists there.
+
 ## Legal
 
 Interoperability research on hardware I own. No vendor code or binaries are
 included; the vendor driver is only referenced by function address.
-GPL-2.0 (see `LICENSE`). The EVDI patch applies to MIT-licensed EVDI.
+Code: GPL-2.0 (see `LICENSE`). The EVDI patch applies to MIT-licensed EVDI.
+Documentation in `docs/`: CC BY-SA 4.0, since `docs/protocol-t2.md` builds on
+cyrozap's notes, which use that license.
