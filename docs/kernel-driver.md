@@ -74,6 +74,15 @@ same hub as the T2. No HID driver is involved, so it works while
 OpenTabletDriver or the wacom driver owns the pen. Use it with `brightnessctl`,
 a desktop brightness slider, or brightness keys.
 
+## USB IDs
+
+The DTU-1031X's T2 enumerates as `0711:520d` or `0711:5209` depending on the
+power-up (seen 2026-09-24: 20 times `520d` over three days, then `5209`, `5209`,
+`520d` on three consecutive replugs). The ID ROM holds `0711:5200` and is
+unchanged; the low bits are decided at power-up. MCT's Windows INF maps both
+IDs to the same driver, and so does `mct_t2`. The pen function can enumerate
+after the display, so the backlight looks the pen up on each access.
+
 ## Known issues / TODO
 
 - Hot-unplug/replug works on the kernel side (disconnect, re-probe and

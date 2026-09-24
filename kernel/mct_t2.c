@@ -499,11 +499,12 @@ static void t2_backlight_init(struct mct_t2 *t2, struct usb_interface *interface
 	char name[32];
 	u8 level;
 
-	if (t2_bl_xfer(t2, false, &level)) {
-		drm_info(&t2->dev, "no pen function found, backlight control unavailable\n");
-		return;
-	}
-	props.brightness = clamp_t(int, level, 1, T2_BL_LEVELS) - 1;
+	/*
+	 * After a replug the pen function may enumerate after us, so the pen
+	 * is looked up on every access; keep the default if it isn't there yet.
+	 */
+	if (!t2_bl_xfer(t2, false, &level))
+		props.brightness = clamp_t(int, level, 1, T2_BL_LEVELS) - 1;
 	snprintf(name, sizeof(name), "mct_t2-%d", t2->dev.primary->index);
 	bd = devm_backlight_device_register(&interface->dev, name, &interface->dev, t2,
 					    &t2_bl_ops, &props);
