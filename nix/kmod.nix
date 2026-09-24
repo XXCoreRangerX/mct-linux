@@ -2,7 +2,13 @@
 { lib, stdenv, kernel }:
 stdenv.mkDerivation {
   pname = "mct-t2";
+<<<<<<< HEAD
   version = "0.3.11-${kernel.version}";
+||||||| baae411 (kernel: skip the lossless attempt during a streak of heavy updates)
+  version = "0.3.10-${kernel.version}";
+=======
+  version = "0.3.9-${kernel.version}";
+>>>>>>> parent of baae411 (kernel: skip the lossless attempt during a streak of heavy updates)
   src = ../kernel;
   nativeBuildInputs = kernel.moduleBuildDependencies;
   # toolchain flags only; drop the in-tree O=/--eval flags

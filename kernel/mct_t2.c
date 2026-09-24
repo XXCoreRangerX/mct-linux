@@ -68,7 +68,13 @@ MODULE_PARM_DESC(lossy, "Lossy tolerance (1-8) for updates too big to send lossl
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
+<<<<<<< HEAD
 #define DRIVER_PATCH	11
+||||||| baae411 (kernel: skip the lossless attempt during a streak of heavy updates)
+#define DRIVER_PATCH	10
+=======
+#define DRIVER_PATCH	9
+>>>>>>> parent of baae411 (kernel: skip the lossless attempt during a streak of heavy updates)
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -113,7 +119,6 @@ struct mct_t2 {
 	u8 *snap;			/* shadow snapshot being sent */
 	u8 *hw[2];			/* what device buffers A and B hold */
 	bool hw_valid[2];
-	bool lossy_streak;		/* last update needed lossy: skip the lossless try */
 
 	struct {			/* debugfs statistics */
 		u64 updates, lossy_updates, rects, px_damage, px_sent, bytes;
@@ -305,18 +310,11 @@ static int t2_send_rect(struct mct_t2 *t2, u8 *src, u32 base, int dx, int dy, in
 {
 	u32 a = (base + dy * T2_STRIDE + dx * 3) << 8;
 	ktime_t t0 = ktime_get();
-	int len;
+	int len = t2_encode(t2, src, dx, dy, w, h, 0);
 
-	if (tol && t2->lossy_streak) {
-		/* heavy motion continues: lossless would not fit anyway */
+	if (tol && *sent + len > T2_FRAME_BUDGET) {
 		len = t2_encode(t2, src, dx, dy, w, h, tol);
 		*used = tol;
-	} else {
-		len = t2_encode(t2, src, dx, dy, w, h, 0);
-		if (tol && *sent + len > T2_FRAME_BUDGET) {
-			len = t2_encode(t2, src, dx, dy, w, h, tol);
-			*used = tol;
-		}
 	}
 	*sent += len;
 	ktime_t t1 = ktime_get();
@@ -463,8 +461,6 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 	t2->stats.updates++;
 	if (used)
 		t2->stats.lossy_updates++;
-	/* keep skipping the lossless try only while updates stay heavy */
-	t2->lossy_streak = used && sent > T2_FRAME_BUDGET / 2;
 	*went_lossy = used;
 	t2->front = base;
 	tmp = t2->hw[back];
