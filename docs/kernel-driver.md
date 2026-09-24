@@ -48,6 +48,19 @@ The NixOS option `hardware.mct-t2.consoleMap` sets the latter. fbcon applies the
 boot map when the tablet's framebuffer registers, which happens after the GPU's, so
 the mapped consoles move over as soon as the driver has probed.
 
+## Update strategy (driver 0.3.6)
+
+The driver keeps a copy of what each device buffer (A, B) holds. Each update
+takes a snapshot of the shadow image, diffs it against the back buffer (the
+image from two updates ago), groups changed rows into up to 16 bands, sends
+only those bands with partial `0x13` writes into the back buffer, and flips.
+
+Compared with the vendor driver, which writes small changes straight into the
+visible buffer and sends big ones as full frames, every update is tear-free and
+the bytes sent follow the actual change, not the damage reported by the
+compositor. Only commands the vendor driver also uses are involved. The cost is
+one 2.4 MB memcmp/memcpy per update on the host.
+
 ## Features added 2026-09-24 (driver 0.2)
 
 - **Trimmed init**: 78 transfers, ~1 s from cold (see `docs/init-sequence.md`), black
