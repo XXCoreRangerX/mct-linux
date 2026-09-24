@@ -68,7 +68,7 @@ MODULE_PARM_DESC(lossy, "Lossy tolerance (1-8) for updates too big to send lossl
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	12
+#define DRIVER_PATCH	13
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -508,7 +508,7 @@ static unsigned int t2_pace_us(u8 ep, const u8 *data)
 	return 20000;
 }
 
-static int t2_hw_init(struct mct_t2 *t2)
+static int t2_hw_init_once(struct mct_t2 *t2)
 {
 	const u8 *p = mct_t2_init_seq, *end = p + sizeof(mct_t2_init_seq);
 	int n = 0, ret;
@@ -578,6 +578,134 @@ err:
 	mutex_unlock(&t2->io_lock);
 	drm_err(&t2->dev, "init failed at transfer %d: %d\n", n, ret);
 	return ret;
+}
+
+/*
+ * Recovery for a device left in the middle of a command, e.g. when a
+ * previous driver instance stopped halfway through a frame's payload.
+ * The firmware handles one command at a time, so while it waits for the
+ * rest of a payload it does not answer register reads. Feed it zeros until
+ * a pending read is answered; any overshoot is interpreted as commands, but
+ * the init sequence that follows puts the frame parser back in step.
+ */
+#define T2_RESYNC_MAX	(2 * 1024 * 1024)	/* longer than any payload */
+#define T2_RESYNC_READ_MS	200
+#define T2_RESYNC_POLL_MS	20
+
+/* read a register with a short timeout; io_lock held */
+static int t2_read_reg(struct mct_t2 *t2, u16 reg, u8 *val, int timeout_ms)
+{
+	struct usb_device *udev = t2_udev(t2);
+	const u8 cmd[3] = { 0x05, reg & 0xff, reg >> 8 };
+	int ret, done;
+
+	ret = t2_out(t2, T2_EP_CMD, cmd, sizeof(cmd));
+	if (ret)
+		return ret;
+	ret = usb_bulk_msg(udev, usb_rcvbulkpipe(udev, T2_EP_IN), t2->bounce, 64, &done,
+			   timeout_ms);
+	if (!ret && done < 1)
+		ret = -EIO;
+	if (!ret)
+		*val = t2->bounce[0];
+	return ret;
+}
+
+/* discard replies left over from earlier commands; io_lock held */
+static void t2_drain_replies(struct mct_t2 *t2)
+{
+	struct usb_device *udev = t2_udev(t2);
+	int done, i;
+
+	for (i = 0; i < 16; i++)
+		if (usb_bulk_msg(udev, usb_rcvbulkpipe(udev, T2_EP_IN), t2->bounce, 512, &done, 50))
+			break;
+}
+
+static int t2_resync(struct mct_t2 *t2)
+{
+	struct usb_device *udev = t2_udev(t2);
+	int ret, sent, done;
+	u8 val;
+
+	mutex_lock(&t2->io_lock);
+	t2_drain_replies(t2);
+	ret = t2_read_reg(t2, 0xfeb0, &val, T2_RESYNC_READ_MS);
+	if (!ret)
+		goto out;
+	if (ret != -ETIMEDOUT)
+		goto out;
+
+	drm_warn(&t2->dev, "device busy in the middle of a command, completing it\n");
+	for (sent = 0; sent < T2_RESYNC_MAX; sent += T2_CHUNK) {
+		ret = t2_out(t2, T2_EP_FB, NULL, T2_CHUNK);
+		if (ret)
+			goto out;
+		/* the read queued above is answered once the payload is complete */
+		ret = usb_bulk_msg(udev, usb_rcvbulkpipe(udev, T2_EP_IN),
+				   t2->bounce, 64, &done, T2_RESYNC_POLL_MS);
+		if (!ret && done >= 1)
+			goto recovered;
+		if (!ret)
+			ret = -EIO;
+		if (ret != -ETIMEDOUT)
+			goto out;
+	}
+	drm_err(&t2->dev, "device does not respond; unplug it to reset\n");
+	ret = -EIO;
+	goto out;
+
+recovered:
+	drm_info(&t2->dev, "device command parser recovered after %d bytes\n",
+		 sent + T2_CHUNK);
+	t2_drain_replies(t2);
+	ret = 0;
+out:
+	mutex_unlock(&t2->io_lock);
+	return ret;
+}
+
+/* registers the init sequence leaves at known values */
+static bool t2_init_took(struct mct_t2 *t2)
+{
+	u8 a = 0, b = 0;
+	int ret_a, ret_b = -EIO;
+
+	mutex_lock(&t2->io_lock);
+	t2_drain_replies(t2);
+	ret_a = t2_read_reg(t2, 0xfeb0, &a, T2_TIMEOUT);
+	if (!ret_a)
+		ret_b = t2_read_reg(t2, T2_REG_PLL_EN, &b, T2_TIMEOUT);
+	mutex_unlock(&t2->io_lock);
+	if (ret_a || ret_b) {
+		drm_warn(&t2->dev, "init check read failed: %d/%d\n", ret_a, ret_b);
+		return false;
+	}
+	if (a != 0x40 || b != 0x01) {
+		drm_warn(&t2->dev, "init check failed (feb0=%02x fcf6=%02x)\n", a, b);
+		return false;
+	}
+	return true;
+}
+
+static int t2_hw_init(struct mct_t2 *t2)
+{
+	int ret, tries;
+
+	ret = t2_resync(t2);
+	if (ret)
+		return ret;
+	for (tries = 0; tries < 2; tries++) {
+		ret = t2_hw_init_once(t2);
+		if (ret)
+			return ret;
+		if (t2_init_took(t2))
+			return 0;
+		if (!tries)
+			drm_warn(&t2->dev, "retrying device init\n");
+	}
+	drm_err(&t2->dev, "device init did not take\n");
+	return -EIO;
 }
 
 /* ------------------------------------------------------------------ */

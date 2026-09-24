@@ -143,6 +143,13 @@ a desktop brightness slider, or brightness keys.
 `mct_t2` and loads the module of the current system generation. This needs a
 compositor that closes removed DRM devices (niri needs `niriFix`).
 
+Since 0.3.13, probe and resume also recover a T2 left halfway through a
+framebuffer payload by an interrupted older driver. The driver drains stale
+replies, detects the stalled command parser with a register-read timeout,
+pads the unfinished payload with zeros, and then runs the normal init. It
+checks `feb0=40` and the pixel-clock register `fcf6=01` afterward and retries
+the init once if either value is wrong.
+
 ## Suspend / resume
 
 Verified 2026-09-24 (deep suspend, driver 0.3.7): the USB core resets the tablet on
