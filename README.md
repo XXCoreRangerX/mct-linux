@@ -52,6 +52,10 @@ framebuffer appears (assuming the GPU is fb0 and the tablet fb1).
 the tablet's output properly when it is unplugged (niri 26.04 leaves a stale
 output behind).
 
+`hardware.mct-t2.lossy = 4;` lets updates too big for one 60 Hz frame go
+lossy (heavy video, photo scrolling); the picture is refined to lossless once
+motion stops. Off by default.
+
 Brightness is exposed as /sys/class/backlight/mct_t2-N (0 = off, 1-9), e.g.
 `brightnessctl -d 'mct_t2-*' set 3`.
 

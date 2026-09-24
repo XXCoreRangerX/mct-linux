@@ -88,6 +88,22 @@ how the host queues it (the Python benchmark with whole-frame transfers topped
 out at ~44 MB/s including idle-free pyusb writes), so the synchronous design
 already runs at the device's limit. The branch is kept for reference, unmerged.
 
+## Optional lossy mode (driver 0.3.9)
+
+`lossy=N` (module parameter, runtime-writable in `/sys/module/mct_t2/parameters/`,
+NixOS `hardware.mct-t2.lossy`, default 0): each rect is encoded losslessly
+first; only if the update's total would exceed what the device takes in one
+60 Hz frame (~600 KB) is it re-encoded with runs absorbing values within +-N
+(the vendor uses 4). The encoder writes back what the device will show, so the
+buffer copies stay exact; 150 ms after the last lossy update two lossless
+passes (one per buffer) make the picture exact again.
+
+Measured (197 s, mostly video, N = 4): 63% of updates lossy, ~17 ms per update
+(vs ~26 ms lossless), sent/damaged 84%. Window openings and ordinary scrolling
+stay lossless. A first version that went lossy whenever more than a third of the
+screen changed was lossy for 83% of updates and showed "settling" shadows.
+Artifacts: short horizontal streaks during heavy motion (the RLE is row-wise).
+
 ## Features added 2026-09-24 (driver 0.2)
 
 - **Trimmed init**: 78 transfers, ~1 s from cold (see `docs/init-sequence.md`), black

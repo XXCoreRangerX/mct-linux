@@ -31,6 +31,17 @@ in
         stale outputs behind after unplugging a USB display.
       '';
     };
+    lossy = lib.mkOption {
+      type = lib.types.ints.between 0 8;
+      default = 0;
+      description = ''
+        Tolerance for lossy updates when a lossless update would not fit into
+        one 60 Hz frame (heavy video, photo scrolling); the picture is refined
+        to lossless about 150 ms after motion stops. 0 = always lossless.
+        4 matches the vendor driver. Can be changed at runtime through
+        /sys/module/mct_t2/parameters/lossy.
+      '';
+    };
     driver = lib.mkOption {
       type = lib.types.enum [ "kernel" "evdi" ];
       default = "kernel";
