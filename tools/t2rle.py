@@ -32,14 +32,15 @@ def decode(pay, w, h):
     return bytes(out)
 
 
-def _encode_line(ln, out):
-    """Exact (lossless except 0x30->0x31) encoding of one channel line."""
+def _encode_line(ln, out, tol=0):
+    """Encode one channel line. tol > 0 merges values within +-tol of the run
+    value into the run (lossy, like the vendor encoder uses with 4)."""
     n = len(ln); x = 0
     while x < n:
         v = ln[x]
         if v == 0x30: v = 0x31
         r = 1
-        while x + r < n and r < 0xFB and (ln[x + r] if ln[x + r] != 0x30 else 0x31) == v:
+        while x + r < n and r < 0xFB and abs((ln[x + r] if ln[x + r] != 0x30 else 0x31) - v) <= tol:
             r += 1
         if r >= 3:
             if r - 1 == 0x30:           # avoid count byte 0x30 (Windows does too)
@@ -47,18 +48,18 @@ def _encode_line(ln, out):
             else:
                 out += bytes((0x30, r - 1, v))
         else:
-            out += bytes((v,)) * r
+            out += bytes(b if b != 0x30 else 0x31 for b in ln[x:x + r])
         x += r
 
 
-def encode(rgb, w, h):
+def encode(rgb, w, h, tol=0):
     """RGB24 bytes (w*h*3) -> RLE payload."""
     out = bytearray()
     stride = w * 3
     for y in range(h):
         row = rgb[y * stride:(y + 1) * stride]
         for c in range(3):
-            _encode_line(row[c::3], out)
+            _encode_line(row[c::3], out, tol)
     return bytes(out)
 
 

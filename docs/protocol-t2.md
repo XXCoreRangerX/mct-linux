@@ -54,6 +54,11 @@ The firmware parses EP `0x02` **per USB transfer, not as a byte stream**:
 - Header+payload merged into one write is **silently ignored** (no stall,
   nothing drawn). Replays must keep the captured transfer boundaries.
 
+Payload transfer size: keep payload transfers at the vendor's 19968 bytes.
+A whole 837 KB frame sent as one transfer showed sparse corrupted pixels near
+the end of the frame (2026-09-24); the same frame in 19968-byte chunks was
+clean. Larger chunks gain only ~3% anyway (see throughput below).
+
 ### `0x15` register batch / buffer flip (EP `0x02`, 23 B)
 
 ```
@@ -133,6 +138,24 @@ re-encoding it **byte-identically** (`tools/t2rle.py`).
 - Windows policy: big change -> full frame into back buffer + `0x15` flip.
   Small change -> partials straight into the **front** buffer, no flip.
   All 172 frames in `captures/redir4.bin` decode under this model.
+
+## Throughput (measured 2026-09-24, `tools/bench.py`)
+
+USB 2.0 bulk tops out around 42-44 MB/s here, and full-frame updates reach it:
+
+| Content | Payload per frame | Full frames/s |
+|---|---|---|
+| desktop photo (lossless) | 837 KB | ~52-55 |
+| random noise (worst case) | 1843 KB | ~24 |
+| solid colour | 27 KB | limited by latency, not bandwidth |
+
+Transfer size 19968 / 64 KiB / 256 KiB: 40.1 / 41.2 / 41.6 MB/s. Typical
+desktop use is mostly partial updates and much cheaper.
+
+A lossy variant like the vendor's (merge values within +-4 into runs) halves a
+photo's payload (+-2: -36%, +-4: -46%) but leaves visible banding in smooth
+gradients, so the drivers stay lossless. `tools/t2rle.py encode(..., tol=N)`
+keeps it for experiments.
 
 ## Panel power (verified live 2026-09-24)
 
