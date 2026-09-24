@@ -62,18 +62,21 @@ the mapped consoles move over as soon as the driver has probed.
   monitors, and it comes back instantly.
 - **Vblank timer** (`DRM_CRTC_VBLANK_TIMER_FUNCS` + `drm_crtc_vblank_atomic_flush`):
   page-flip events at 60 Hz, so compositors don't render unthrottled
-  (niri warned "running faster than expected"). *Built; live test pending.*
+  (niri warned "running faster than expected"). Verified after a reboot: no more throttling warnings.
 - USB access is serialised by `io_lock` (EP2 command sequences: frames vs cursor uploads).
 
 ## Known issues / TODO
 
-- **niri 26.04 does not release a removed DRM device.** After unbind/unplug
-  it keeps its fds on the deleted `/dev/dri/cardN`, keeps listing the output, and
-  retries rendering in a tight loop ("failed to import the dmabuf to gbm")
-  until the output is turned off (`niri msg output USB-1 off`). The open fds pin
-  the module (`rmmod: Module mct_t2 is in use`) until niri restarts. For
-  development, building the module under another name (`DRIVER_NAME`) lets a
-  new build bind while the old one is pinned. To report upstream.
+- Hot-unplug/replug works on the kernel side (disconnect, re-probe and
+  ~1 s init, no warnings), but **niri 26.04 does not clean up removed DRM
+  devices**: `device_removed()` calls `DrmNode::from_dev_id()`, which reads
+  sysfs entries that are already gone, logs "error creating DrmNode" and
+  returns early. The stale output stays (niri keeps queueing flips on the
+  deleted node, or renders in a tight loop after an unbind), its fds pin the
+  module, and the returning device is "unnamed" as a duplicate ("Unknown
+  Unknown Unknown"). A fix (look the node up in niri's own device map) is
+  being proposed upstream.
+- Display managers on a text console (ly, getty) show only on the
+  framebuffer their VT is mapped to. fbcon can't mirror a VT, so the tablet
+  shows ly only with `consoleMap = "1"`, and then the main monitor won't.
 - Only XRGB8888. RGB565 would need conversion in the shadow copy.
-- niri also names re-added outputs "Unknown Unknown Unknown" when it trips over
-  its stale devices (EDID in sysfs is correct); re-login fixes it.
