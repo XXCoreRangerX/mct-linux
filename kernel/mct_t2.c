@@ -47,6 +47,8 @@
 #include <drm/drm_plane.h>
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
+#include <drm/drm_vblank.h>
+#include <drm/drm_vblank_helper.h>
 
 #include "mct_t2_init.h"
 
@@ -296,6 +298,26 @@ static int t2_show_partial(struct mct_t2 *t2, const struct drm_rect *r)
 		dy1 = max(T2_HEIGHT - h, 0);
 	return t2_send_rect(t2, t2->front, dx1, dy1, w, h);
 }
+
+/* single register write on EP3: 02 00 01 <hi> <lo> <val> */
+static int t2_wreg(struct mct_t2 *t2, u16 reg, u8 val)
+{
+	const u8 cmd[6] = { 0x02, 0x00, 0x01, reg >> 8, reg & 0xff, val };
+	int ret;
+
+	mutex_lock(&t2->io_lock);
+	ret = t2_out(t2, T2_EP_CMD, cmd, sizeof(cmd));
+	mutex_unlock(&t2->io_lock);
+	return ret;
+}
+
+/*
+ * Panel power: the vendor driver has no display-power control for this
+ * panel (its RomSink power method is a no-op). Stopping the pixel-clock PLL
+ * (fcf6 = 0) makes the panel electronics switch the backlight off; setting
+ * it back to 1 restores the picture without re-init.
+ */
+#define T2_REG_PLL_EN	0xfcf6
 
 /* ------------------------------------------------------------------ */
 /* device init							      */
@@ -669,8 +691,14 @@ static const struct drm_plane_funcs t2_cursor_funcs = {
 static void t2_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commit *state)
 {
 	struct mct_t2 *t2 = to_t2(crtc->dev);
+	int idx;
 
 	t2->first = true;	/* primary plane update follows with full damage */
+	if (drm_dev_enter(crtc->dev, &idx)) {
+		t2_wreg(t2, T2_REG_PLL_EN, 1);
+		drm_dev_exit(idx);
+	}
+	drm_crtc_vblank_on(crtc);
 }
 
 static void t2_crtc_atomic_disable(struct drm_crtc *crtc, struct drm_atomic_commit *state)
@@ -678,15 +706,23 @@ static void t2_crtc_atomic_disable(struct drm_crtc *crtc, struct drm_atomic_comm
 	struct mct_t2 *t2 = to_t2(crtc->dev);
 	int idx;
 
+	drm_crtc_vblank_off(crtc);
 	t2_stop_updates(t2);
 	if (drm_dev_enter(crtc->dev, &idx)) {
 		t2_cursor_hide(t2);
+		t2_wreg(t2, T2_REG_PLL_EN, 0);	/* panel/backlight off */
 		drm_dev_exit(idx);
 	}
 }
 
+/*
+ * The device has no vblank interrupt; a 60 Hz hrtimer (DRM vblank timer
+ * helpers) paces page-flip events so compositors don't render faster than
+ * the panel refreshes.
+ */
 static const struct drm_crtc_helper_funcs t2_crtc_helper_funcs = {
 	.atomic_check = drm_crtc_helper_atomic_check,
+	.atomic_flush = drm_crtc_vblank_atomic_flush,
 	.atomic_enable = t2_crtc_atomic_enable,
 	.atomic_disable = t2_crtc_atomic_disable,
 };
@@ -698,6 +734,7 @@ static const struct drm_crtc_funcs t2_crtc_funcs = {
 	.page_flip = drm_atomic_helper_page_flip,
 	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
+	DRM_CRTC_VBLANK_TIMER_FUNCS,
 };
 
 static const struct drm_encoder_funcs t2_encoder_funcs = {
@@ -812,6 +849,10 @@ static int t2_modeset_init(struct mct_t2 *t2)
 	if (ret)
 		return ret;
 	ret = drm_connector_attach_encoder(&t2->conn, &t2->encoder);
+	if (ret)
+		return ret;
+
+	ret = drm_vblank_init(dev, 1);
 	if (ret)
 		return ret;
 

@@ -133,6 +133,18 @@ re-encoding it **byte-identically** (`tools/t2rle.py`).
   Small change → partials straight into the **front** buffer, no flip.
   All 172 frames in `captures/redir4.bin` decode under this model.
 
+## Panel power (verified live 2026-09-24)
+
+The vendor driver has no power control for this panel: `CT2RomSink`'s
+display-power method (vtable `0x18001e358` slot `+0x18`) is `xor eax,eax; ret`.
+What works: **`fcf6` = pixel-clock PLL enable** (single register write on EP3,
+`02 00 01 fc f6 VV`).
+
+- `fcf6 = 00`: video signal stops and the panel electronics switch the **backlight off**.
+- `fcf6 = 01`: picture back immediately, framebuffer contents intact, no re-init.
+
+Tried without effect: `fb60` (also via `0x14 60=00`), `fe36`, `fe57`, `fe70`, `feb0`.
+
 ## Hardware cursor (verified live 2026-09-24, `tools/cursor_test.py`)
 
 The T2 has a 64×64 ARGB cursor overlay, drawn by the chip on top of scanout.

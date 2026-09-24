@@ -10,6 +10,7 @@ captures of that driver plus disassembly, then live testing on the hardware.
 
 1. **`kernel/`: native DRM driver `mct_t2`** (recommended). A real DRM device with
    fbdev emulation, so it works in Wayland/X11 *and* on the text console.
+   Hardware cursor, monitor power-off (DPMS), ~1 s init.
 2. **EVDI + `t2d/`**: userspace daemon on top of DisplayLink's virtual DRM
    driver. Useful for development, since iterating needs no kernel reloads.
 

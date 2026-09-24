@@ -66,3 +66,46 @@ R, G, B, white shown on the panel.
 - After `05/91/1d` reads, the reply MUST be consumed before the next OUT.
 - Firmware needs ~50 ms pacing between commands; ~10 s boot after power cycle.
 - Fresh power-on reads `feb0=00 feb1=f5`; driver overwrites both.
+
+## Trimmed init (78 transfers, ~1 s from cold) — verified 2026-09-24
+
+`t2d/init.bin` / `kernel/mct_t2_init.h` (made by `tools/gen_init_min.py` from
+`t2d/init-full.bin`). Record numbers refer to the full 359-record sequence.
+
+| Records | What | Notes |
+|---|---|---|
+| 4–5, 7 | `feb0=03 feb1=03`, `feb0=00` | block reset / release (**50 ms** after each) |
+| 9–11 | `fc6f=00`, **`0x1d` device info** (+512 B read), `fc6f=00` | EDID at reply +0x80 |
+| 12–14 | `0x90 04 04 00 00061a80`, `0x90 03 01 00 00`, `0x90 08 01 00 02` | pipe setup |
+| 15–18 | `fee0=07`, two `0x04` lists (`6a/6b` index/value tables), `fbff=81` | `fbff=81` resets bank FB (see 75–90) |
+| 19–20 | `0x0a` + 768 zeros, `fc6f=00` | 256×3 table (gamma/palette?) |
+| 23–31 | `fcb0=20 fc4b=08 fbf2=02 fca2=30 fbf4=03 fcf0/1/2 fc4b=02` | |
+| 35–37 | `0x90 04 04 …61a80`, `0x04` list (`a4..a7,a3`), `fca3=6e` | |
+| 38–54 | `fb60/6e`, `fb70–76=0`, `fea8–aa=0`, `fe70/fe57/fe36` pulses | |
+| 57–62 | `feb0=40 feb1=f7`, `fc28 fc59 fc32 fc34` | |
+| 63 | **`0x16` timing** (regs `0x20–0x2f`) | |
+| 64–65 | `fc2f=00 fbf6=00` | |
+| 67 | **PLL** `0x04`: `f3=20 f4=2d f6=01 f7=03 f5=00 4b=03` | `fcf6` = pixel-clock enable (panel power, below) |
+| 68 | `0x04`: `28 01 28 00 32 00 59 01 59 00 34 00` | |
+| 69 | **`0x22` mode** (bank FE/FC triplets) | |
+| 70–72 | `0x04` list (`40..43, 36..39, 34, 32`), `fb96=00 fcb0=09` | |
+| 73 | EP4 `05 08 30 00 31 00 32 00 33 00` | MC8032 XRAM |
+| 75–90 | bank-FB buffer addresses: `fb60/6e/65`, `fb62..64` = A (`00 30 00`) and B (`00 38 07`) | **required**; without it a garbage band shows at the bottom |
+| 96 | `fcb5=03` | |
+| — | black `0x13` frame into buffer A | not from the capture: replaces the clears |
+| 358 | **`0x14` display enable** (`66..6e`, `65=10` → scanout **A**, `60=01`) | |
+
+Dropped from the vendor sequence: register reads (unused values), `0x91`
+ID-ROM query, a `0x90`+32×1 probe fill at address 0, manual bank-FC scanout
+programming (our `0x15` flips do that), an exact repeat of 38–54, and the two
+1.8 MB black clears.
+
+**Pacing (8051):** 2 ms after single register writes, 50 ms after `feb0`/`feb1`
+writes, 20 ms after other EP3/EP4 commands, none on EP2. With **no** pacing a
+cold chip comes up misconfigured (monochrome tiled image). Warm chips tolerate
+anything, so pacing changes must be tested cold (physical replug; toggling the
+hub port's `disable` does *not* reset the 8051).
+
+Bisection method (`tools/init_trim.py`): drop one group at a time from the
+known-good set, show a distinct colour, reset with the full init in between.
+The final set was validated cold three times (zero, 20 ms, selective pacing).

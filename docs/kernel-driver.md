@@ -45,6 +45,23 @@ sudo insmod mct_t2.ko                              # binds the tablet automatica
 Console on the tablet: `con2fbmap <tty> <fb>` (from `fbset`), or boot with
 `fbcon=map:<digits>` (one fb index per console).
 
+## Features added 2026-09-24 (driver 0.2)
+
+- **Trimmed init**: 78 transfers, ~1 s from cold (see `docs/init-sequence.md`), black
+  frame into buffer A right before `0x14`.
+- **Hardware cursor plane** (`DRM_PLANE_TYPE_CURSOR`, ARGB8888, 64×64): converts
+  to the T2's A,B,G,R format rotated 180° and uploads with `0x12` only when the image
+  changes. Moves send one 16-byte EP4 packet. Boxes hanging off the visible right/bottom
+  edge get a shifted image (the position registers can't go negative).
+  Much smoother than composited cursors, and less USB traffic.
+- **Panel power / DPMS**: CRTC disable writes `fcf6=0` (backlight off), enable
+  writes `fcf6=1`. niri's `power-off-monitors` turns the tablet off like the other
+  monitors, and it comes back instantly.
+- **Vblank timer** (`DRM_CRTC_VBLANK_TIMER_FUNCS` + `drm_crtc_vblank_atomic_flush`):
+  page-flip events at 60 Hz, so compositors don't render unthrottled
+  (niri warned "running faster than expected"). *Built; live test pending.*
+- USB access is serialised by `io_lock` (EP2 command sequences: frames vs cursor uploads).
+
 ## Known issues / TODO
 
 - **niri 26.04 does not release a removed DRM device.** After unbind/unplug
@@ -54,8 +71,6 @@ Console on the tablet: `con2fbmap <tty> <fb>` (from `fbset`), or boot with
   the module (`rmmod: Module mct_t2 is in use`) until niri restarts. For
   development, building the module under another name (`DRIVER_NAME`) lets a
   new build bind while the old one is pinned. To report upstream.
-- No DPMS / panel power control yet (backlight stays on when disabled).
-- No hardware cursor (EP4 `05 0e 38..3b`). The cursor is composited, so moves cost a
-  small partial update each.
 - Only XRGB8888. RGB565 would need conversion in the shadow copy.
-- The init is still the vendor sequence replayed verbatim.
+- niri also names re-added outputs "Unknown Unknown Unknown" when it trips over
+  its stale devices (EDID in sysfs is correct); re-login fixes it.
