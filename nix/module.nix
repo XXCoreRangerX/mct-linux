@@ -78,10 +78,13 @@ in
       ];
       boot.kernelParams = lib.optional (cfg.consoleMap != null) "fbcon=map:${cfg.consoleMap}";
       # the USB alias autoloads mct_t2 when the tablet appears
-      # raw device access for the logged-in user (tools/, after unbinding the driver)
-      services.udev.extraRules = ''
-        SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d", TAG+="uaccess"
-      '';
+      # raw device access for the logged-in user (tools/, after unbinding the driver).
+      # uaccess must be tagged before 73-seat-late.rules, so not via extraRules (99-local).
+      services.udev.packages = [
+        (pkgs.writeTextDir "etc/udev/rules.d/70-mct-t2.rules" ''
+          SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d", TAG+="uaccess"
+        '')
+      ];
     })
 
     (lib.mkIf (cfg.driver == "evdi") {
