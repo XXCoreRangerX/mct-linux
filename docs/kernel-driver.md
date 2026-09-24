@@ -73,9 +73,15 @@ feature report `0x06` as control transfers to the Wacom (`056a`) device on the
 same hub as the T2. No HID driver is involved, so it works while
 OpenTabletDriver or the wacom driver owns the pen. The backlight device is a child
 of the DRM connector (registered in `late_register`), so desktop shells can tell
-which output it belongs to. If one doesn't, Noctalia can be told explicitly:
+which output it belongs to (verified: Noctalia 5.1 shows the slider for USB-1). If one doesn't, Noctalia can be told explicitly:
 `[brightness.monitor.USB-1]` with `backlight_device = "mct_t2-2"` in its config.toml. Use it with `brightnessctl`,
 a desktop brightness slider, or brightness keys.
+
+## Updating the module without a reboot
+
+`mct-t2-reload` (installed by the NixOS module) unbinds the tablet, unloads
+`mct_t2` and loads the module of the current system generation. This needs a
+compositor that closes removed DRM devices (niri needs `niriFix`).
 
 ## USB IDs
 

@@ -50,6 +50,20 @@ in
 
     (lib.mkIf (cfg.driver == "kernel") {
       boot.extraModulePackages = [ kmod ];
+      # swap in the module of the current generation without rebooting
+      environment.systemPackages = [
+        (pkgs.writeShellScriptBin "mct-t2-reload" ''
+          set -eu
+          [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+          for intf in /sys/bus/usb/drivers/mct_t2/*:*; do
+            [ -e "$intf" ] && basename "$intf" > /sys/bus/usb/drivers/mct_t2/unbind
+          done
+          sleep 2
+          rmmod mct_t2 || { echo "mct_t2 still in use (compositor holding the old device?)" >&2; exit 1; }
+          insmod /run/current-system/kernel-modules/lib/modules/$(uname -r)/updates/mct_t2.ko.xz
+          echo "mct_t2 reloaded"
+        '')
+      ];
       boot.kernelParams = lib.optional (cfg.consoleMap != null) "fbcon=map:${cfg.consoleMap}";
       # the USB alias autoloads mct_t2 when the tablet appears
       # raw device access for the logged-in user (tools/, after unbinding the driver)
