@@ -14,6 +14,7 @@
       packages.${system} = {
         inherit evdi;
         t2d = pkgs.callPackage ./nix/t2d.nix { inherit evdi; };
+        mct-t2-kmod = pkgs.callPackage ./nix/kmod.nix { inherit (kernelPackages) kernel; };
         default = self.packages.${system}.t2d;
       };
 
