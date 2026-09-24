@@ -13,9 +13,14 @@
  *    position and show/hide it
  *  - the panel scans out rotated by 180 degrees
  *
+ * The backlight is not controlled by the T2 but by the tablet's pen
+ * function (a sibling USB device on the same internal hub): HID feature
+ * report 0x06 holds the brightness level, 1 to 7.
+ *
  * Structure modelled on drivers/gpu/drm/udl and drivers/gpu/drm/tiny/gm12u320.c.
  */
 
+#include <linux/backlight.h>
 #include <linux/gcd.h>
 #include <linux/module.h>
 #include <linux/pm.h>
@@ -55,7 +60,7 @@
 #define DRIVER_NAME	"mct_t2"
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	2
+#define DRIVER_MINOR	3
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -397,6 +402,113 @@ err:
 	mutex_unlock(&t2->io_lock);
 	drm_err(&t2->dev, "init failed at transfer %d: %d\n", n, ret);
 	return ret;
+}
+
+/* ------------------------------------------------------------------ */
+/* backlight (via the pen function's HID feature report 0x06)	      */
+
+#define T2_PEN_VENDOR	0x056a
+#define T2_BL_REPORT	0x06
+#define T2_BL_LEVELS	7	/* report values 1..7 */
+
+struct t2_pen_lookup {
+	struct usb_device *hub;
+	struct usb_device *pen;
+};
+
+static int t2_match_pen(struct usb_device *udev, void *data)
+{
+	struct t2_pen_lookup *l = data;
+
+	if (udev->parent != l->hub ||
+	    le16_to_cpu(udev->descriptor.idVendor) != T2_PEN_VENDOR)
+		return 0;
+	l->pen = usb_get_dev(udev);
+	return 1;
+}
+
+/* HID GET/SET_REPORT of the brightness feature report on the pen's interface 0 */
+static int t2_bl_xfer(struct mct_t2 *t2, bool set, u8 *level)
+{
+	struct t2_pen_lookup l = { .hub = t2_udev(t2)->parent };
+	u8 *buf;
+	int ret;
+
+	if (!l.hub)
+		return -ENODEV;
+	usb_for_each_dev(&l, t2_match_pen);
+	if (!l.pen)
+		return -ENODEV;
+
+	buf = kmalloc(2, GFP_KERNEL);
+	if (!buf) {
+		usb_put_dev(l.pen);
+		return -ENOMEM;
+	}
+	buf[0] = T2_BL_REPORT;
+	buf[1] = *level;
+	if (set)
+		ret = usb_control_msg(l.pen, usb_sndctrlpipe(l.pen, 0), 0x09 /* SET_REPORT */,
+				      USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+				      0x0300 | T2_BL_REPORT, 0, buf, 2, T2_TIMEOUT);
+	else
+		ret = usb_control_msg(l.pen, usb_rcvctrlpipe(l.pen, 0), 0x01 /* GET_REPORT */,
+				      USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+				      0x0300 | T2_BL_REPORT, 0, buf, 2, T2_TIMEOUT);
+	if (ret == 2 && !set)
+		*level = buf[1];
+	kfree(buf);
+	usb_put_dev(l.pen);
+	return ret < 0 ? ret : 0;
+}
+
+static int t2_bl_update_status(struct backlight_device *bd)
+{
+	struct mct_t2 *t2 = bl_get_data(bd);
+	u8 level = backlight_get_brightness(bd) + 1;
+
+	return t2_bl_xfer(t2, true, &level);
+}
+
+static int t2_bl_get_brightness(struct backlight_device *bd)
+{
+	struct mct_t2 *t2 = bl_get_data(bd);
+	u8 level = 0;
+	int ret;
+
+	ret = t2_bl_xfer(t2, false, &level);
+	if (ret)
+		return ret;
+	return clamp_t(int, level, 1, T2_BL_LEVELS) - 1;
+}
+
+static const struct backlight_ops t2_bl_ops = {
+	.update_status = t2_bl_update_status,
+	.get_brightness = t2_bl_get_brightness,
+};
+
+static void t2_backlight_init(struct mct_t2 *t2, struct usb_interface *interface)
+{
+	struct backlight_properties props = {
+		.type = BACKLIGHT_RAW,
+		.max_brightness = T2_BL_LEVELS - 1,
+		.brightness = T2_BL_LEVELS - 1,
+		.scale = BACKLIGHT_SCALE_NON_LINEAR,
+	};
+	struct backlight_device *bd;
+	char name[32];
+	u8 level;
+
+	if (t2_bl_xfer(t2, false, &level)) {
+		drm_info(&t2->dev, "no pen function found, backlight control unavailable\n");
+		return;
+	}
+	props.brightness = clamp_t(int, level, 1, T2_BL_LEVELS) - 1;
+	snprintf(name, sizeof(name), "mct_t2-%d", t2->dev.primary->index);
+	bd = devm_backlight_device_register(&interface->dev, name, &interface->dev, t2,
+					    &t2_bl_ops, &props);
+	if (IS_ERR(bd))
+		drm_warn(&t2->dev, "backlight registration failed: %ld\n", PTR_ERR(bd));
 }
 
 /* ------------------------------------------------------------------ */
@@ -928,6 +1040,7 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 		return ret;
 
 	drm_client_setup(dev, NULL);
+	t2_backlight_init(t2, interface);
 	return 0;
 }
 

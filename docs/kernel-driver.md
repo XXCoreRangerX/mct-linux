@@ -65,6 +65,15 @@ the mapped consoles move over as soon as the driver has probed.
   (niri warned "running faster than expected"). Verified after a reboot: no more throttling warnings.
 - USB access is serialised by `io_lock` (EP2 command sequences: frames vs cursor uploads).
 
+## Backlight (driver 0.3)
+
+`mct_t2` registers a backlight device, `/sys/class/backlight/mct_t2-<minor>`,
+brightness 0-6 (report levels 1-7). The driver sends HID GET/SET_REPORT for
+feature report `0x06` as control transfers to the Wacom (`056a`) device on the
+same hub as the T2. No HID driver is involved, so it works while
+OpenTabletDriver or the wacom driver owns the pen. Use it with `brightnessctl`,
+a desktop brightness slider, or brightness keys.
+
 ## Known issues / TODO
 
 - Hot-unplug/replug works on the kernel side (disconnect, re-probe and

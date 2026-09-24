@@ -13,7 +13,7 @@ Contents
 --------
 
   kernel/   mct_t2, a DRM/KMS driver. Works with Wayland/X11 and the text
-            console, hardware cursor, DPMS. This is the one to use.
+            console, hardware cursor, DPMS, backlight. This is the one to use.
   t2d/      userspace daemon on top of EVDI. Older, handy for protocol work
             since it needs no kernel module reloads.
   nix/      flake packages and a NixOS module.
@@ -47,6 +47,13 @@ or with flakes, add this repository as an input and use
 `hardware.mct-t2.consoleMap = "01";` adds fbcon=map:01 to the kernel command
 line, which puts every second VT (tty2, tty4, ...) on the tablet once its
 framebuffer appears (assuming the GPU is fb0 and the tablet fb1).
+
+`hardware.mct-t2.niriFix = true;` builds niri with a patch that makes it drop
+the tablet's output properly when it is unplugged (niri 26.04 leaves a stale
+output behind).
+
+Brightness is exposed as /sys/class/backlight/mct_t2-N (0-6), e.g.
+`brightnessctl -d 'mct_t2-*' set 3`.
 
 t2d needs EVDI. EVDI 1.14.x does not build on Linux 7.2 without
 nix/evdi-linux-7.2.patch; 1.15.1 and later build as is.

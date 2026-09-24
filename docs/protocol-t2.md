@@ -169,6 +169,27 @@ What works: **`fcf6` = pixel-clock PLL enable** (single register write on EP3,
 
 Tried without effect: `fb60` (also via `0x14 60=00`), `fe36`, `fe57`, `fe70`, `feb0`.
 
+## Backlight brightness (verified live 2026-09-24)
+
+Brightness is not a T2 function. It belongs to the tablet's pen function
+(`056a:032f`, a separate USB device on the same internal hub) and is HID
+**feature report `0x06`**: `06 LL`, level `LL` = 1 (darkest) to 7 (brightest).
+
+- Found by capturing Wacom's Windows driver 6.4.9-2 (capture not included; parsed with
+  `tools/redir_hid.py`) while moving "Tablet light brightness" in its Options
+  dialog: SET_REPORT `0x0306` with `06 05`, `06 04`, ... `06 01`, ... `06 07`.
+- It takes effect immediately and needs none of Wacom's other traffic: a plain
+  SET_REPORT from Linux (hidraw or a control transfer) works while another
+  program owns the pen.
+- Power-on value is 7; Wacom's driver sets 6 when it starts.
+- Level 1 is still fairly bright; that is the firmware's range.
+
+Other Wacom driver traffic seen at startup: feature `0x83` (`83 02 00`) x3,
+`0x02` (`02 02`, mode), GET `0x0c` (serial), GET `0x10` (status), and a series of
+`0x40` exchanges, some carrying random-looking 64-byte blocks (probably a
+challenge/response the driver uses to identify genuine hardware). None of it is
+needed for brightness.
+
 ## I2C masters (verified live 2026-09-24, `tools/t2i2c.py`)
 
 The T2 has two I2C masters with the OpenCores `i2c_master` register layout,
