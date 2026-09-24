@@ -68,13 +68,7 @@ MODULE_PARM_DESC(lossy, "Lossy tolerance (1-8) for updates too big to send lossl
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-<<<<<<< HEAD
-#define DRIVER_PATCH	11
-||||||| baae411 (kernel: skip the lossless attempt during a streak of heavy updates)
-#define DRIVER_PATCH	10
-=======
-#define DRIVER_PATCH	9
->>>>>>> parent of baae411 (kernel: skip the lossless attempt during a streak of heavy updates)
+#define DRIVER_PATCH	12
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
