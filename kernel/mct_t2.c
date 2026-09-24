@@ -16,6 +16,7 @@
  * The backlight is not controlled by the T2 but by the tablet's pen
  * function (a sibling USB device on the same internal hub): HID feature
  * report 0x06 holds the brightness level, 0 to 8 (the vendor tool uses 1..7).
+ * Backlight brightness 0 turns the panel off the same way DPMS does.
  *
  * Structure modelled on drivers/gpu/drm/udl and drivers/gpu/drm/tiny/gm12u320.c.
  */
@@ -61,7 +62,7 @@
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	4
+#define DRIVER_PATCH	5
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -99,6 +100,8 @@ struct mct_t2 {
 	u8 *shadow;			/* XRGB8888 copy of the visible image */
 	const struct drm_edid *edid;	/* read from the device at init */
 	struct backlight_device *bl;
+	struct mutex power_lock;		/* crtc_on + bl_off -> pixel clock */
+	bool crtc_on, bl_off;
 	u32 front;			/* framebuffer address currently scanned out */
 	bool first;			/* next update must be a full frame */
 
@@ -328,6 +331,17 @@ static int t2_wreg(struct mct_t2 *t2, u16 reg, u8 val)
  */
 #define T2_REG_PLL_EN	0xfcf6
 
+/* the pixel clock runs only while the CRTC is on and the backlight isn't off */
+static void t2_update_panel_power(struct mct_t2 *t2)
+{
+	bool on;
+
+	mutex_lock(&t2->power_lock);
+	on = t2->crtc_on && !t2->bl_off;
+	t2_wreg(t2, T2_REG_PLL_EN, on);
+	mutex_unlock(&t2->power_lock);
+}
+
 /* ------------------------------------------------------------------ */
 /* device init							      */
 
@@ -411,7 +425,8 @@ err:
 
 #define T2_PEN_VENDOR	0x056a
 #define T2_BL_REPORT	0x06
-#define T2_BL_MAX	8	/* report values 0..8; the firmware clamps above 8 */
+#define T2_BL_LEVELS	9	/* report values 0..8; the firmware clamps above 8 */
+/* backlight brightness: 0 = off, 1..9 = report level 0..8 */
 
 struct t2_pen_lookup {
 	struct usb_device *hub;
@@ -467,9 +482,15 @@ static int t2_bl_xfer(struct mct_t2 *t2, bool set, u8 *level)
 static int t2_bl_update_status(struct backlight_device *bd)
 {
 	struct mct_t2 *t2 = bl_get_data(bd);
-	u8 level = backlight_get_brightness(bd);
+	int b = backlight_get_brightness(bd);	/* 0 also when bl_power is off */
+	u8 level = b ? b - 1 : 0;
+	int ret = 0;
 
-	return t2_bl_xfer(t2, true, &level);
+	if (b)
+		ret = t2_bl_xfer(t2, true, &level);
+	t2->bl_off = !b;
+	t2_update_panel_power(t2);
+	return ret;
 }
 
 static int t2_bl_get_brightness(struct backlight_device *bd)
@@ -478,10 +499,12 @@ static int t2_bl_get_brightness(struct backlight_device *bd)
 	u8 level = 0;
 	int ret;
 
+	if (t2->bl_off)
+		return 0;
 	ret = t2_bl_xfer(t2, false, &level);
 	if (ret)
 		return ret;
-	return min_t(int, level, T2_BL_MAX);
+	return min_t(int, level, T2_BL_LEVELS - 1) + 1;
 }
 
 static const struct backlight_ops t2_bl_ops = {
@@ -497,8 +520,8 @@ static int t2_backlight_register(struct mct_t2 *t2)
 {
 	struct backlight_properties props = {
 		.type = BACKLIGHT_RAW,
-		.max_brightness = T2_BL_MAX,
-		.brightness = 7,	/* power-on default */
+		.max_brightness = T2_BL_LEVELS,
+		.brightness = 8,	/* report level 7, the power-on default */
 		.scale = BACKLIGHT_SCALE_NON_LINEAR,
 	};
 	struct backlight_device *bd;
@@ -510,7 +533,7 @@ static int t2_backlight_register(struct mct_t2 *t2)
 	 * is looked up on every access; keep the default if it isn't there yet.
 	 */
 	if (!t2_bl_xfer(t2, false, &level))
-		props.brightness = min_t(int, level, T2_BL_MAX);
+		props.brightness = min_t(int, level, T2_BL_LEVELS - 1) + 1;
 	snprintf(name, sizeof(name), "mct_t2-%d", t2->dev.primary->index);
 	bd = backlight_device_register(name, t2->conn.kdev, t2, &t2_bl_ops, &props);
 	if (IS_ERR(bd)) {
@@ -826,8 +849,9 @@ static void t2_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commi
 	int idx;
 
 	t2->first = true;	/* primary plane update follows with full damage */
+	t2->crtc_on = true;
 	if (drm_dev_enter(crtc->dev, &idx)) {
-		t2_wreg(t2, T2_REG_PLL_EN, 1);
+		t2_update_panel_power(t2);
 		drm_dev_exit(idx);
 	}
 	drm_crtc_vblank_on(crtc);
@@ -842,7 +866,8 @@ static void t2_crtc_atomic_disable(struct drm_crtc *crtc, struct drm_atomic_comm
 	t2_stop_updates(t2);
 	if (drm_dev_enter(crtc->dev, &idx)) {
 		t2_cursor_hide(t2);
-		t2_wreg(t2, T2_REG_PLL_EN, 0);	/* panel/backlight off */
+		t2->crtc_on = false;
+		t2_update_panel_power(t2);	/* panel/backlight off */
 		drm_dev_exit(idx);
 	}
 }
@@ -1040,6 +1065,7 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	INIT_WORK(&t2->upd.work, t2_update_work);
 	mutex_init(&t2->upd.lock);
 	mutex_init(&t2->io_lock);
+	mutex_init(&t2->power_lock);
 	t2->front = T2_FB_A;
 
 	t2->bounce = drmm_kmalloc(dev, T2_BOUNCE, GFP_KERNEL);

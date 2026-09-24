@@ -68,7 +68,8 @@ the mapped consoles move over as soon as the driver has probed.
 ## Backlight (driver 0.3)
 
 `mct_t2` registers a backlight device, `/sys/class/backlight/mct_t2-<minor>`,
-brightness 0-8 (the report level itself; 7 is the power-on default). The driver sends HID GET/SET_REPORT for
+brightness 0-9: 0 turns the panel off (pixel clock stopped, as for DPMS), 1-9
+are report levels 0-8 (8 = level 7, the power-on default). The driver sends HID GET/SET_REPORT for
 feature report `0x06` as control transfers to the Wacom (`056a`) device on the
 same hub as the T2. No HID driver is involved, so it works while
 OpenTabletDriver or the wacom driver owns the pen. The backlight device is a child
