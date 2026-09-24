@@ -22,7 +22,10 @@ no USB), `WinXP_Target_SiS` (sisusb-era, unrelated).
 
 - `CT2Hal`: `ProbeUsb` (WDF USB), `ProbeFirmware` (HW version gate),
   `PowerUp` (DDR, DVO driving, display power), `Read/WritePipe` (bulk EPs),
-  `Read/WriteMC8032P1` (on-chip 8051!).
+  `Read/WriteMC8032P1` (on-chip 8051!). `ReadMC8032P1` sends EP3 command
+  `29 00 00 00`, reads 512 B from EP81 and returns the first byte (live:
+  `0x0f`). It is serialized behind incomplete EP2 payloads, so it is not an
+  independent parser-status query.
 - `CT2VideoControl`: `EncodeRgbDTR` (RGBX->RGB24 pack), `EncodeRleDTR`
   (RLE, 64-px units, "3K alignment"), `DrawColorBlock` (`0x11` fills),
   `TransferQJob` (`dir/indir/stretch` DTR records), enc/xfr threads.
@@ -36,6 +39,9 @@ no USB), `WinXP_Target_SiS` (sisusb-era, unrelated).
   `0x1800113b0`/`0x180011b30`; `0x16` builder (35 B, regs `0x20-0x2f`);
   `0x22` builder @ `0x18000a920` (1081 B, object-state dependent);
   `0x91` builder @ `0x18000b290` (`91 AA BBCC`, <=256); `0x90` @ `0x18000ce90`.
+- Enumerating the DLL's framebuffer transfer-record command builders found no
+  video-memory readback command. The non-DTR `0x29` read above was found by
+  following `CT2Hal`'s EP3-write/EP81-read path separately.
 - Magic `30 05 28`: bytes `0x30,0x05` fixed + flags (`|8`).
 
 RE tools: `tools/xref.py` (capstone .pdata+xref map), `tools/vft.py`
