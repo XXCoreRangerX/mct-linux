@@ -68,7 +68,7 @@
 #define T2_EP_MCU	0x04
 #define T2_EP_IN	0x81
 
-#define T2_CHUNK	19968			/* payload transfer size used by the vendor driver */
+#define T2_CHUNK	19968			/* vendor payload transfer size */
 #define T2_BOUNCE	65536
 #define T2_ENC_MAX	(T2_WIDTH * (T2_HEIGHT + 16) * 3 + 4096)
 #define T2_TIMEOUT	2000
@@ -223,7 +223,9 @@ static int t2_encode(struct mct_t2 *t2, int dx, int dy, int w, int h)
 				ch[1][k] = px[1];
 				ch[2][k] = px[0];
 			} else {
-				ch[0][k] = ch[1][k] = ch[2][k] = 0;
+				ch[0][k] = 0;
+				ch[1][k] = 0;
+				ch[2][k] = 0;
 			}
 			if (++k == 1024) {
 				for (c = 0; c < 3; c++)
@@ -386,7 +388,9 @@ static int t2_hw_init(struct mct_t2 *t2)
 		n++;
 	}
 	mutex_unlock(&t2->io_lock);
-	t2->cur.uploaded = t2->cur.sized = t2->cur.visible = false;
+	t2->cur.uploaded = false;
+	t2->cur.sized = false;
+	t2->cur.visible = false;
 	drm_dbg(&t2->dev, "init: %d transfers\n", n);
 	return 0;
 err:
