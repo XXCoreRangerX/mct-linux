@@ -1,7 +1,7 @@
 # EVDI built for kernels >= 7.2, which renamed struct drm_atomic_state -> drm_atomic_commit
-# (and drm_atomic_state_{alloc,clear,put} -> drm_atomic_commit_*). Done as an
-# idempotent rename so it works across EVDI versions; the equivalent diff for
-# EVDI 1.14.15 is nix/evdi-linux-7.2.patch.
+# (and drm_atomic_state_{alloc,clear,put} -> drm_atomic_commit_*). EVDI 1.15.1
+# already builds; the rename is a no-op there and only matters for 1.14.x
+# (same change as nix/evdi-linux-7.2.patch).
 { lib, kernelPackages }:
 kernelPackages.evdi.overrideAttrs (o: {
   postPatch = (o.postPatch or "") + lib.optionalString (lib.versionAtLeast kernelPackages.kernel.version "7.2") ''

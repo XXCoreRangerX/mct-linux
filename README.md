@@ -48,7 +48,8 @@ or with flakes, add this repository as an input and use
 line, which puts every second VT (tty2, tty4, ...) on the tablet once its
 framebuffer appears (assuming the GPU is fb0 and the tablet fb1).
 
-t2d needs EVDI; on Linux 7.2 and later EVDI requires nix/evdi-linux-7.2.patch.
+t2d needs EVDI. EVDI 1.14.x does not build on Linux 7.2 without
+nix/evdi-linux-7.2.patch; 1.15.1 and later build as is.
 
 Documentation
 -------------
