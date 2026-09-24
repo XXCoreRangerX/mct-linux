@@ -68,7 +68,7 @@ MODULE_PARM_DESC(lossy, "Lossy tolerance (1-8) for updates too big to send lossl
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	10
+#define DRIVER_PATCH	11
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -746,7 +746,8 @@ static void t2_update_work(struct work_struct *work)
 
 	if (drm_dev_enter(&t2->dev, &idx)) {
 		ret = t2_present(t2, refine, &went_lossy);
-		if (ret && ret != -ENODEV && ret != -ECONNRESET && ret != -ESHUTDOWN)
+		/* an interrupted frame leaves the firmware mid-command: always report */
+		if (ret)
 			drm_err_ratelimited(&t2->dev, "frame update error: %d\n", ret);
 		drm_dev_exit(idx);
 	}
@@ -793,7 +794,13 @@ static void t2_mark_dirty(struct mct_t2 *t2, struct drm_framebuffer *fb,
 
 static void t2_stop_updates(struct mct_t2 *t2)
 {
-	cancel_delayed_work_sync(&t2->refine_work);
+	/*
+	 * The update worker re-arms the refine timer and the refine timer
+	 * queues the worker, so cancel in a loop until neither is pending.
+	 */
+	do {
+		cancel_work_sync(&t2->upd.work);
+	} while (cancel_delayed_work_sync(&t2->refine_work));
 	cancel_work_sync(&t2->upd.work);
 	mutex_lock(&t2->upd.lock);
 	t2->upd.dirty = false;
