@@ -1,5 +1,5 @@
 {
-  description = "Linux support for MCT Trigger II (T2) USB displays — Wacom DTU-1031X";
+  description = "Linux support for MCT Trigger II (T2) USB displays (Wacom DTU-1031X)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 

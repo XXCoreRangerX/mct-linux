@@ -647,7 +647,7 @@ static void t2_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_c
 	dst = t2->cur.img;
 	for (j = 0; j < T2_CUR; j++) {
 		for (i = 0; i < T2_CUR; i++, dst += 4) {
-			/* device pixel (i + sx, j + sy) of the box = visible (63 - ., 63 - .) */
+			/* device (i + sx, j + sy) is visible (63 - (i + sx), 63 - (j + sy)) */
 			int vx = T2_CUR - 1 - (i + sx), vy = T2_CUR - 1 - (j + sy);
 			const u8 *px;
 

@@ -1,7 +1,7 @@
 # mct-t2-linux
 
 Linux display support for **MCT Trigger II (T2)** USB graphics, the chip
-inside the **Wacom DTU-1031X** 10.1" pen display (`1024×600`, USB `0711:520d`).
+inside the **Wacom DTU-1031X** 10.1" pen display (`1024x600`, USB `0711:520d`).
 The vendor only ships a Windows driver. Everything here came from USB
 captures of that driver plus disassembly, then live testing on the hardware.
 
@@ -22,14 +22,14 @@ with the in-kernel `wacom` driver.
 ## How it works
 
 ```
-compositor ──► EVDI virtual connector (panel EDID, 1024×600@60)
-                    │ damage rects + XRGB8888
-                    ▼
-               t2d (userspace, libusb) ──► USB bulk ──► T2-285A ──► panel
+compositor --> EVDI virtual connector (panel EDID, 1024x600@60)
+                    | damage rects + XRGB8888
+                    v
+               t2d (userspace, libusb) --> USB bulk --> T2-285A --> panel
 ```
 
 - [EVDI](https://github.com/DisplayLink/evdi) provides the virtual DRM connector.
-  It needs `nix/evdi-linux-7.2.patch` to build on Linux ≥ 7.2.
+  It needs `nix/evdi-linux-7.2.patch` to build on Linux >= 7.2.
 - `t2d/` is the daemon. It replays the device init (359 USB transfers, ~3 s) and
   then encodes damaged regions with the T2 RLE codec: full frames go through double
   buffering and a flip, small damage becomes partial updates.
@@ -87,8 +87,8 @@ Key facts, in brief:
 - Frames go into one of two framebuffers (`0x00C000`, `0x1CE000`). A `0x15`
   register batch flips scanout.
 - `0x13` payload: planar RLE in 1024-pixel units (R, G, B lines). A literal byte is one pixel;
-  `30 NN VV` = `NN+1` × `VV`.
-- The panel scans out **rotated 180°**.
+  `30 NN VV` = `NN+1` x `VV`.
+- The panel scans out **rotated 180 degrees**.
 
 ## Repository layout
 

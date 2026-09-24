@@ -1,5 +1,5 @@
 /*
- * t2d — Wacom DTU-1031X (MCT Trigger II, USB 0711:520d) display daemon.
+ * t2d: Wacom DTU-1031X (MCT Trigger II, USB 0711:520d) display daemon.
  *
  * EVDI gives the compositor a real 1024x600@60 connector (panel EDID); this
  * daemon grabs damaged pixels from it and streams them to the tablet:

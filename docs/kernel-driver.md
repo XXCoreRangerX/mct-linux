@@ -5,7 +5,7 @@ because it's a normal DRM device with fbdev emulation, the **text console
 works on the tablet** too.
 
 Tested on Linux 7.2.6 with niri 26.04:
-- niri output `USB-1` "Wacom Tech DTU-1031X 1", 1024×600 @ 59.986 Hz. The EDID is read
+- niri output `USB-1` "Wacom Tech DTU-1031X 1", 1024x600 @ 59.986 Hz. The EDID is read
   from the device during init (`0x1d` reply, offset `0x80`).
 - Cursor/window motion is smooth once damage clips are enabled (see below).
 - `fb1` (`mct_t2drmfb`). `con2fbmap 2 1` + Ctrl+Alt+F2 shows tty2 on the tablet.
@@ -25,9 +25,9 @@ Modelled on `drivers/gpu/drm/tiny/gm12u320.c` (in-tree USB projector driver).
   persistent XRGB **shadow image**, union it into a pending rect, then queue a work item.
   Because the shadow is updated every commit, compositors flipping between
   several buffers still only send damage.
-- Worker: pending rect > 1/3 of the screen (or the first frame after enable) → full frame into
-  the back buffer + `0x15` flip. Otherwise → partial `0x13` into the front buffer
-  (rotated 180°, 64-px x alignment, `w·h % 1024 == 0`), the same policy as the vendor driver.
+- Worker: pending rect > 1/3 of the screen (or the first frame after enable) -> full frame into
+  the back buffer + `0x15` flip. Otherwise -> partial `0x13` into the front buffer
+  (rotated 180 degrees, 64-px x alignment, `w*h % 1024 == 0`), the same policy as the vendor driver.
 - All USB I/O is synchronous `usb_bulk_msg` through a 64 KiB kmalloc bounce buffer.
   Headers are their own transfer and payloads go in 19968 B transfers.
 - Unplug: `drm_dev_unplug()` + `drm_atomic_helper_shutdown()`. Worker is guarded
@@ -49,8 +49,8 @@ Console on the tablet: `con2fbmap <tty> <fb>` (from `fbset`), or boot with
 
 - **Trimmed init**: 78 transfers, ~1 s from cold (see `docs/init-sequence.md`), black
   frame into buffer A right before `0x14`.
-- **Hardware cursor plane** (`DRM_PLANE_TYPE_CURSOR`, ARGB8888, 64×64): converts
-  to the T2's A,B,G,R format rotated 180° and uploads with `0x12` only when the image
+- **Hardware cursor plane** (`DRM_PLANE_TYPE_CURSOR`, ARGB8888, 64x64): converts
+  to the T2's A,B,G,R format rotated 180 degrees and uploads with `0x12` only when the image
   changes. Moves send one 16-byte EP4 packet. Boxes hanging off the visible right/bottom
   edge get a shifted image (the position registers can't go negative).
   Much smoother than composited cursors, and less USB traffic.

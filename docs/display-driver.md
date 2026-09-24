@@ -1,36 +1,36 @@
 # Linux display driver: EVDI + t2d (2026-09-24)
 
 The DTU-1031X works as a **real monitor** in niri. Output `DVI-I-1`,
-"Wacom Tech DTU-1031X", 1024×600 @ 59.986 Hz, desktop shown upright, smooth.
+"Wacom Tech DTU-1031X", 1024x600 @ 59.986 Hz, desktop shown upright, smooth.
 
 ## Architecture
 
 ```
-niri (renders on amdgpu) ──► EVDI virtual connector (card2, panel EDID)
-                                   │  damage rects + XRGB8888 pixels (libevdi)
-                                   ▼
-                     t2d (userspace, libusb) ──► USB 2.0 bulk ──► T2-285A ──► panel
+niri (renders on amdgpu) --> EVDI virtual connector (card2, panel EDID)
+                                   |  damage rects + XRGB8888 pixels (libevdi)
+                                   v
+                     t2d (userspace, libusb) --> USB 2.0 bulk --> T2-285A --> panel
 ```
 
 This mirrors Windows (IddCx indirect display `TrgIdd.dll` + `T2Indisp.dll`).
 
 - **EVDI** (DisplayLink's virtual DRM driver, v1.14.15) + `nix/evdi-linux-7.2.patch`.
-  Linux 7.2 renamed `struct drm_atomic_state` → `drm_atomic_commit` (and
+  Linux 7.2 renamed `struct drm_atomic_state` -> `drm_atomic_commit` (and
   `_alloc/_clear/_put`); upstream EVDI doesn't build without the patch.
   EVDI ioctls are unlocked and card nodes are group `video`, so the daemon runs as the user.
-- niri ≥ PR #2312 (Nov 2025; 26.04 has it) renders display-only DRM devices on
+- niri >= PR #2312 (Nov 2025; 26.04 has it) renders display-only DRM devices on
   the primary GPU. No config needed.
 - **t2d** (`t2d/t2d.c`):
   1. `init.bin`: 359 transfers extracted from the Windows capture
-     (`tools/gen_init_blob.py`), replayed with 20 ms pacing on EP3/EP4 → 2.8 s.
+     (`tools/gen_init_blob.py`), replayed with 20 ms pacing on EP3/EP4 -> 2.8 s.
   2. `evdi_connect2` with `data/panel_edid.bin`, register one XRGB buffer,
      `evdi_request_update` / `evdi_grab_pixels` loop (backpressure: the next
      update is requested only after the previous one has been sent).
-  3. Damage > 1/3 of the screen (or first frame) → full `0x13` into the back buffer + `0x15`
-     flip. Otherwise → per-rect partial `0x13` straight into the front buffer
+  3. Damage > 1/3 of the screen (or first frame) -> full `0x13` into the back buffer + `0x15`
+     flip. Otherwise -> per-rect partial `0x13` straight into the front buffer
      (same policy as Windows, see `captures/redir4.bin`).
-  4. Partial rects: rotate 180° into device space, x/w aligned to 64 px,
-     h rounded so `w·h % 1024 == 0` (shifted up if it would cross row 600).
+  4. Partial rects: rotate 180 degrees into device space, x/w aligned to 64 px,
+     h rounded so `w*h % 1024 == 0` (shifted up if it would cross row 600).
   5. RLE encoder in C, byte-identical to the Python/Windows encoder
      (tested on photo, noise, black: `t2d -t encode`).
 
@@ -58,5 +58,5 @@ user service on plug), and runs `t2d` as a systemd user service with `Restart=al
   the framebuffer, so cursor moves cost a small partial update.
 - DPMS off isn't forwarded (panel stays lit). Candidate: backlight/`0x14` regs.
 - Init is still the full Windows replay. Minimisation is optional.
-- Encoder is exact (lossless). Windows' ±4 lossy merge could cut bandwidth
+- Encoder is exact (lossless). Windows' +/-4 lossy merge could cut bandwidth
   for photos/video if ever needed.

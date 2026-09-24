@@ -13,17 +13,17 @@
   `autounattend.xml` (root), `install-t2.cmd`, `t2/TrgIdd64.inf`,
   `t2/TrgIdd.dll`, `t2/T2Indisp.dll`, `t2/trgidd64.cat` (from MCT's "Trigger
   Family" driver package, not redistributed here); FirstLogonCommands runs
-  `pnputil /add-driver … /install`. The first capture passed the tablet via
-  `-device usb-host,…`; later ones use usb-redir (below).
+  `pnputil /add-driver ... /install`. The first capture passed the tablet via
+  `-device usb-host,...`; later ones use usb-redir (below).
 - Result: driver binds on first logon, desktop extends, cursor visible on
-  tablet. Full install ~30–40 min on emulated SATA.
+  tablet. Full install ~30-40 min on emulated SATA.
 
 ## Capture
 
 - `sudo modprobe usbmon`, then run the capture **as root** (debugfs ignores
   chmod): `sudo sh -c 'cat /sys/kernel/debug/usb/usbmon/6u > cap.bin' &`
 - Kernel 7.2 usbmon here is **text-only** (`0u` too) and **truncates every
-  transfer at ~32 B shown** — enough for all short commands/headers, NOT for
+  transfer at ~32 B shown**, enough for all short commands/headers, NOT for
   frame payloads or the 43/62 B tails. Bulk DATA presence: headers only.
 - Text analysis was ad-hoc `grep`/`awk` (see init doc for the recipe).
 - Bulk starts at first `Bo:6:011`; OUT/IN pairing mandatory; isoc flood from
@@ -31,11 +31,11 @@
 
 ## Captures in this repo
 
-- `captures/redir2.bin` — full usbredir capture of the Windows driver's init and
+- `captures/redir2.bin`: full usbredir capture of the Windows driver's init and
   first (black) frames. Source of `t2d/init.bin` (`tools/gen_init_blob.py`).
-- `captures/frame1_rle.bin` — one captured black `0x13` frame (encoder test vector).
+- `captures/frame1_rle.bin`: one captured black `0x13` frame (encoder test vector).
 - Not published: the usbmon text capture (`cap_install.bin`, 750 MB) and
-  `redir4.bin` (desktop session incl. partial updates — it contains screen
+  `redir4.bin` (desktop session incl. partial updates; it contains screen
   content). Findings from them are written up in the docs.
 
 ## Full-fidelity capture via usbredir (used for redir2/redir4)

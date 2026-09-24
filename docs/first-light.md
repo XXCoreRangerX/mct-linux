@@ -1,4 +1,4 @@
-# First light — 2026-09-24
+# First light (2026-09-24)
 
 The DTU-1031X panel shows solid colours sent from Linux: red, green, blue,
 white, full screen (`tools/replay.py`).
@@ -24,12 +24,12 @@ The init sequence itself was correct all along.
 
 ## How it was found
 - Full timeline of `captures/redir2.bin` including *all* EP2 commands (the old
-  timeline only printed `0x11`/`0x13`) → exposed the `0x15` flips.
+  timeline only printed `0x11`/`0x13`) -> exposed the `0x15` flips.
 - Hot-attached the tablet to the still-running Win11 VM through
   `usbredirserver` + `tools/tee.py` (QEMU monitor `chardev-add` +
-  `device_add usb-redir`) → `captures/redir4.bin` with a real desktop window on
+  `device_add usb-redir`) -> `captures/redir4.bin` with a real desktop window on
   the tablet. EP3 had nothing new after `0x14`, so the difference had to be in how
-  EP2 was sent → transfer framing.
+  EP2 was sent -> transfer framing.
 - Detaching the tablet from the VM (killing usbredirserver) drops it out
   of scanout (backlight off, writes crawl ~38 s). Full re-init is required after that.
 
@@ -40,7 +40,7 @@ The init sequence itself was correct all along.
 | replay3 v1 | verbatim redir2 + `0x11` fills + flips (merged writes), no power-cycle | lit, blank |
 | rle_test v1 | RLE R/G/B/W + flips, merged writes | blank |
 | rle_test v2 | split writes, after VM detach | backlight **off** (device lost state) |
-| **replay3 v2** | power-cycle, verbatim redir2 (per-transfer), RLE R/G/B/W split + flips | **RGB flash, black, R, G, B, W ✅** |
+| **replay3 v2** | power-cycle, verbatim redir2 (per-transfer), RLE R/G/B/W split + flips | **RGB flash, black, R, G, B, W (OK)** |
 
 ## Colour order
 RLE channel-lines per row are **R, G, B** (ch0 = red verified).
@@ -48,11 +48,11 @@ RLE channel-lines per row are **R, G, B** (ch0 = red verified).
 ## Arbitrary images (same day)
 - The RLE encoder was located in `T2Indisp.dll` (`0x180013278`) and read from disassembly: a literal byte is a pixel,
   `30 NN VV` is a run. `tools/t2rle.py` encode/decode re-creates Windows' frames byte for byte.
-- Decoding a captured desktop frame gave the Windows wallpaper rotated 180°.
-  A corner test pattern confirmed that the **panel is rotated 180°**.
-- `tools/show_image.py <photo.png>` → photo shown upright and
+- Decoding a captured desktop frame gave the Windows wallpaper rotated 180 degrees.
+  A corner test pattern confirmed that the **panel is rotated 180 degrees**.
+- `tools/show_image.py <photo.png>` -> photo shown upright and
   correct on the tablet. **Windows is no longer needed**: init comes from the
   saved capture and the frames are encoded natively on Linux.
 
 ## Next
-- Minimise init; write a streaming daemon (screen grab → RLE → `0x13` + `0x15`).
+- Minimise init; write a streaming daemon (screen grab -> RLE -> `0x13` + `0x15`).

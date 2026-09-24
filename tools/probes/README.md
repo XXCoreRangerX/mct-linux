@@ -6,8 +6,8 @@ established the endpoint pairing rules and produced the files in `data/`.
 | Script | What it does | Output / finding |
 |---|---|---|
 | `probe1.py` | enumerate `0711:520d`, dump descriptors | 6 bulk EPs, no kernel driver |
-| `probe2.py` | `0x1d` device-info + `0x1b` EDID queries | `data/t2_1d_info.bin` (EDID at +0x80 → `data/panel_edid.bin`) |
-| `probe3.py` | `0x91` ID-ROM reads | ID-ROM layout (`03 02 00 00 …`) |
+| `probe2.py` | `0x1d` device-info + `0x1b` EDID queries | `data/t2_1d_info.bin` (EDID at +0x80 -> `data/panel_edid.bin`) |
+| `probe3.py` | `0x91` ID-ROM reads | ID-ROM layout (`03 02 00 00 ...`) |
 | `probe4.py` | minimal `1b`/`1d` handshake | OUT/IN pairing is mandatory, else EP3 stalls |
 | `probe5.py` | `0x05` register read sweep | `data/t2_regsweep.txt` (power-on register values) |
 | `probe6.py` | EP `0x85` poll + standard descriptors | EP `0x85`/`0x06` unused |
