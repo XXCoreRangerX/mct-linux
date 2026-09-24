@@ -15,7 +15,7 @@
  *
  * The backlight is not controlled by the T2 but by the tablet's pen
  * function (a sibling USB device on the same internal hub): HID feature
- * report 0x06 holds the brightness level, 1 to 7.
+ * report 0x06 holds the brightness level, 0 to 8 (the vendor tool uses 1..7).
  *
  * Structure modelled on drivers/gpu/drm/udl and drivers/gpu/drm/tiny/gm12u320.c.
  */
@@ -61,6 +61,7 @@
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
+#define DRIVER_PATCH	3
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -409,7 +410,7 @@ err:
 
 #define T2_PEN_VENDOR	0x056a
 #define T2_BL_REPORT	0x06
-#define T2_BL_LEVELS	7	/* report values 1..7 */
+#define T2_BL_MAX	8	/* report values 0..8; the firmware clamps above 8 */
 
 struct t2_pen_lookup {
 	struct usb_device *hub;
@@ -465,7 +466,7 @@ static int t2_bl_xfer(struct mct_t2 *t2, bool set, u8 *level)
 static int t2_bl_update_status(struct backlight_device *bd)
 {
 	struct mct_t2 *t2 = bl_get_data(bd);
-	u8 level = backlight_get_brightness(bd) + 1;
+	u8 level = backlight_get_brightness(bd);
 
 	return t2_bl_xfer(t2, true, &level);
 }
@@ -479,7 +480,7 @@ static int t2_bl_get_brightness(struct backlight_device *bd)
 	ret = t2_bl_xfer(t2, false, &level);
 	if (ret)
 		return ret;
-	return clamp_t(int, level, 1, T2_BL_LEVELS) - 1;
+	return min_t(int, level, T2_BL_MAX);
 }
 
 static const struct backlight_ops t2_bl_ops = {
@@ -491,8 +492,8 @@ static void t2_backlight_init(struct mct_t2 *t2, struct usb_interface *interface
 {
 	struct backlight_properties props = {
 		.type = BACKLIGHT_RAW,
-		.max_brightness = T2_BL_LEVELS - 1,
-		.brightness = T2_BL_LEVELS - 1,
+		.max_brightness = T2_BL_MAX,
+		.brightness = 7,	/* power-on default */
 		.scale = BACKLIGHT_SCALE_NON_LINEAR,
 	};
 	struct backlight_device *bd;
@@ -504,7 +505,7 @@ static void t2_backlight_init(struct mct_t2 *t2, struct usb_interface *interface
 	 * is looked up on every access; keep the default if it isn't there yet.
 	 */
 	if (!t2_bl_xfer(t2, false, &level))
-		props.brightness = clamp_t(int, level, 1, T2_BL_LEVELS) - 1;
+		props.brightness = min_t(int, level, T2_BL_MAX);
 	snprintf(name, sizeof(name), "mct_t2-%d", t2->dev.primary->index);
 	bd = devm_backlight_device_register(&interface->dev, name, &interface->dev, t2,
 					    &t2_bl_ops, &props);
@@ -907,6 +908,7 @@ static const struct drm_driver t2_drm_driver = {
 	.desc = DRIVER_DESC,
 	.major = DRIVER_MAJOR,
 	.minor = DRIVER_MINOR,
+	.patchlevel = DRIVER_PATCH,
 	.fops = &t2_fops,
 	DRM_GEM_SHMEM_DRIVER_OPS,
 	DRM_FBDEV_SHMEM_DRIVER_OPS,

@@ -173,7 +173,9 @@ Tried without effect: `fb60` (also via `0x14 60=00`), `fe36`, `fe57`, `fe70`, `f
 
 Brightness is not a T2 function. It belongs to the tablet's pen function
 (`056a:032f`, a separate USB device on the same internal hub) and is HID
-**feature report `0x06`**: `06 LL`, level `LL` = 1 (darkest) to 7 (brightest).
+**feature report `0x06`**: `06 LL`, level `LL` = 0 (darkest) to 8 (brightest).
+Wacom's driver only uses 1-7; 0 and 8 are real extra steps (checked visually),
+values above 8 read back as 8.
 
 - Found by capturing Wacom's Windows driver 6.4.9-2 (capture not included; parsed with
   `tools/redir_hid.py`) while moving "Tablet light brightness" in its Options
@@ -182,7 +184,7 @@ Brightness is not a T2 function. It belongs to the tablet's pen function
   SET_REPORT from Linux (hidraw or a control transfer) works while another
   program owns the pen.
 - Power-on value is 7; Wacom's driver sets 6 when it starts.
-- Level 1 is still fairly bright; that is the firmware's range.
+- Level 0 is the darkest the firmware goes and is not "off"; use DPMS (`fcf6`) for off.
 
 Other Wacom driver traffic seen at startup: feature `0x83` (`83 02 00`) x3,
 `0x02` (`02 02`, mode), GET `0x0c` (serial), GET `0x10` (status), and a series of

@@ -52,7 +52,7 @@ framebuffer appears (assuming the GPU is fb0 and the tablet fb1).
 the tablet's output properly when it is unplugged (niri 26.04 leaves a stale
 output behind).
 
-Brightness is exposed as /sys/class/backlight/mct_t2-N (0-6), e.g.
+Brightness is exposed as /sys/class/backlight/mct_t2-N (0-8), e.g.
 `brightnessctl -d 'mct_t2-*' set 3`.
 
 t2d needs EVDI. EVDI 1.14.x does not build on Linux 7.2 without
