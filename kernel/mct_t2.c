@@ -23,6 +23,7 @@
 
 #include <linux/backlight.h>
 #include <linux/gcd.h>
+#include <linux/seq_file.h>
 #include <linux/module.h>
 #include <linux/pm.h>
 #include <linux/usb.h>
@@ -36,6 +37,7 @@
 #include <drm/drm_connector.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_crtc_helper.h>
+#include <drm/drm_debugfs.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
@@ -102,6 +104,11 @@ struct mct_t2 {
 	u8 *snap;			/* shadow snapshot being sent */
 	u8 *hw[2];			/* what device buffers A and B hold */
 	bool hw_valid[2];
+
+	struct {			/* debugfs statistics */
+		u64 updates, rects, px_damage, px_sent, bytes;
+		ktime_t since;
+	} stats;
 	const struct drm_edid *edid;	/* read from the device at init */
 	struct backlight_device *bl;
 	struct mutex power_lock;		/* crtc_on + bl_off -> pixel clock */
@@ -255,6 +262,10 @@ static int t2_send_rect(struct mct_t2 *t2, const u8 *src, u32 base, int dx, int 
 	int len = t2_encode(t2, src, dx, dy, w, h);
 	u8 hdr[36];
 
+	t2->stats.rects++;
+	t2->stats.px_sent += w * h;
+	t2->stats.bytes += sizeof(hdr) + len;
+
 	hdr[0] = 0x13;
 	put_unaligned_le32(a, hdr + 1);
 	put_unaligned_le32(a, hdr + 5);
@@ -376,6 +387,7 @@ static int t2_present(struct mct_t2 *t2)
 	if (ret)
 		return ret;
 
+	t2->stats.updates++;
 	t2->front = base;
 	tmp = t2->hw[back];
 	t2->hw[back] = t2->snap;
@@ -661,6 +673,7 @@ static void t2_mark_dirty(struct mct_t2 *t2, struct drm_framebuffer *fb,
 	int y;
 
 	mutex_lock(&t2->upd.lock);
+	t2->stats.px_damage += drm_rect_width(dirty) * drm_rect_height(dirty);
 	for (y = dirty->y1; y < dirty->y2; y++)
 		memcpy(t2->shadow + (y * T2_WIDTH + dirty->x1) * 4,
 		       src + y * fb->pitches[0] + dirty->x1 * 4,
@@ -1002,6 +1015,30 @@ static const struct drm_connector_funcs t2_conn_funcs = {
 };
 
 /* ------------------------------------------------------------------ */
+/* debugfs							      */
+
+static int t2_stats_show(struct seq_file *m, void *data)
+{
+	struct drm_debugfs_entry *entry = m->private;
+	struct mct_t2 *t2 = to_t2(entry->dev);
+	u64 ms = max_t(u64, ktime_ms_delta(ktime_get(), t2->stats.since), 1);
+	u64 full = (u64)T2_WIDTH * T2_HEIGHT;
+
+	seq_printf(m, "seconds          %llu\n", ms / 1000);
+	seq_printf(m, "updates          %llu\n", t2->stats.updates);
+	seq_printf(m, "rects            %llu\n", t2->stats.rects);
+	seq_printf(m, "pixels damaged   %llu (%llu full frames)\n",
+		   t2->stats.px_damage, div64_u64(t2->stats.px_damage, full));
+	seq_printf(m, "pixels sent      %llu (%llu full frames)\n",
+		   t2->stats.px_sent, div64_u64(t2->stats.px_sent, full));
+	seq_printf(m, "sent/damaged     %llu%%\n",
+		   div64_u64(t2->stats.px_sent * 100, max_t(u64, t2->stats.px_damage, 1)));
+	seq_printf(m, "usb bytes        %llu (avg %llu KB/s)\n",
+		   t2->stats.bytes, div64_u64(t2->stats.bytes, ms));
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* driver							      */
 
 DEFINE_DRM_GEM_FOPS(t2_fops);
@@ -1147,6 +1184,9 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	ret = t2_modeset_init(t2);
 	if (ret)
 		return ret;
+
+	t2->stats.since = ktime_get();
+	drm_debugfs_add_file(dev, "mct_t2_stats", t2_stats_show, NULL);
 
 	usb_set_intfdata(interface, dev);
 	ret = drm_dev_register(dev, 0);
