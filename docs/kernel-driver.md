@@ -61,6 +61,18 @@ the bytes sent follow the actual change, not the damage reported by the
 compositor. Only commands the vendor driver also uses are involved. The cost is
 one 2.4 MB memcmp/memcpy per update on the host.
 
+Measured with the debugfs counters (`/sys/kernel/debug/dri/*/mct_t2_stats`, read
+as root, e.g. `sudo sh -c 'cat /sys/kernel/debug/dri/*/mct_t2_stats'`), niri 26.04:
+
+| Use | Updates/s | Pixels sent / damaged | USB average |
+|---|---|---|---|
+| desktop: typing, scrolling, moving windows (62 s) | ~17 | 16% | 0.57 MB/s |
+| video playing (77 s) | ~27 | 93% | 16.3 MB/s |
+
+niri tends to report most of the screen as damaged; for desktop use only a
+sixth of that actually changes. With video most pixels really change, and the
+link (~40 MB/s) still has headroom.
+
 ## Features added 2026-09-24 (driver 0.2)
 
 - **Trimmed init**: 78 transfers, ~1 s from cold (see `docs/init-sequence.md`), black
