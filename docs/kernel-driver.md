@@ -112,6 +112,13 @@ a desktop brightness slider, or brightness keys.
 `mct_t2` and loads the module of the current system generation. This needs a
 compositor that closes removed DRM devices (niri needs `niriFix`).
 
+## Suspend / resume
+
+Verified 2026-09-24 (deep suspend, driver 0.3.7): the USB core resets the tablet on
+wake, so `reset_resume` runs; it re-runs the init (writing the last image into
+buffer A) and `drm_mode_config_helper_resume()` restores the state. Picture,
+hardware cursor and backlight all come back without errors.
+
 ## USB IDs
 
 The DTU-1031X's T2 enumerates as `0711:520d` or `0711:5209` depending on the
