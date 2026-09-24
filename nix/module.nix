@@ -37,6 +37,10 @@ in
       boot.extraModulePackages = [ kmod ];
       boot.kernelParams = lib.optional (cfg.consoleMap != null) "fbcon=map:${cfg.consoleMap}";
       # the USB alias autoloads mct_t2 when the tablet appears
+      # raw device access for the logged-in user (tools/, after unbinding the driver)
+      services.udev.extraRules = ''
+        SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="520d", TAG+="uaccess"
+      '';
     })
 
     (lib.mkIf (cfg.driver == "evdi") {

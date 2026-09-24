@@ -169,6 +169,30 @@ What works: **`fcf6` = pixel-clock PLL enable** (single register write on EP3,
 
 Tried without effect: `fb60` (also via `0x14 60=00`), `fe36`, `fe57`, `fe70`, `feb0`.
 
+## I2C masters (verified live 2026-09-24, `tools/t2i2c.py`)
+
+The T2 has two I2C masters with the OpenCores `i2c_master` register layout,
+driven through normal register reads/writes (EP3 `0x05` / `0x02`):
+
+| Bus | Prescale lo/hi | Control | Data (TXR/RXR) | Command/Status |
+|---|---|---|---|---|
+| 0 | `fce0`/`fce1` | `fce2` | `fce3` | `fce4` |
+| 1 | `fce8`/`fce9` | `fcea` | `fceb` | `fcec` |
+
+- Command bits: `0x80` START, `0x40` STOP, `0x20` READ, `0x10` WRITE, `0x08` NACK.
+  Status bits: `0x80` no ACK, `0x40` bus busy, `0x02` transfer in progress.
+  (Vendor `CT2I2CBus`: start = write `0x90` with the address byte, stop = `0x40`.)
+- `0x1b` / `0x1d` on EP3 are block reads through bus 0 / bus 1:
+  `1d 80 00 ae 00 00 01 00` reads 256 bytes from `0xae` (7-bit `0x57`) on bus 1,
+  the ID ROM with the panel EDID at +0x80. `1b 80 00 a0 00 80 00 00` would read an
+  EDID from bus 0 and returns zeros.
+- Bus 1 (prescale `0x0080`, enabled) has a single device: the EEPROM at `0x57`.
+- Bus 0 is left at reset values (prescale `0xffff`, disabled). Enabled with bus 1's
+  settings, a START never completes (status `0x42`): nothing is wired there.
+- So there is no DDC/CI path to the panel. Brightness on this tablet is handled by
+  Wacom's driver over the pen's USB HID function (Wacom manual: "Brightness setting
+  in the Wacom tablet control panel"), not by the display chip.
+
 ## Hardware cursor (verified live 2026-09-24, `tools/cursor_test.py`)
 
 The T2 has a 64x64 ARGB cursor overlay, drawn by the chip on top of scanout.
