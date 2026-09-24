@@ -60,11 +60,15 @@
 
 #include "mct_t2_init.h"
 
+static int lossy;
+module_param(lossy, int, 0644);
+MODULE_PARM_DESC(lossy, "Lossy tolerance (1-8) for large updates, refined to lossless once motion stops; 0 = always lossless (default)");
+
 #define DRIVER_NAME	"mct_t2"
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	7
+#define DRIVER_PATCH	9
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -89,6 +93,9 @@
 #define T2_BAND_GAP	16
 #define T2_MAX_BANDS	16
 
+/* refine lossy frames to lossless this long after the last lossy update */
+#define T2_REFINE_MS	150
+
 struct mct_t2 {
 	struct drm_device dev;
 	struct drm_plane primary;
@@ -106,7 +113,7 @@ struct mct_t2 {
 	bool hw_valid[2];
 
 	struct {			/* debugfs statistics */
-		u64 updates, rects, px_damage, px_sent, bytes;
+		u64 updates, lossy_updates, rects, px_damage, px_sent, bytes;
 		u64 ns_diff, ns_encode, ns_usb;	/* time spent per stage */
 		ktime_t since;
 	} stats;
@@ -116,9 +123,12 @@ struct mct_t2 {
 	bool crtc_on, bl_off;
 	u32 front;			/* framebuffer address currently scanned out */
 
+	struct delayed_work refine_work;
+
 	struct {
 		struct work_struct work;
-		struct mutex lock;	/* protects shadow + dirty */
+		struct mutex lock;	/* protects shadow + dirty + refine */
+		int refine;		/* lossless updates still owed after lossy ones */
 		bool dirty;
 	} upd;
 
@@ -193,17 +203,26 @@ static int t2_cmd(struct mct_t2 *t2, const u8 *hdr, int hlen, const u8 *pay, int
 /* ------------------------------------------------------------------ */
 /* RLE encoder (see docs/protocol-t2.md)			      */
 
-/* one channel line of n values; 0x30 is the escape byte, runs "30 NN VV" = NN+1 x VV */
-static int t2_rle_line(const u8 *v, int n, u8 *out)
+static inline u8 t2_rle_val(u8 v)
+{
+	return v == 0x30 ? 0x31 : v;	/* 0x30 is the escape byte */
+}
+
+/*
+ * One channel line of n values; runs "30 NN VV" = NN+1 x VV. With tol > 0,
+ * values within +-tol of a run's first value join the run (lossy, like the
+ * vendor encoder) and v is overwritten with what the device will show.
+ */
+static int t2_rle_line(u8 *v, int n, u8 *out, int tol)
 {
 	u8 *o = out;
 	int x = 0;
 
 	while (x < n) {
-		u8 c = v[x] == 0x30 ? 0x31 : v[x];
+		u8 c = t2_rle_val(v[x]);
 		int r = 1, i;
 
-		while (x + r < n && r < 0xfb && (v[x + r] == 0x30 ? 0x31 : v[x + r]) == c)
+		while (x + r < n && r < 0xfb && abs(t2_rle_val(v[x + r]) - c) <= tol)
 			r++;
 		if (r >= 3) {
 			*o++ = 0x30;
@@ -214,9 +233,14 @@ static int t2_rle_line(const u8 *v, int n, u8 *out)
 				*o++ = r - 1;
 			}
 			*o++ = c;
+			if (tol)
+				memset(v + x, c, r);
 		} else {
-			for (i = 0; i < r; i++)
-				*o++ = c;
+			for (i = 0; i < r; i++) {
+				*o++ = t2_rle_val(v[x + i]);
+				if (tol)
+					v[x + i] = t2_rle_val(v[x + i]);
+			}
 		}
 		x += r;
 	}
@@ -228,28 +252,39 @@ static int t2_rle_line(const u8 *v, int n, u8 *out)
  * rotating by 180 degrees. Pixels stream row-major in 1024-pixel units, each
  * unit as R, G, B lines. Rows past the panel (alignment overshoot) are black.
  */
-static int t2_encode(struct mct_t2 *t2, const u8 *src, int dx, int dy, int w, int h)
+static int t2_encode(struct mct_t2 *t2, u8 *src, int dx, int dy, int w, int h, int tol)
 {
 	static u8 ch[3][1024];	/* only used with io_lock held */
-	int x, y, k = 0, len = 0, c;
+	static u8 *pix[1024];
+	int x, y, k = 0, len = 0, c, i;
 
 	for (y = dy; y < dy + h; y++) {
 		for (x = dx; x < dx + w; x++) {
 			if (y < T2_HEIGHT) {
-				const u8 *px = src +
+				u8 *px = src +
 					((T2_HEIGHT - 1 - y) * T2_WIDTH + (T2_WIDTH - 1 - x)) * 4;
 
+				pix[k] = px;
 				ch[0][k] = px[2];
 				ch[1][k] = px[1];
 				ch[2][k] = px[0];
 			} else {
+				pix[k] = NULL;
 				ch[0][k] = 0;
 				ch[1][k] = 0;
 				ch[2][k] = 0;
 			}
 			if (++k == 1024) {
 				for (c = 0; c < 3; c++)
-					len += t2_rle_line(ch[c], 1024, t2->enc + len);
+					len += t2_rle_line(ch[c], 1024, t2->enc + len, tol);
+				/* lossy: keep src equal to what the device now holds */
+				for (i = 0; tol && i < 1024; i++) {
+					if (!pix[i])
+						continue;
+					pix[i][2] = ch[0][i];
+					pix[i][1] = ch[1][i];
+					pix[i][0] = ch[2][i];
+				}
 				k = 0;
 			}
 		}
@@ -257,11 +292,12 @@ static int t2_encode(struct mct_t2 *t2, const u8 *src, int dx, int dy, int w, in
 	return len;
 }
 
-static int t2_send_rect(struct mct_t2 *t2, const u8 *src, u32 base, int dx, int dy, int w, int h)
+static int t2_send_rect(struct mct_t2 *t2, u8 *src, u32 base, int dx, int dy, int w, int h,
+			int tol)
 {
 	u32 a = (base + dy * T2_STRIDE + dx * 3) << 8;
 	ktime_t t0 = ktime_get();
-	int len = t2_encode(t2, src, dx, dy, w, h);
+	int len = t2_encode(t2, src, dx, dy, w, h, tol);
 	ktime_t t1 = ktime_get();
 	u8 hdr[36];
 	int ret;
@@ -311,8 +347,8 @@ static u32 t2_buf_addr(int buf)
  * wants x and w in 64-pixel units and w * h a multiple of 1024; rows are
  * rounded up but never past the buffer (that would write into the other one).
  */
-static int t2_send_visible_rect(struct mct_t2 *t2, const u8 *src, u32 base,
-				const struct drm_rect *r)
+static int t2_send_visible_rect(struct mct_t2 *t2, u8 *src, u32 base,
+				const struct drm_rect *r, int tol)
 {
 	int dx1 = round_down(T2_WIDTH - r->x2, 64), dx2 = round_up(T2_WIDTH - r->x1, 64);
 	int dy1 = T2_HEIGHT - r->y2, rows = drm_rect_height(r);
@@ -329,7 +365,7 @@ static int t2_send_visible_rect(struct mct_t2 *t2, const u8 *src, u32 base,
 	h = roundup(rows, 16 / gcd(w / 64, 16));
 	if (dy1 + h > T2_HEIGHT)
 		dy1 = T2_HEIGHT - h;
-	return t2_send_rect(t2, src, base, dx1, dy1, w, h);
+	return t2_send_rect(t2, src, base, dx1, dy1, w, h, tol);
 }
 
 /*
@@ -372,12 +408,13 @@ static int t2_diff_bands(const u8 *cur, const u8 *old, struct drm_rect *bands)
  * tearing. Only pixels that differ from what the back buffer already holds
  * (the image from two updates ago) are sent.
  */
-static int t2_present(struct mct_t2 *t2)
+static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 {
 	struct drm_rect bands[T2_MAX_BANDS];
 	int back = t2->front == T2_FB_A ? 1 : 0;
 	u32 base = t2_buf_addr(back);
-	int i, n, ret = 0;
+	int i, n, tol = 0, ret = 0;
+	long area = 0;
 	u8 *tmp;
 
 	ktime_t t0 = ktime_get();
@@ -389,15 +426,25 @@ static int t2_present(struct mct_t2 *t2)
 		n = 1;
 	}
 	t2->stats.ns_diff += ktime_to_ns(ktime_sub(ktime_get(), t0));
+
+	/* big changes may go lossy while things move; refined once they stop */
+	for (i = 0; i < n; i++)
+		area += (long)drm_rect_width(&bands[i]) * drm_rect_height(&bands[i]);
+	if (!lossless && lossy > 0 && area * 3 > (long)T2_WIDTH * T2_HEIGHT)
+		tol = clamp(lossy, 1, 8);
+
 	t2->hw_valid[back] = false;
 	for (i = 0; i < n && !ret; i++)
-		ret = t2_send_visible_rect(t2, t2->snap, base, &bands[i]);
+		ret = t2_send_visible_rect(t2, t2->snap, base, &bands[i], tol);
 	if (!ret)
 		ret = t2_flip(t2, base);
 	if (ret)
 		return ret;
 
 	t2->stats.updates++;
+	if (tol)
+		t2->stats.lossy_updates++;
+	*went_lossy = tol;
 	t2->front = base;
 	tmp = t2->hw[back];
 	t2->hw[back] = t2->snap;
@@ -481,7 +528,7 @@ static int t2_hw_init(struct mct_t2 *t2)
 		 */
 		if (ep == T2_EP_CMD && data && data[0] == 0x14) {
 			/* shadow: zeroed at probe, last image on resume */
-			ret = t2_send_rect(t2, t2->shadow, T2_FB_A, 0, 0, T2_WIDTH, T2_HEIGHT);
+			ret = t2_send_rect(t2, t2->shadow, T2_FB_A, 0, 0, T2_WIDTH, T2_HEIGHT, 0);
 			if (ret)
 				goto err;
 			t2->front = T2_FB_A;
@@ -654,6 +701,7 @@ static void t2_backlight_unregister(struct mct_t2 *t2)
 static void t2_update_work(struct work_struct *work)
 {
 	struct mct_t2 *t2 = container_of(work, struct mct_t2, upd.work);
+	bool refine, went_lossy = false;
 	int idx, ret;
 
 	mutex_lock(&t2->upd.lock);
@@ -662,17 +710,41 @@ static void t2_update_work(struct work_struct *work)
 		return;
 	}
 	t2->upd.dirty = false;
+	refine = t2->upd.refine > 0 && !delayed_work_pending(&t2->refine_work);
+	if (refine && --t2->upd.refine) {
+		t2->upd.dirty = true;	/* second pass for the other buffer */
+		queue_work(system_long_wq, &t2->upd.work);
+	}
 	mutex_lock(&t2->io_lock);
 	memcpy(t2->snap, t2->shadow, T2_WIDTH * T2_HEIGHT * 4);
 	mutex_unlock(&t2->upd.lock);
 
 	if (drm_dev_enter(&t2->dev, &idx)) {
-		ret = t2_present(t2);
+		ret = t2_present(t2, refine, &went_lossy);
 		if (ret && ret != -ENODEV && ret != -ECONNRESET && ret != -ESHUTDOWN)
 			drm_err_ratelimited(&t2->dev, "frame update error: %d\n", ret);
 		drm_dev_exit(idx);
 	}
 	mutex_unlock(&t2->io_lock);
+
+	if (went_lossy) {
+		/* two lossless passes once motion stops: one per buffer */
+		mutex_lock(&t2->upd.lock);
+		t2->upd.refine = 2;
+		mutex_unlock(&t2->upd.lock);
+		mod_delayed_work(system_long_wq, &t2->refine_work, msecs_to_jiffies(T2_REFINE_MS));
+	}
+}
+
+/* motion stopped: resend what lossy updates approximated */
+static void t2_refine_work(struct work_struct *work)
+{
+	struct mct_t2 *t2 = container_of(to_delayed_work(work), struct mct_t2, refine_work);
+
+	mutex_lock(&t2->upd.lock);
+	t2->upd.dirty = true;
+	mutex_unlock(&t2->upd.lock);
+	queue_work(system_long_wq, &t2->upd.work);
 }
 
 /* copy damage from the (mapped) framebuffer into the shadow and kick the worker */
@@ -696,6 +768,7 @@ static void t2_mark_dirty(struct mct_t2 *t2, struct drm_framebuffer *fb,
 
 static void t2_stop_updates(struct mct_t2 *t2)
 {
+	cancel_delayed_work_sync(&t2->refine_work);
 	cancel_work_sync(&t2->upd.work);
 	mutex_lock(&t2->upd.lock);
 	t2->upd.dirty = false;
@@ -1036,6 +1109,7 @@ static int t2_stats_show(struct seq_file *m, void *data)
 
 	seq_printf(m, "seconds          %llu\n", ms / 1000);
 	seq_printf(m, "updates          %llu\n", t2->stats.updates);
+	seq_printf(m, "lossy updates    %llu\n", t2->stats.lossy_updates);
 	seq_printf(m, "rects            %llu\n", t2->stats.rects);
 	seq_printf(m, "pixels damaged   %llu (%llu full frames)\n",
 		   t2->stats.px_damage, div64_u64(t2->stats.px_damage, full));
@@ -1171,6 +1245,7 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	}
 
 	INIT_WORK(&t2->upd.work, t2_update_work);
+	INIT_DELAYED_WORK(&t2->refine_work, t2_refine_work);
 	mutex_init(&t2->upd.lock);
 	mutex_init(&t2->io_lock);
 	mutex_init(&t2->power_lock);
