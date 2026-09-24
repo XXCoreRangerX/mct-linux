@@ -5,9 +5,15 @@ inside the **Wacom DTU-1031X** 10.1" pen display (`1024×600`, USB `0711:520d`).
 The vendor only ships a Windows driver. Everything here came from USB
 captures of that driver plus disassembly, then live testing on the hardware.
 
-**Status:** the tablet works as a normal 60 Hz monitor under Wayland (tested with niri
-26.04 on Linux 7.2). It shows up as a real DRM output, and only damaged regions are
-streamed over USB 2.0. Window motion peaks at ~80 updates/s.
+**Status:** the tablet works as a normal 60 Hz monitor under Linux (tested with niri
+26.04 on Linux 7.2). There are two working implementations:
+
+1. **`kernel/`: native DRM driver `mct_t2`** (recommended). A real DRM device with
+   fbdev emulation, so it works in Wayland/X11 *and* on the text console.
+2. **EVDI + `t2d/`**: userspace daemon on top of DisplayLink's virtual DRM
+   driver. Useful for development, since iterating needs no kernel reloads.
+
+Both stream only damaged regions over USB 2.0 using the T2's RLE codec.
 
 The pen digitizer (`056a:032f`) is a separate USB function and already works
 with the in-kernel `wacom` driver.
@@ -26,7 +32,7 @@ compositor ──► EVDI virtual connector (panel EDID, 1024×600@60)
 - `t2d/` is the daemon. It replays the device init (359 USB transfers, ~3 s) and
   then encodes damaged regions with the T2 RLE codec: full frames go through double
   buffering and a flip, small damage becomes partial updates.
-- Planned: a native DRM kernel driver (`kernel/`) replacing EVDI and t2d.
+- `kernel/mct_t2.c` does the same inside the kernel (see [docs/kernel-driver.md](docs/kernel-driver.md)).
 
 ## Install
 
@@ -39,8 +45,9 @@ inputs.mct-t2.url = "github:<you>/mct-t2-linux";
 modules = [ inputs.mct-t2.nixosModules.default { hardware.mct-t2.enable = true; } ];
 ```
 
-This loads the patched EVDI module, adds a udev rule giving the logged-in user
-access to the tablet, and starts `t2d` as a systemd user service.
+By default this installs the `mct_t2` kernel driver. `hardware.mct-t2.driver = "evdi";`
+instead loads the patched EVDI module, adds a udev rule, and runs `t2d` as a
+systemd user service.
 
 ### Manual
 
@@ -62,6 +69,7 @@ cd t2d && make EVDI_INC=/path/to/evdi/library && ./t2d
 | [docs/driver-analysis.md](docs/driver-analysis.md) | Vendor driver structure (`TrgIdd.dll` / `T2Indisp.dll`), function map |
 | [docs/capture.md](docs/capture.md) | Getting complete USB traffic from a Windows VM (usbredir tee) |
 | [docs/first-light.md](docs/first-light.md) | How the first image was reached: root causes, experiment log |
+| [docs/kernel-driver.md](docs/kernel-driver.md) | Native DRM driver `mct_t2`: design, build, console, known issues |
 | [docs/display-driver.md](docs/display-driver.md) | EVDI + t2d design, measurements, limits |
 
 Key facts, in brief:
@@ -76,6 +84,7 @@ Key facts, in brief:
 
 ## Repository layout
 
+- `kernel/`: DRM kernel driver `mct_t2` (+ generated init table)
 - `t2d/`: display daemon (C), init blob, panel EDID
 - `nix/`: flake packages, NixOS module, EVDI patch
 - `tools/`: Python protocol tools. `t2rle.py` (codec), `replay.py` (init replay + test
