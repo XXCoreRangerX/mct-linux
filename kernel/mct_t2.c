@@ -62,13 +62,13 @@
 
 static int lossy;
 module_param(lossy, int, 0644);
-MODULE_PARM_DESC(lossy, "Lossy tolerance (1-8) for updates too big to send losslessly within a frame, refined to lossless once motion stops; 0 = always lossless (default)");
+MODULE_PARM_DESC(lossy, "Maximum lossy tolerance (1-8) for updates too big to send losslessly within a frame, refined to lossless once motion stops; 0 = always lossless (default)");
 
 #define DRIVER_NAME	"mct_t2"
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	18
+#define DRIVER_PATCH	19
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -115,6 +115,7 @@ struct mct_t2 {
 	bool hw_valid[2];
 
 	struct {			/* debugfs statistics */
+		u64 lossy_tol[9];	/* lossy updates by highest tolerance used */
 		u64 updates, lossy_updates, rects, px_damage, px_sent, bytes;
 		u64 over_budget, max_payload;	/* encoded bytes per update */
 		u64 latency[6];			/* damage to flip: <8 <16 <33 <50 <100 >=100 ms */
@@ -298,9 +299,27 @@ static int t2_encode(struct mct_t2 *t2, u8 *src, int dx, int dy, int w, int h, i
 }
 
 /*
- * tol > 0 allows lossy encoding, used only if the lossless result would push
- * this update's total (*sent) past the frame budget. Returns the tolerance
- * actually used through *used.
+ * Smallest tolerance likely to bring an update of need bytes into the frame
+ * budget. Measured on full frames: tol 1 saves 25-50%, tol 2 35-65%, so the
+ * picture stays close to lossless unless the update is far over budget.
+ */
+static int t2_pick_tol(long need, int max)
+{
+	int tol;
+
+	if (need <= T2_FRAME_BUDGET * 4 / 3)
+		tol = 1;
+	else if (need <= T2_FRAME_BUDGET * 2)
+		tol = 2;
+	else
+		tol = max;
+	return min(tol, max);
+}
+
+/*
+ * tol > 0 allows lossy encoding up to that tolerance, used only if the
+ * lossless result would push this update's total (*sent) past the frame
+ * budget. Returns the highest tolerance actually used through *used.
  */
 static int t2_send_rect(struct mct_t2 *t2, u8 *src, u32 base, int dx, int dy, int w, int h,
 			int tol, long *sent, int *used)
@@ -310,8 +329,9 @@ static int t2_send_rect(struct mct_t2 *t2, u8 *src, u32 base, int dx, int dy, in
 	int len = t2_encode(t2, src, dx, dy, w, h, 0);
 
 	if (tol && *sent + len > T2_FRAME_BUDGET) {
+		tol = t2_pick_tol(*sent + len, tol);
 		len = t2_encode(t2, src, dx, dy, w, h, tol);
-		*used = tol;
+		*used = max(*used, tol);
 	}
 	*sent += len;
 	ktime_t t1 = ktime_get();
@@ -456,8 +476,10 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 		return ret;
 
 	t2->stats.updates++;
-	if (used)
+	if (used) {
 		t2->stats.lossy_updates++;
+		t2->stats.lossy_tol[used]++;
+	}
 	if (sent > T2_FRAME_BUDGET)
 		t2->stats.over_budget++;
 	t2->stats.max_payload = max_t(u64, t2->stats.max_payload, sent);
@@ -1293,10 +1315,15 @@ static int t2_stats_show(struct seq_file *m, void *data)
 	struct mct_t2 *t2 = to_t2(entry->dev);
 	u64 ms = max_t(u64, ktime_ms_delta(ktime_get(), t2->stats.since), 1);
 	u64 full = (u64)T2_WIDTH * T2_HEIGHT;
+	int i;
 
 	seq_printf(m, "seconds          %llu\n", ms / 1000);
 	seq_printf(m, "updates          %llu\n", t2->stats.updates);
-	seq_printf(m, "lossy updates    %llu\n", t2->stats.lossy_updates);
+	seq_printf(m, "lossy updates    %llu (by tolerance:", t2->stats.lossy_updates);
+	for (i = 1; i < ARRAY_SIZE(t2->stats.lossy_tol); i++)
+		if (t2->stats.lossy_tol[i])
+			seq_printf(m, " %d:%llu", i, t2->stats.lossy_tol[i]);
+	seq_puts(m, ")\n");
 	seq_printf(m, "rects            %llu\n", t2->stats.rects);
 	seq_printf(m, "pixels damaged   %llu (%llu full frames)\n",
 		   t2->stats.px_damage, div64_u64(t2->stats.px_damage, full));

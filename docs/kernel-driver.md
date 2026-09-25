@@ -136,6 +136,13 @@ Keep proposed work distinct from the measurements above. In priority order:
    and keep the lossless encoding. Desktop content is always within budget.
    Each tolerance tried costs one more encode (~2.5 ms full screen), so try
    at most two, e.g. 2 then N, and not a full search.
+
+   Branch `adaptive-lossy` (0.3.19, not yet tested live) picks the tolerance
+   from how far the lossless encoding overshoots, with no extra encode: up to
+   4/3 of the budget uses 1, up to twice the budget uses 2, anything more the
+   `lossy` value, which becomes a maximum. The photo (817K) gets 2 and fits at
+   519K, the gradient (737K) gets 1 and fits at 374K. `lossy updates` in
+   `mct_t2_stats` now counts updates per tolerance used.
 3. Evaluate cost-based damage-band merging. Estimate the encoded/USB cost of
    spanning unchanged rows rather than always using the fixed 16-row gap. This
    may help scattered desktop damage, although measured desktop traffic is
