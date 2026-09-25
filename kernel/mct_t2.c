@@ -68,7 +68,7 @@ MODULE_PARM_DESC(lossy, "Lossy tolerance (1-8) for updates too big to send lossl
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	17
+#define DRIVER_PATCH	18
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -116,6 +116,8 @@ struct mct_t2 {
 
 	struct {			/* debugfs statistics */
 		u64 updates, lossy_updates, rects, px_damage, px_sent, bytes;
+		u64 over_budget, max_payload;	/* encoded bytes per update */
+		u64 latency[6];			/* damage to flip: <8 <16 <33 <50 <100 >=100 ms */
 		u64 ns_diff, ns_encode, ns_usb;	/* time spent per stage */
 		ktime_t since;
 	} stats;
@@ -131,6 +133,7 @@ struct mct_t2 {
 		struct work_struct work;
 		struct mutex lock;	/* protects shadow + dirty + refine */
 		int refine;		/* lossless updates still owed after lossy ones */
+		ktime_t dirty_since;	/* oldest damage not yet sent, 0 if none */
 		bool dirty;
 	} upd;
 
@@ -455,6 +458,9 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 	t2->stats.updates++;
 	if (used)
 		t2->stats.lossy_updates++;
+	if (sent > T2_FRAME_BUDGET)
+		t2->stats.over_budget++;
+	t2->stats.max_payload = max_t(u64, t2->stats.max_payload, sent);
 	*went_lossy = used;
 	t2->front = base;
 	tmp = t2->hw[back];
@@ -861,7 +867,8 @@ static void t2_update_work(struct work_struct *work)
 {
 	struct mct_t2 *t2 = container_of(work, struct mct_t2, upd.work);
 	bool refine, went_lossy = false;
-	int idx, ret;
+	ktime_t damaged;
+	int idx, ret = -ENODEV;
 
 	mutex_lock(&t2->upd.lock);
 	if (!t2->upd.dirty) {
@@ -869,6 +876,8 @@ static void t2_update_work(struct work_struct *work)
 		return;
 	}
 	t2->upd.dirty = false;
+	damaged = t2->upd.dirty_since;
+	t2->upd.dirty_since = 0;
 	refine = t2->upd.refine > 0 && !delayed_work_pending(&t2->refine_work);
 	if (refine && --t2->upd.refine) {
 		t2->upd.dirty = true;	/* second pass for the other buffer */
@@ -886,6 +895,16 @@ static void t2_update_work(struct work_struct *work)
 		drm_dev_exit(idx);
 	}
 	mutex_unlock(&t2->io_lock);
+
+	if (!ret && damaged) {
+		static const int bounds[] = { 8, 16, 33, 50, 100 };
+		s64 ms = ktime_ms_delta(ktime_get(), damaged);
+		int b = 0;
+
+		while (b < ARRAY_SIZE(bounds) && ms >= bounds[b])
+			b++;
+		t2->stats.latency[b]++;
+	}
 
 	if (went_lossy) {
 		/* two lossless passes once motion stops: one per buffer */
@@ -921,6 +940,8 @@ static void t2_mark_dirty(struct mct_t2 *t2, struct drm_framebuffer *fb,
 		       src + y * fb->pitches[0] + dirty->x1 * 4,
 		       drm_rect_width(dirty) * 4);
 	t2->upd.dirty = true;
+	if (!t2->upd.dirty_since)
+		t2->upd.dirty_since = ktime_get();
 	mutex_unlock(&t2->upd.lock);
 
 	queue_work(system_long_wq, &t2->upd.work);
@@ -1290,6 +1311,11 @@ static int t2_stats_show(struct seq_file *m, void *data)
 		   div64_u64(t2->stats.ns_usb, 1000000));
 	seq_printf(m, "usb MB/s while busy %llu\n",
 		   div64_u64(t2->stats.bytes * 1000, max_t(u64, t2->stats.ns_usb, 1)));
+	seq_printf(m, "over budget      %llu updates (max payload %llu KB)\n",
+		   t2->stats.over_budget, div64_u64(t2->stats.max_payload, 1024));
+	seq_printf(m, "latency ms       <8:%llu <16:%llu <33:%llu <50:%llu <100:%llu >=100:%llu\n",
+		   t2->stats.latency[0], t2->stats.latency[1], t2->stats.latency[2],
+		   t2->stats.latency[3], t2->stats.latency[4], t2->stats.latency[5]);
 	return 0;
 }
 
