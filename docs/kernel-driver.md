@@ -108,9 +108,11 @@ Artifacts: short horizontal streaks during heavy motion (the RLE is row-wise).
 
 Keep proposed work distinct from the measurements above. In priority order:
 
-1. Add frame-latency histograms and payload-size/over-budget counters. The
-   existing aggregate timings establish that USB is the bottleneck, but do not
-   show the update-time tail that affects perceived smoothness.
+1. Frame-latency histogram and payload-size/over-budget counters (0.3.15,
+   not yet measured live). `mct_t2_stats` gained two lines: `over budget`
+   counts updates whose encoded payload exceeded ~600 KB, with the largest
+   payload seen, and `latency ms` is a histogram of the time from the first
+   damage of an update to its flip (<8, <16, <33, <50, <100, >=100 ms).
 2. Investigate adaptive lossy encoding: choose the smallest tolerance that
    brings a large update near the device's roughly 600 KB-per-60-Hz-frame
    budget, instead of applying one fixed tolerance. Benchmark its extra encode
@@ -249,8 +251,8 @@ Near-term work, in recommended order:
    `mct_t2_stats` rather than adding recovery guesses.
 2. Done: `tools/t2_recovery_test.py` replaces the scratch reproducer
    `tools/desync_lab.py`, which stays uncommitted.
-3. Add latency histograms and payload-size/over-budget counters before tuning
-   performance. Then investigate adaptive lossy encoding as described above.
+3. Counters added in 0.3.15 (see the performance backlog). Measure with
+   them, then investigate adaptive lossy encoding as described above.
 4. Investigate command `0x0a` as a possible 256 x RGB hardware gamma table.
    Its 768-byte size is suggestive, not proof. Test controlled ramps on the
    real panel first; expose a standard DRM gamma LUT only if its semantics and
