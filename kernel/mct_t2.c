@@ -68,7 +68,7 @@ MODULE_PARM_DESC(lossy, "Lossy tolerance (1-8) for updates too big to send lossl
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	13
+#define DRIVER_PATCH	14
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -591,6 +591,7 @@ err:
 #define T2_RESYNC_MAX	(2 * 1024 * 1024)	/* longer than any payload */
 #define T2_RESYNC_READ_MS	200
 #define T2_RESYNC_POLL_MS	20
+#define T2_RESYNC_DEADLINE_MS	15000	/* give up and ask for a replug after this */
 
 /* read a register with a short timeout; io_lock held */
 static int t2_read_reg(struct mct_t2 *t2, u16 reg, u8 *val, int timeout_ms)
@@ -625,6 +626,7 @@ static void t2_drain_replies(struct mct_t2 *t2)
 static int t2_resync(struct mct_t2 *t2)
 {
 	struct usb_device *udev = t2_udev(t2);
+	ktime_t deadline;
 	int ret, sent, done;
 	u8 val;
 
@@ -637,13 +639,21 @@ static int t2_resync(struct mct_t2 *t2)
 		goto out;
 
 	drm_warn(&t2->dev, "device busy in the middle of a command, completing it\n");
-	for (sent = 0; sent < T2_RESYNC_MAX; sent += T2_CHUNK) {
+	deadline = ktime_add_ms(ktime_get(), T2_RESYNC_DEADLINE_MS);
+	for (sent = 0; sent < T2_RESYNC_MAX && ktime_before(ktime_get(), deadline);
+	     sent += T2_CHUNK) {
 		ret = t2_out(t2, T2_EP_FB, NULL, T2_CHUNK);
-		if (ret)
+		/*
+		 * A chunk can stall once the payload has completed inside it: the
+		 * firmware answers the queued read and then parses the rest of the
+		 * zeros as commands. Look for the reply before giving up; a slow
+		 * chunk alone is not a failure.
+		 */
+		if (ret && ret != -ETIMEDOUT)
 			goto out;
 		/* the read queued above is answered once the payload is complete */
-		ret = usb_bulk_msg(udev, usb_rcvbulkpipe(udev, T2_EP_IN),
-				   t2->bounce, 64, &done, T2_RESYNC_POLL_MS);
+		ret = usb_bulk_msg(udev, usb_rcvbulkpipe(udev, T2_EP_IN), t2->bounce, 64, &done,
+				   ret ? T2_TIMEOUT : T2_RESYNC_POLL_MS);
 		if (!ret && done >= 1)
 			goto recovered;
 		if (!ret)
