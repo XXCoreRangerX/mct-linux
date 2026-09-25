@@ -161,6 +161,27 @@ after the display, so the backlight looks the pen up on each access.
 
 ## Known issues / TODO
 
+- **Faint rainbow lines after some inits (hardware).** On roughly 10-25% of
+  inits, the picture comes up with faint greyish RGB vertical lines over an
+  otherwise readable image, and it stays that way until the next init. This
+  is the classic analog VGA sampling-phase artifact: the T2 drives the panel
+  over an analog link (the EDID reports a VGA input), and on those inits the
+  panel samples between pixels. Investigated 2026-09-25 with someone watching
+  the panel:
+  - It happens with the trimmed init and with the vendor's full init, from
+    the driver and from userspace. It may have been seen on macOS too.
+  - Not detectable: a full dump of the 8051's address space (0x0000-0xfeff)
+    is identical in good and bad states apart from free-running counters.
+    `fdb2`/`fdb3` change with frame writes and flips and are not a phase
+    indicator.
+  - Not fixed by: new frames or flips, switching the pixel clock off and on
+    (backlight 0, `fcf6`), retuning the PLL (`f4` 2d -> 28 for 2.5 s and back),
+    or replaying the PLL, timing, mode or buffer parts of the init.
+  - Fixed by another full init, which is again random. After a bad load,
+    `mct-t2-reload`, a replug or a suspend/resume cycle gives another try.
+  - A USB reset of the chip is not a way out: in the stuck resync case it
+    stopped answering control requests, and only a port power cycle or
+    replug brought it back.
 - Hot-unplug/replug works on the kernel side (disconnect, re-probe and
   ~1 s init, no warnings), but **niri 26.04 does not clean up removed DRM
   devices**: `device_removed()` calls `DrmNode::from_dev_id()`, which reads
