@@ -200,11 +200,22 @@ full-screen noise frame header plus a random 10-90% of its payload from
 userspace, binds again and checks the log and the connector. It always
 rebinds on exit. Soak results on 0.3.13: 36 of 37 interrupted-frame cycles
 recovered, and 8 manual padding replays from userspace saw no timeouts.
-The one failure was a padding chunk that itself timed out after 5 s: probe gave
-up with -110 and the tablet needed a manual rebind. 0.3.14 treats a timed-out
-padding chunk like a missing reply and keeps going, bounded by a 15 s
-deadline. This still needs its own soak run. Why a chunk sometimes stalls is
-unknown.
+The one failure was a padding chunk that itself timed out: probe gave up with
+-110 and the tablet needed a manual rebind. 0.3.14 treats a timed-out padding
+chunk like a missing reply and keeps going, but its 15 s deadline was still
+too short (third cycle of its soak).
+
+Why chunks stall (verified 2026-09-25 from userspace): the zeros replace the
+lost rest of the frame, and each zero decodes to one pixel. Unless the lost
+part had no RLE runs at all (pure noise), the padded frame ends with the wrong
+pixel count. The firmware then stops taking data and answers the queued read
+only after an internal timeout of about 15-30 s. Padding with runs
+(`30 fa 00`) instead of zeros stalls the same way, and sending exactly the
+missing byte count still takes ~14 s. A USB reset while it is stuck is worse:
+the chip ignores control requests too, enumeration fails, and only a port
+power cycle or a replug brings it back. So 0.3.17 simply waits, with a 45 s
+deadline. This only happens after a driver was stopped mid-frame; normal
+frames of any length are unaffected.
 
 ## Suspend / resume
 

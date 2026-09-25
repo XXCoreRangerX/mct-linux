@@ -68,7 +68,7 @@ MODULE_PARM_DESC(lossy, "Lossy tolerance (1-8) for updates too big to send lossl
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	14
+#define DRIVER_PATCH	17
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -591,7 +591,13 @@ err:
 #define T2_RESYNC_MAX	(2 * 1024 * 1024)	/* longer than any payload */
 #define T2_RESYNC_READ_MS	200
 #define T2_RESYNC_POLL_MS	20
-#define T2_RESYNC_DEADLINE_MS	15000	/* give up and ask for a replug after this */
+/*
+ * Zero padding rarely matches the pixel count the cut frame still owed (any
+ * RLE run in the lost part breaks it), and the firmware then sits in an
+ * internal timeout of about 30 s before it takes commands again. A USB reset
+ * doesn't help: the stuck chip stops answering control requests as well.
+ */
+#define T2_RESYNC_DEADLINE_MS	45000	/* give up and ask for a replug after this */
 
 /* read a register with a short timeout; io_lock held */
 static int t2_read_reg(struct mct_t2 *t2, u16 reg, u8 *val, int timeout_ms)
@@ -638,7 +644,7 @@ static int t2_resync(struct mct_t2 *t2)
 	if (ret != -ETIMEDOUT)
 		goto out;
 
-	drm_warn(&t2->dev, "device busy in the middle of a command, completing it\n");
+	drm_warn(&t2->dev, "device busy in the middle of a command, completing it (may take 30 s)\n");
 	deadline = ktime_add_ms(ktime_get(), T2_RESYNC_DEADLINE_MS);
 	for (sent = 0; sent < T2_RESYNC_MAX && ktime_before(ktime_get(), deadline);
 	     sent += T2_CHUNK) {

@@ -78,8 +78,8 @@ def cycle(intf, clean):
     if not clean:
         left = interrupt_frame(frac)
     sysfs_write("bind", intf)
-    for _ in range(40):                     # init takes about 1 s, recovery up to ~3 s
-        time.sleep(0.25)
+    for _ in range(240):                    # init takes about 1 s; recovery 3 s, or ~30 s
+        time.sleep(0.25)                    # when the chip waits out its own timeout
         if connector_status() == "connected":
             break
     time.sleep(1)
