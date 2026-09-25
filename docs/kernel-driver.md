@@ -104,6 +104,34 @@ stay lossless. A first version that went lossy whenever more than a third of the
 screen changed was lossy for 83% of updates and showed "settling" shadows.
 Artifacts: short horizontal streaks during heavy motion (the RLE is row-wise).
 
+## Performance research backlog
+
+Keep proposed work distinct from the measurements above. In priority order:
+
+1. Add frame-latency histograms and payload-size/over-budget counters. The
+   existing aggregate timings establish that USB is the bottleneck, but do not
+   show the update-time tail that affects perceived smoothness.
+2. Investigate adaptive lossy encoding: choose the smallest tolerance that
+   brings a large update near the device's roughly 600 KB-per-60-Hz-frame
+   budget, instead of applying one fixed tolerance. Benchmark its extra encode
+   cost and inspect gradients and motion before considering it for the driver.
+   Do not revive the earlier damage-size/lossy-streak heuristic unchanged; it
+   produced settling shadows and horizontal/CRT-like artifacts.
+3. Evaluate cost-based damage-band merging. Estimate the encoded/USB cost of
+   spanning unchanged rows rather than always using the fixed 16-row gap. This
+   may help scattered desktop damage, although measured desktop traffic is
+   already low, so the expected benefit is modest.
+4. If useful after the above, visually validate intermediate USB payload sizes
+   such as 32 or 64 KiB. The measured throughput gain over the vendor's 19968 B
+   chunks is only about 3%, while very large writes have corrupted frames.
+5. Treat the DLL's undocumented transfer/stretch operations as longer-term
+   reverse-engineering candidates for hardware-assisted moves or scaling, not
+   as a known optimization.
+
+Do not prioritize asynchronous URBs, front-buffer writes, or diff-loop
+micro-optimization: queued URBs were already slower, front-buffer updates risk
+tearing, and measured diff time is negligible compared with USB transfer time.
+
 ## Features added 2026-09-24 (driver 0.2)
 
 - **Trimmed init**: 78 transfers, ~1 s from cold (see `docs/init-sequence.md`), black
