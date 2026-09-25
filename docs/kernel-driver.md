@@ -117,6 +117,23 @@ Keep proposed work distinct from the measurements above. In priority order:
    cost and inspect gradients and motion before considering it for the driver.
    Do not revive the earlier damage-size/lossy-streak heuristic unchanged; it
    produced settling shadows and horizontal/CRT-like artifacts.
+
+   Offline numbers from a Python model of the encoder (full 1024x600 frame,
+   runs absorb values within +-tol of the run's first value; payload / PSNR):
+
+   | image    | tol 0        | 1           | 2           | 4           | 8           |
+   |----------|--------------|-------------|-------------|-------------|-------------|
+   | photo    | 817K / exact | 599K / 54dB | 519K / 49dB | 443K / 44dB | 294K / 36dB |
+   | gradient | 737K / exact | 374K / 53dB | 253K / 48dB | 156K / 42dB | 91K / 36dB  |
+   | desktop  | 75K / exact  | 72K         | 70K         | 68K         | 64K         |
+   | noise    | 1799K        | 1799K       | 1799K       | 1799K       | 1799K       |
+
+   So the smallest tolerance that fits is usually 1 or 2, well below the
+   fixed 4, and loses far less (54 or 49 dB against 44). Noise-like content
+   does not compress at any tolerance, so a search should give up early there
+   and keep the lossless encoding. Desktop content is always within budget.
+   Each tolerance tried costs one more encode (~2.5 ms full screen), so try
+   at most two, e.g. 2 then N, and not a full search.
 3. Evaluate cost-based damage-band merging. Estimate the encoded/USB cost of
    spanning unchanged rows rather than always using the fixed 16-row gap. This
    may help scattered desktop damage, although measured desktop traffic is
@@ -178,6 +195,17 @@ pads the unfinished payload with zeros, and then runs the normal init. It
 checks `feb0=40` and the pixel-clock register `fcf6=01` afterward and retries
 the init once if either value is wrong.
 
+`tools/t2_recovery_test.py` repeats this: it unbinds the driver, sends a
+full-screen noise frame header plus a random 10-90% of its payload from
+userspace, binds again and checks the log and the connector. It always
+rebinds on exit. Soak results on 0.3.13: 36 of 37 interrupted-frame cycles
+recovered, and 8 manual padding replays from userspace saw no timeouts.
+The one failure was a padding chunk that itself timed out after 5 s: probe gave
+up with -110 and the tablet needed a manual rebind. 0.3.14 treats a timed-out
+padding chunk like a missing reply and keeps going, bounded by a 15 s
+deadline. This still needs its own soak run. Why a chunk sometimes stalls is
+unknown.
+
 ## Suspend / resume
 
 Verified 2026-09-24 (deep suspend, driver 0.3.7): the USB core resets the tablet on
@@ -203,15 +231,13 @@ timings, memory layout or initialization.
 
 Near-term work, in recommended order:
 
-1. Soak-test 0.3.13 through ordinary use, repeated module reloads, deliberately
+1. (0.3.14 recovery soak: see "Updating the module without a reboot".)
+   Soak-test through ordinary use, repeated module reloads, deliberately
    interrupted frames, unplug/replug, suspend/resume, DPMS, brightness, cursor,
    console and optional lossy video. Record failures with the kernel log and
    `mct_t2_stats` rather than adding recovery guesses.
-2. Preserve the useful half-frame reproducer from the untracked
-   `tools/desync_lab.py`, but replace the scratch script with a safe documented
-   regression test. It should confirm recovery and attempt cleanup on every
-   exit; the current script has a session-specific `/tmp` path and can leave the
-   firmware parser stuck, so it must not be committed as-is.
+2. Done: `tools/t2_recovery_test.py` replaces the scratch reproducer
+   `tools/desync_lab.py`, which stays uncommitted.
 3. Add latency histograms and payload-size/over-budget counters before tuning
    performance. Then investigate adaptive lossy encoding as described above.
 4. Investigate command `0x0a` as a possible 256 x RGB hardware gamma table.
