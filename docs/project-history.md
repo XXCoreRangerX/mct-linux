@@ -12,8 +12,30 @@ the specialized documents linked below contain the byte-level evidence.
 The project began by reverse-engineering the Windows Trigger Family v25.01
 driver, its `T2Indisp.dll`, and usbredir captures from a Windows VM. The target
 was the Wacom DTU-1031X, whose display function is an MCT Trigger II T2-285A
-(`0711:520d`) and whose separate pen function (`056a:032f`) already worked with
-Linux's Wacom driver.
+(`0711:520d`) and whose separate pen function (`056a:032f`) already worked on
+Linux. (On the development machine the pen is driven by the owner's own
+OpenTabletDriver build through hidraw, not by the kernel's `wacom` driver; the
+display driver must never depend on which pen driver is used.)
+
+### Capture method
+
+The first capture used usbmon on the host while a Win11 VM ran the vendor
+driver with the tablet passed through. Its text interface truncates every
+transfer after about 32 bytes, so it showed command headers but no payloads.
+The replacement was a TCP tee between QEMU's `usb-redir` device and a locally
+built `usbredirserver` (`tools/tee.py`, `tools/parse_redir.py`), which records
+every byte in both directions. `captures/redir2.bin` (init plus black frames)
+came from this setup.
+
+### The "backlit but blank" period
+
+Replaying the captured init lit the backlight but no fill or frame ever
+appeared. Two independent mistakes caused it: headers were concatenated with
+their payloads into single writes (the firmware parses per USB transfer), and
+the `0x15` flip after each frame was missing. The replay generator also dropped
+`0x13` headers but still sent their payloads, which desynchronised the frame
+stream further. A verbatim, transfer-preserving replay followed by solid-colour
+RLE frames and flips produced the first image.
 
 The decisive first-light findings on 2026-09-24 were:
 
@@ -25,11 +47,16 @@ The decisive first-light findings on 2026-09-24 were:
   two relevant framebuffer bases, A at `0x0000c000` and B at `0x001ce000`.
 - The `0x13` codec is row-wise planar R, G, B RLE. `30 NN VV` represents
   `NN+1` copies of `VV`; ordinary bytes are literal pixels and literal `0x30`
-  is represented as `0x31`. `tools/t2rle.py` reproduced captured Windows
-  payloads byte-for-byte.
-- The panel's device coordinates are rotated 180 degrees.
+  is represented as `0x31`. The encoder was read out of `T2Indisp.dll`
+  (function at `0x180013278`, called from `EncodeRleDTR`), and
+  `tools/t2rle.py` reproduced captured Windows payloads byte-for-byte.
+- The panel's device coordinates are rotated 180 degrees. This showed up when
+  a decoded Windows desktop frame came out as the Windows wallpaper upside
+  down; a corner test pattern on the panel confirmed it.
 - Partial update addresses are based on `buffer + y*3072 + x*3` and sent in
-  the command shifted by eight bits.
+  the command shifted by eight bits. A partial rect's pixels are streamed
+  row-major and cut into 1024-pixel units, so `w*h` must be a multiple of 1024;
+  all 172 frames in the desktop capture decode under that rule.
 - The hardware cursor shape uses command `0x12`; position and visibility are
   controlled by an EP4 register list.
 
@@ -41,9 +68,13 @@ history in `docs/first-light.md`, not as current instructions.
 
 ## First usable display paths
 
-The first continuous desktop used the userspace `t2d` daemon on EVDI. Niri
-recognized the tablet as a 1024x600@60 output and damage-driven updates were
-smooth. EVDI remained valuable for quick protocol work, but it could not expose
+The first continuous desktop used the userspace `t2d` daemon on EVDI. Two
+outside pieces made that possible: EVDI 1.14.x did not build on Linux 7.2
+(`struct drm_atomic_state` was renamed `drm_atomic_commit`), fixed by a small
+rename patch (EVDI 1.15.1 later built as is), and niri needed its PR #2312
+(released in 26.04) to render display-only DRM devices on the primary GPU.
+Niri recognized the tablet as a 1024x600@60 output and damage-driven updates
+were smooth. EVDI remained valuable for quick protocol work, but it could not expose
 all hardware features cleanly.
 
 The native `mct_t2` DRM/KMS driver followed the same day, modelled after small
@@ -59,10 +90,28 @@ Nix packages and protocol documentation.
 - Damage clips and partial updates replaced unconditional whole-screen work.
 - Initialization was reduced to 78 transfers and about one second from a cold
   device, while retaining the required mode, timing, memory-controller and
-  display-enable operations.
+  display-enable operations. It was found by bisection with a distinct colour
+  per variant: dropping reads, the ID-ROM query, a probe fill, duplicated
+  blocks and the two 1.8 MB black clears was harmless, but the bank-FB buffer
+  address writes (`fb60/6e/65/62..64`) are required (without them a garbage
+  band appears at the bottom). Only a physical replug resets the chip's 8051,
+  so every variant was validated cold: with no pacing a cold chip came up as a
+  monochrome grid; 20 ms after every write worked (1.8 s); the final selective
+  pacing (2 ms after register writes, 50 ms after `feb0`/`feb1`, 20 ms after
+  other commands) takes about one second. Because `0x14` switches scanout to
+  buffer A, a black frame is written into A just before it.
 - A DRM hardware cursor plane used the T2's 64x64 ARGB overlay. Shape uploads
   occur only when needed; moves are small EP4 register writes.
-- DPMS was implemented through pixel-clock PLL register `fcf6`.
+- DPMS was implemented through pixel-clock PLL register `fcf6`. The vendor
+  driver offers nothing to copy here: its `CT2RomSink` display-power method is
+  a stub (`xor eax,eax; ret`). `fb60` (also via `0x14`), `fe36`, `fe57`, `fe70`
+  and `feb0` were tried live without effect; stopping the pixel clock makes the
+  panel electronics switch the backlight off, and re-enabling it restores the
+  picture without re-init.
+- Hardware cursor details were settled live: the position registers give the
+  device-space top-left of the 64x64 box, negative values hide the cursor (so
+  boxes hanging off the visible right/bottom edge are uploaded shifted), and
+  `0x44`/`0x45` trim the box from the far end rather than offsetting the image.
 - A 60 Hz DRM vblank timer stopped compositors from rendering unthrottled.
 - The update strategy evolved to compare against the buffer from two updates
   earlier, group changed rows into bands, write only those areas into the back
@@ -73,17 +122,36 @@ Nix packages and protocol documentation.
 
 - Nix packages, a NixOS module, console mapping and a reload helper were added.
 - A niri patch works around niri 26.04 retaining a removed DRM device after
-  unbind/hot-unplug.
+  unbind/hot-unplug. Root cause: `device_removed()` calls
+  `DrmNode::from_dev_id()`, which reads sysfs entries that are already gone,
+  logs "error creating DrmNode" and returns early; the fix looks the node up
+  among niri's tracked devices. An upstream report draft exists outside the
+  repository.
+- The NixOS `uaccess` rule first had no effect: `services.udev.extraRules` lands
+  in `99-local.rules`, after `73-seat-late.rules` applies uaccess. It is now
+  shipped as `70-mct-t2.rules`.
 - `soft_unbind` prevents a normal software unbind from cutting a frame in half.
 - Deep suspend/reset-resume was verified with picture, cursor and backlight
   restored.
 - The tablet was observed enumerating as both `0711:520d` and `0711:5209`; the
-  Windows INF maps both to the same driver and both are supported.
-- Backlight control was decoded as Wacom HID feature report `0x06` on the pen
-  function. The DRM connector owns a Linux backlight device with off plus all
-  nine firmware levels, and level zero also stops the T2 pixel clock.
-- I2C commands `0x1b` and `0x1d` were mapped. The panel EDID and device identity
-  come from the ID ROM via `0x1d`; no DDC/CI brightness path exists.
+  Windows INF maps both to the same driver and both are supported. The journal
+  showed 20 enumerations as `520d` over three days, then `5209`, `5209`, `520d`
+  on three consecutive replugs. The ID ROM, which holds `0711:5200`, was
+  unchanged byte for byte; the low bits are decided at power-up for reasons
+  still unknown. The same replug exposed that the pen function can enumerate
+  after the display, so the backlight looks the pen up on every access.
+- Brightness took two attempts. First the display side: `CT2I2CBus` in the DLL
+  turned out to drive two OpenCores-style I2C masters (`fce0..fce4`,
+  `fce8..fcec`); `0x1b`/`0x1d` are block reads through them, bus 1 holds only
+  the ID-ROM EEPROM at `0x57` (panel EDID at +0x80), and bus 0 is not wired
+  (a START never completes). So there is no DDC/CI path. The Wacom manual then
+  pointed at Wacom's own control panel, and a capture of Wacom's Windows
+  driver 6.4.9-2 in the VM (pen function only, redirected on an xHCI bus)
+  showed HID feature report `0x06`, levels 1-7, on the pen. Levels 0 and 8 were
+  found afterwards to be real, darker and brighter steps. The DRM connector
+  owns a Linux backlight device with off plus all nine firmware levels; being a
+  child of the connector is what lets shells such as Noctalia match it to the
+  right output. Level zero also stops the T2 pixel clock.
 
 ### Measurement and performance work
 
@@ -106,10 +174,32 @@ Nix packages and protocol documentation.
   encode during motion but produced settling shadows and horizontal/CRT-like
   artifacts; it was reverted and must not be restored unchanged.
 
+- The lossy mode's first trigger (more than a third of the screen changed)
+  made 83% of desktop updates lossy and caused "settling" shadows when windows
+  opened; the budget rule (lossless first, lossy only past ~600 KB per frame)
+  replaced it.
+
+## Process notes
+
+- Experimental work was done on branches and merged only after the tablet
+  owner tested it; merged branches (`diff-updates`, `robust-detach`, `stats`,
+  `perf`, `lossy-auto`, `lossy-streak`) were deleted, their commits remain in
+  `main`. `async-urbs` is kept unmerged for reference.
+- Reverting the lossy streak hit a version-line conflict, and the conflict
+  markers were committed into `df093e9` by a chained command. `20f961c`
+  resolved them; no code was lost. Since then conflicting Git operations are
+  run and checked one at a time.
+
 ## The driver-swap corruption and 0.3.13
 
 Version 0.3.12 still had a rare failure: swapping drivers while a large frame
 was in flight could leave rainbow garbage, although another reload fixed it.
+The first occurrences (before `soft_unbind`) logged a cancelled transfer
+(`-2`) and once an init timeout (`-110`) that needed a replug. Later ones
+happened with `soft_unbind` in place and with every frame error logged, yet no
+error appeared; the stuck-parser mechanism below was demonstrated
+deliberately, and 0.3.13 recovers from it, but whether it explains those
+error-free cases was inferred rather than observed.
 The publication gate was to learn whether the chip could reveal that its frame
 stream was out of step and then recover automatically.
 
@@ -215,6 +305,7 @@ Git records the exact diffs and parent relationships.
 | `e2bbd39` | Document parser-status experiments |
 | `024dd06` | Record performance research backlog |
 | `099d6fb` | Add development roadmap |
+| `0e8b44a` | Add this project history |
 
 ## Detailed source records
 
