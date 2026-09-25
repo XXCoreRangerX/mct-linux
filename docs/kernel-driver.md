@@ -108,7 +108,7 @@ Artifacts: short horizontal streaks during heavy motion (the RLE is row-wise).
 
 Keep proposed work distinct from the measurements above. In priority order:
 
-1. Frame-latency histogram and payload-size/over-budget counters (0.3.15,
+1. Frame-latency histogram and payload-size/over-budget counters (0.3.18,
    not yet measured live). `mct_t2_stats` gained two lines: `over budget`
    counts updates whose encoded payload exceeded ~600 KB, with the largest
    payload seen, and `latency ms` is a histogram of the time from the first
@@ -251,7 +251,7 @@ Near-term work, in recommended order:
    `mct_t2_stats` rather than adding recovery guesses.
 2. Done: `tools/t2_recovery_test.py` replaces the scratch reproducer
    `tools/desync_lab.py`, which stays uncommitted.
-3. Counters added in 0.3.15 (see the performance backlog). Measure with
+3. Counters added in 0.3.18 (see the performance backlog). Measure with
    them, then investigate adaptive lossy encoding as described above.
 4. Investigate command `0x0a` as a possible 256 x RGB hardware gamma table.
    Its 768-byte size is suggestive, not proof. Test controlled ramps on the
