@@ -194,6 +194,48 @@ unchanged; the low bits are decided at power-up. MCT's Windows INF maps both
 IDs to the same driver, and so does `mct_t2`. The pen function can enumerate
 after the display, so the backlight looks the pen up on each access.
 
+## Development roadmap
+
+Only the Wacom DTU-1031X is presently available for live testing. Make its
+driver reliable and keep unverified family support out of the USB ID table;
+an INF entry or a shared DLL does not prove that another product has compatible
+timings, memory layout or initialization.
+
+Near-term work, in recommended order:
+
+1. Soak-test 0.3.13 through ordinary use, repeated module reloads, deliberately
+   interrupted frames, unplug/replug, suspend/resume, DPMS, brightness, cursor,
+   console and optional lossy video. Record failures with the kernel log and
+   `mct_t2_stats` rather than adding recovery guesses.
+2. Preserve the useful half-frame reproducer from the untracked
+   `tools/desync_lab.py`, but replace the scratch script with a safe documented
+   regression test. It should confirm recovery and attempt cleanup on every
+   exit; the current script has a session-specific `/tmp` path and can leave the
+   firmware parser stuck, so it must not be committed as-is.
+3. Add latency histograms and payload-size/over-budget counters before tuning
+   performance. Then investigate adaptive lossy encoding as described above.
+4. Investigate command `0x0a` as a possible 256 x RGB hardware gamma table.
+   Its 768-byte size is suggestive, not proof. Test controlled ramps on the
+   real panel first; expose a standard DRM gamma LUT only if its semantics and
+   persistence across flips, DPMS and resume are verified.
+5. Gradually isolate known DTU-specific constants (USB IDs, mode/timings,
+   rotation, framebuffer addresses and init sequence) behind a device profile,
+   but avoid a large common-family abstraction until a second device reveals
+   the actual variation.
+
+For each additional MCT device, collect USB descriptors and endpoints, chip
+markings, resolution, Windows INF mapping, an initialization USB capture,
+EDID/device-info replies, pre/post-init register sweeps, and verified frame,
+cursor, power and brightness behavior. Confirm protocol framing on hardware
+before selecting a T2 profile. Other Trigger generations may need separate
+drivers with only small shared helpers rather than one monolithic driver.
+
+Pen input remains the responsibility of Linux's Wacom/HID driver. Arbitrary
+modes, RGB565, front-buffer writes and more asynchronous USB work are not
+current priorities: the panel has one native mode, modern compositors use
+XRGB8888, front-buffer updates risk tearing, and queued URBs have already been
+measured without a performance gain.
+
 ## Known issues / TODO
 
 - Hot-unplug/replug works on the kernel side (disconnect, re-probe and
