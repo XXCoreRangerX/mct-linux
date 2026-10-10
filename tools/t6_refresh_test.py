@@ -38,6 +38,9 @@ if hz == 120:
     m = entry(297000, 120, 2200, 2008, 44, 1125, 1084, 5)        # CTA VIC 63
 elif hz == 60:
     m = ref
+elif hz == 6035:                     # 60 Hz with the pixel clock of 152 Hz RB: wide blanking
+    m = entry(353000, 60, 5230, 2008, 44, 1125, 1084, 5)
+    print("60 Hz at 353 MHz: 5230 x 1125", flush=True)
 else:
     m, clk, vtot = rb2(hz)
     print(f"{hz} Hz reduced blanking: 2000 x {vtot}, {clk} kHz", flush=True)

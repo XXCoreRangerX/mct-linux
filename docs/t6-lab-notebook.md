@@ -203,8 +203,19 @@ NV12 moving block for 8 s, LG OSD read back:
 | 1080p160 (RB, 2000 x 1166) | 373.1 MHz | no signal |
 | 1080p165 (RB, 2000 x 1169) | 385.8 MHz | no signal (OSD briefly "0Hz") |
 
-So the output tops out somewhere between 348 and 373 MHz (not the PLL's
-400 MHz; probably the HDMI transmitter). Product sheets only claim up to
+Narrowed down afterwards:
+
+| Mode | Pixel clock | Result |
+|---|---|---|
+| 1080p152 (RB, 2000 x 1162) | 353.2 MHz | picture, but thin black bars at fixed horizontal positions, moving block passes through them |
+| 1080p155 (RB, 2000 x 1163) | 360.5 MHz | no signal |
+| 1080p60 with wide blanking (5230 x 1125) | 353.0 MHz | same artifacts as 152 Hz |
+
+So the limit is the **pixel clock, about 350 MHz**, independent of refresh
+rate: clean at 348.3 MHz, artifacts at 353, nothing from 360. Either the PLL
+(running at 4x the pixel clock in this range, ~1.4 GHz) or the HDMI
+transmitter tops out there; not separable from the outside. Practical
+maximum for 1080p: 150 Hz; 144 Hz (333 MHz) leaves margin. Product sheets only claim up to
 2048x1152@60 (197 MHz). Reduced blanking used: 80 px horizontal blanking
 (front 8, sync 32), vertical blanking >= 460 us (front from the rest, sync 8,
 back 6), hsync +, vsync -. Back at 144 Hz afterwards, stable.
