@@ -186,3 +186,28 @@ R, A pixels, show with 0x05 (wValue slot, wIndex 1), position with 0x04
 at 120 position updates per second: shown and moving smoothly. mct_t6 0.4
 adds it as a 64x64 cursor plane (position clamped at 0 by shifting the image
 instead, as on the T2).
+
+**Refresh rates above 60 Hz** (`tools/t6_refresh_test.py`). The mode entry's
+last fields are MCT's PLL settings: base 40 MHz on this "Super Lite" T6
+(`b0` index 0 = 1); x = first of 4, 8, 16, 32 with f*x >= 800 MHz,
+N = floor(f*x / 40), P = fraction * 1000, Q = 1000, OutputSelect = {3,1,2,0}[i].
+Computing the 1080p60 entry this way reproduced the device's own entry byte
+for byte. Custom entries sent with 0x12, then 0x31 and output on, then the
+NV12 moving block for 8 s, LG OSD read back:
+
+| Mode | Pixel clock | Result |
+|---|---|---|
+| 1080p120 (CTA VIC 63 timing) | 297.0 MHz | picture, OSD "1920x1080 120Hz", smooth, 97.5 fps sent |
+| 1080p144 (reduced blanking, 2000 x 1157) | 333.2 MHz | picture, smooth, 94-98 fps sent |
+| 1080p150 (RB, 2000 x 1161) | 348.3 MHz | picture, fine |
+| 1080p160 (RB, 2000 x 1166) | 373.1 MHz | no signal |
+| 1080p165 (RB, 2000 x 1169) | 385.8 MHz | no signal (OSD briefly "0Hz") |
+
+So the output tops out somewhere between 348 and 373 MHz (not the PLL's
+400 MHz; probably the HDMI transmitter). Product sheets only claim up to
+2048x1152@60 (197 MHz). Reduced blanking used: 80 px horizontal blanking
+(front 8, sync 32), vertical blanking >= 460 us (front from the rest, sync 8,
+back 6), hsync +, vsync -. Back at 144 Hz afterwards, stable.
+
+USB still limits full-screen raw motion to ~95 fps (NV12, 3.1 MB per frame);
+higher refresh rates pay off with partial updates.
