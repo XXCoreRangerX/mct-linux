@@ -23,6 +23,7 @@
 
 #include <linux/module.h>
 #include <linux/seq_file.h>
+#include <linux/unaligned.h>
 #include <linux/usb.h>
 #include <linux/vmalloc.h>
 
@@ -57,8 +58,8 @@
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	3
-#define DRIVER_PATCH	3
+#define DRIVER_MINOR	4
+#define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
 
@@ -68,6 +69,13 @@
 #define T6_REQ_SETMODE	0x12
 #define T6_REQ_OUTPUT	0x03
 #define T6_REQ_READY	0x31		/* "software ready", after a mode set */
+/* hardware cursor, per output: position, show/hide, image upload */
+#define T6_REQ_CUR_POS(o)	((o) ? 0x06 : 0x04)
+#define T6_REQ_CUR_SHOW(o)	((o) ? 0x07 : 0x05)
+#define T6_REQ_CUR_IMG(o)	((o) ? 0x11 : 0x10)
+
+#define T6_CUR		64		/* cursor size used here (device: up to 128) */
+#define T6_CUR_BYTES	(8 + T6_CUR * T6_CUR * 4)	/* header + ARGB */
 
 #define T6_MAX_MODES	30		/* 0x89 table: 512 + 448 bytes */
 #define T6_MAX_OUTPUTS	2
@@ -128,6 +136,7 @@ struct t6_video_header {
 struct mct_t6 {
 	struct drm_device dev;
 	struct drm_plane primary;
+	struct drm_plane cursor;
 	struct drm_crtc crtc;
 	struct drm_encoder encoder;
 	struct drm_connector conn;
@@ -151,6 +160,12 @@ struct mct_t6 {
 		struct mutex lock;	/* protects shadow + dirty */
 		bool dirty;
 	} upd;
+
+	struct {
+		u8 *img;		/* header + image being built */
+		u8 *shown;		/* last uploaded */
+		bool uploaded, visible;
+	} cur;
 
 	struct {			/* debugfs statistics */
 		u64 updates, skipped, px_damage, bytes, ns_conv, ns_usb;
@@ -524,6 +539,154 @@ static const struct drm_plane_funcs t6_primary_funcs = {
 };
 
 /* ------------------------------------------------------------------ */
+/* cursor plane							      */
+
+static const u32 t6_cursor_formats[] = {
+	DRM_FORMAT_ARGB8888,
+};
+
+/* the vendor driver gives output 1 the cursor slots from 5 on */
+static int t6_cursor_slot(struct mct_t6 *t6)
+{
+	return t6->output ? 5 : 0;
+}
+
+static int t6_cursor_show(struct mct_t6 *t6, bool show)
+{
+	int ret;
+
+	if (t6->cur.visible == show)
+		return 0;
+	mutex_lock(&t6->io_lock);
+	ret = t6_ctrl_out(t6, T6_REQ_CUR_SHOW(t6->output), t6_cursor_slot(t6), show, 0);
+	mutex_unlock(&t6->io_lock);
+	if (ret < 0)
+		return ret;
+	t6->cur.visible = show;
+	return 0;
+}
+
+/* image in chunks of up to 512 bytes, wIndex = byte offset */
+static int t6_cursor_upload(struct mct_t6 *t6)
+{
+	int off, n, ret = 0;
+
+	mutex_lock(&t6->io_lock);
+	for (off = 0; off < T6_CUR_BYTES && ret >= 0; off += n) {
+		n = min(T6_CUR_BYTES - off, T6_CTRL_BUF);
+		memcpy(t6->ctrl, t6->cur.img + off, n);
+		ret = t6_ctrl_out(t6, T6_REQ_CUR_IMG(t6->output), t6_cursor_slot(t6), off, n);
+	}
+	mutex_unlock(&t6->io_lock);
+	if (ret < 0)
+		return ret;
+	memcpy(t6->cur.shown, t6->cur.img, T6_CUR_BYTES);
+	t6->cur.uploaded = true;
+	return 0;
+}
+
+static int t6_cursor_move(struct mct_t6 *t6, int x, int y)
+{
+	int ret;
+
+	mutex_lock(&t6->io_lock);
+	ret = t6_ctrl_out(t6, T6_REQ_CUR_POS(t6->output), x, y, 0);
+	mutex_unlock(&t6->io_lock);
+	return ret < 0 ? ret : 0;
+}
+
+static int t6_cursor_atomic_check(struct drm_plane *plane, struct drm_atomic_commit *state)
+{
+	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
+	struct drm_framebuffer *fb = new_state->fb;
+	struct drm_crtc_state *crtc_state = NULL;
+
+	if (new_state->crtc)
+		crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
+	if (fb && (fb->width > T6_CUR || fb->height > T6_CUR))
+		return -EINVAL;
+	return drm_atomic_helper_check_plane_state(new_state, crtc_state,
+						   DRM_PLANE_NO_SCALING, DRM_PLANE_NO_SCALING,
+						   true, true);
+}
+
+static void t6_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_commit *state)
+{
+	struct mct_t6 *t6 = to_t6(plane->dev);
+	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
+	struct drm_shadow_plane_state *shadow = to_drm_shadow_plane_state(new_state);
+	struct drm_framebuffer *fb = new_state->fb;
+	int x, y, sx, sy, i, j, idx;
+	const u8 *src;
+	u8 *dst;
+
+	if (!drm_dev_enter(plane->dev, &idx))
+		return;
+
+	if (!fb || !new_state->visible) {
+		t6_cursor_show(t6, false);
+		goto out;
+	}
+
+	/*
+	 * Position is the top left of the box and must not be negative: if
+	 * the box hangs off the left/top edge, shift the image instead.
+	 */
+	x = new_state->crtc_x;
+	y = new_state->crtc_y;
+	sx = max(-x, 0);
+	sy = max(-y, 0);
+	x = max(x, 0);
+	y = max(y, 0);
+	if (sx >= T6_CUR || sy >= T6_CUR) {
+		t6_cursor_show(t6, false);
+		goto out;
+	}
+
+	/* header {kind 1 = ARGB with alpha, w, h, pitch}, then B, G, R, A pixels */
+	put_unaligned_le16(1, t6->cur.img);
+	put_unaligned_le16(T6_CUR, t6->cur.img + 2);
+	put_unaligned_le16(T6_CUR, t6->cur.img + 4);
+	put_unaligned_le16(T6_CUR * 4, t6->cur.img + 6);
+	if (drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
+		goto out;
+	src = shadow->data[0].vaddr;
+	dst = t6->cur.img + 8;
+	for (j = 0; j < T6_CUR; j++) {
+		for (i = 0; i < T6_CUR; i++, dst += 4) {
+			int vx = i + sx, vy = j + sy;
+
+			if (vx >= fb->width || vy >= fb->height)
+				memset(dst, 0, 4);
+			else
+				memcpy(dst, src + vy * fb->pitches[0] + vx * 4, 4);
+		}
+	}
+	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
+
+	if (!t6->cur.uploaded || memcmp(t6->cur.img, t6->cur.shown, T6_CUR_BYTES))
+		if (t6_cursor_upload(t6))
+			goto out;
+	t6_cursor_move(t6, x, y);
+	t6_cursor_show(t6, true);
+out:
+	drm_dev_exit(idx);
+}
+
+static const struct drm_plane_helper_funcs t6_cursor_helper_funcs = {
+	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
+	.atomic_check = t6_cursor_atomic_check,
+	.atomic_update = t6_cursor_atomic_update,
+};
+
+static const struct drm_plane_funcs t6_cursor_funcs = {
+	.update_plane = drm_atomic_helper_update_plane,
+	.disable_plane = drm_atomic_helper_disable_plane,
+	.destroy = drm_plane_cleanup,
+	DRM_GEM_SHADOW_PLANE_FUNCS,
+};
+
+/* ------------------------------------------------------------------ */
 /* CRTC / encoder / connector					      */
 
 static int t6_crtc_atomic_check(struct drm_crtc *crtc, struct drm_atomic_commit *state)
@@ -551,6 +714,8 @@ static void t6_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commi
 				crtc_state->mode.hdisplay, crtc_state->mode.vdisplay);
 		drm_dev_exit(idx);
 	}
+	t6->cur.uploaded = false;	/* upload the image again after a mode set */
+	t6->cur.visible = false;
 	mutex_lock(&t6->upd.lock);
 	t6->width = crtc_state->mode.hdisplay;
 	t6->height = crtc_state->mode.vdisplay;
@@ -571,6 +736,7 @@ static void t6_crtc_atomic_disable(struct drm_crtc *crtc, struct drm_atomic_comm
 	t6->height = 0;
 	mutex_unlock(&t6->upd.lock);
 	if (drm_dev_enter(crtc->dev, &idx)) {
+		t6_cursor_show(t6, false);
 		t6_set_output(t6, false);
 		drm_dev_exit(idx);
 	}
@@ -736,6 +902,8 @@ static int t6_modeset_init(struct mct_t6 *t6)
 	dev->mode_config.max_width = t6->max_w;
 	dev->mode_config.min_height = 64;
 	dev->mode_config.max_height = t6->max_h;
+	dev->mode_config.cursor_width = T6_CUR;
+	dev->mode_config.cursor_height = T6_CUR;
 	dev->mode_config.funcs = &t6_mode_config_funcs;
 
 	ret = drm_universal_plane_init(dev, &t6->primary, 0, &t6_primary_funcs,
@@ -746,7 +914,14 @@ static int t6_modeset_init(struct mct_t6 *t6)
 	drm_plane_helper_add(&t6->primary, &t6_primary_helper_funcs);
 	drm_plane_enable_fb_damage_clips(&t6->primary);
 
-	ret = drm_crtc_init_with_planes(dev, &t6->crtc, &t6->primary, NULL,
+	ret = drm_universal_plane_init(dev, &t6->cursor, 0, &t6_cursor_funcs,
+				       t6_cursor_formats, ARRAY_SIZE(t6_cursor_formats),
+				       t6_modifiers, DRM_PLANE_TYPE_CURSOR, NULL);
+	if (ret)
+		return ret;
+	drm_plane_helper_add(&t6->cursor, &t6_cursor_helper_funcs);
+
+	ret = drm_crtc_init_with_planes(dev, &t6->crtc, &t6->primary, &t6->cursor,
 					&t6_crtc_funcs, NULL);
 	if (ret)
 		return ret;
@@ -824,7 +999,9 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 
 	t6->ctrl = drmm_kmalloc(dev, T6_CTRL_BUF, GFP_KERNEL);
 	t6->xfer = drmm_kmalloc(dev, T6_FRAG, GFP_KERNEL);
-	if (!t6->ctrl || !t6->xfer)
+	t6->cur.img = drmm_kmalloc(dev, T6_CUR_BYTES, GFP_KERNEL);
+	t6->cur.shown = drmm_kmalloc(dev, T6_CUR_BYTES, GFP_KERNEL);
+	if (!t6->ctrl || !t6->xfer || !t6->cur.img || !t6->cur.shown)
 		return -ENOMEM;
 
 	t6_pick_output(t6);

@@ -177,3 +177,12 @@ Windows packages).
 Next: hardware cursor (requests 0x10/0x04/0x05 decoded), copy and send only
 what changed (fix damage handling for rotated outputs first), overlap the
 stages.
+
+**Hardware cursor, userspace test.** Output 0: upload with request 0x10
+(wValue slot 0, wIndex byte offset, 512-byte chunks) of an 8-byte header
+`{u16 kind 1 = ARGB with alpha, u16 w 64, u16 h 64, u16 pitch 256}` plus B, G,
+R, A pixels, show with 0x05 (wValue slot, wIndex 1), position with 0x04
+(wValue x, wIndex y, top left of the box). A red square circling the screen
+at 120 position updates per second: shown and moving smoothly. mct_t6 0.4
+adds it as a 64x64 cursor plane (position clamped at 0 by shifting the image
+instead, as on the T2).
