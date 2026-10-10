@@ -58,8 +58,8 @@
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	5
-#define DRIVER_PATCH	1
+#define DRIVER_MINOR	6
+#define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
 
@@ -140,6 +140,27 @@ struct t6_session {
 	__le32 unk[2];
 } __packed;
 
+/*
+ * Session type 7: write a rectangle into the NV12 planes of a frame buffer
+ * without showing it. Data: h rows of Y (w bytes), then h / 2 rows of
+ * interleaved UV (w bytes).
+ */
+struct t6_rect_header {
+	__le32 type;			/* 7 */
+	__le32 len;
+	__le32 y_addr;
+	__le32 uv_addr;
+	__le16 y_pitch;
+	__le16 uv_pitch;
+	__le16 width;
+	__le16 height;
+	__le32 rsvd[2];
+} __packed;
+
+/* rows of unchanged pixel pairs still merged into one band */
+#define T6_BAND_GAP	8
+#define T6_MAX_BANDS	16
+
 struct t6_video_header {
 	__le32 type;
 	__le32 data_len;
@@ -171,10 +192,12 @@ struct mct_t6 {
 	struct mutex io_lock;		/* USB transfers, ctrl and xfer buffers */
 	u8 *ctrl;			/* DMA-able control transfer buffer */
 	u8 *xfer;			/* DMA-able bulk fragment buffer */
-	u8 *frame;			/* video header + NV12 image being sent */
 	u8 *shadow;			/* XRGB8888 image as committed by userspace */
+	u8 *img;			/* the shadow in NV12 */
+	u8 *hw[3];			/* NV12 image each frame buffer holds */
+	bool hw_valid[3];
 	int width, height;		/* current mode */
-	unsigned int buf;		/* next scanout buffer */
+	unsigned int buf;		/* next frame buffer to write */
 	u32 seq;
 
 	struct {
@@ -191,6 +214,7 @@ struct mct_t6 {
 
 	struct {			/* debugfs statistics */
 		u64 updates, skipped, px_damage, bytes, ns_conv, ns_usb;
+		u64 rows, bands;		/* image rows and bands sent */
 		u64 copies, ns_copy, ns_copy_max;	/* framebuffer -> shadow, in the commit */
 		u64 ns_commit, ns_commit_max;		/* the same incl. CPU access setup */
 		ktime_t since;
@@ -232,7 +256,8 @@ static int t6_bulk(struct mct_t6 *t6, const void *data, int len)
 	struct usb_device *udev = t6_udev(t6);
 	int ret, done;
 
-	memcpy(t6->xfer, data, len);
+	if (data != t6->xfer)
+		memcpy(t6->xfer, data, len);
 	ret = usb_bulk_msg(udev, usb_sndbulkpipe(udev, T6_EP_OUT), t6->xfer, len,
 			   &done, T6_TIMEOUT);
 	if (!ret && done != len)
@@ -366,55 +391,17 @@ static int t6_set_mode(struct mct_t6 *t6, const struct t6_mode *m)
 	return ret < 0 ? ret : 0;
 }
 
-/* send t6->frame (len bytes) as session header + fragment pairs; io_lock held */
-static int t6_send_frame(struct mct_t6 *t6, size_t len, u32 dest)
-{
-	struct t6_session s = { };
-	size_t off;
-	int ret = 0;
-
-	for (off = 0; off < len && !ret; off += T6_FRAG) {
-		size_t frag = min_t(size_t, len - off, T6_FRAG);
-
-		s.total_len = cpu_to_le32(len);
-		s.dest = cpu_to_le32(dest);
-		s.frag_len = cpu_to_le32(frag);
-		s.offset = cpu_to_le32(off);
-		s.more = cpu_to_le32(off + frag < len);
-		ret = t6_bulk(t6, &s, sizeof(s));
-		if (!ret)
-			ret = t6_bulk(t6, t6->frame + off, frag);
-	}
-	return ret;
-}
-
 /* ------------------------------------------------------------------ */
 /* frame updates						      */
 
 /*
- * Shadow (XRGB8888) to video header + NV12 (BT.601 limited range, 4:2:0:
- * Y plane, then interleaved Cb/Cr) in t6->frame, for scanout buffer base.
- * All modes in the device's table have even sizes. upd.lock held.
+ * Shadow (XRGB8888) to NV12 in t6->img: BT.601 limited range, 4:2:0, the Y
+ * plane then interleaved Cb/Cr. Modes have even sizes. upd.lock held.
  */
-static size_t t6_build_frame(struct mct_t6 *t6, u32 base)
+static void t6_convert(struct mct_t6 *t6)
 {
-	struct t6_video_header *hdr = (struct t6_video_header *)t6->frame;
 	int w = t6->width, h = t6->height, x, y;
-	size_t len = sizeof(*hdr) + (size_t)w * h * 3 / 2;
-	u8 *py = t6->frame + sizeof(*hdr);
-	u8 *puv = py + (size_t)w * h;
-
-	memset(hdr, 0, sizeof(*hdr));
-	hdr->type = cpu_to_le32(3);
-	hdr->data_len = cpu_to_le32(len - sizeof(*hdr));	/* image only */
-	hdr->seq = cpu_to_le32(++t6->seq);
-	hdr->unk4 = cpu_to_le32(T6_FMT_NV12);		/* surface format */
-	hdr->width = cpu_to_le16(w);			/* Y pitch */
-	hdr->height = cpu_to_le16(w);			/* UV pitch */
-	hdr->start = cpu_to_le32(base + 0x30);		/* Y plane */
-	hdr->end = cpu_to_le32(base + 0x30 + w * h);	/* UV plane */
-	hdr->unk9 = cpu_to_le32(base + 0x30);		/* third plane, unused */
-	hdr->format = cpu_to_le32(T6_FMT_NV12);
+	u8 *py = t6->img, *puv = t6->img + (size_t)w * h;
 
 	for (y = 0; y < h; y += 2) {
 		const u8 *s0 = t6->shadow + (size_t)y * w * 4;	/* B, G, R, X */
@@ -436,15 +423,145 @@ static size_t t6_build_frame(struct mct_t6 *t6, u32 base)
 			uv[1] = ((112 * r - 94 * g - 18 * b + 512) >> 10) + 128;
 		}
 	}
-	return len;
+}
+
+/*
+ * Bands of row pairs (two Y rows and their UV row) where t6->img differs
+ * from what frame buffer k holds, as [start, end) pairs; returns the count.
+ */
+static int t6_diff_bands(struct mct_t6 *t6, int k, int bands[][2])
+{
+	int w = t6->width, pairs = t6->height / 2, n = 0, p;
+	const u8 *ny = t6->img, *oy = t6->hw[k];
+	const u8 *nuv = ny + (size_t)w * t6->height, *ouv = oy + (size_t)w * t6->height;
+
+	if (!t6->hw_valid[k]) {
+		bands[0][0] = 0;
+		bands[0][1] = pairs;
+		return 1;
+	}
+	for (p = 0; p < pairs; p++) {
+		size_t yo = (size_t)p * 2 * w, uvo = (size_t)p * w;
+
+		if (!memcmp(ny + yo, oy + yo, 2 * w) && !memcmp(nuv + uvo, ouv + uvo, w))
+			continue;
+		if (n && p - bands[n - 1][1] <= T6_BAND_GAP) {
+			bands[n - 1][1] = p + 1;
+		} else if (n == T6_MAX_BANDS) {
+			bands[n - 1][1] = p + 1;	/* too scattered: grow the last band */
+		} else {
+			bands[n][0] = p;
+			bands[n][1] = p + 1;
+			n++;
+		}
+	}
+	return n;
+}
+
+/* write pairs [p0, p1) of t6->img into frame buffer k; io_lock held */
+static int t6_send_band(struct mct_t6 *t6, int k, int p0, int p1)
+{
+	int w = t6->width, h = t6->height;
+	/* each write fits the transfer buffer */
+	int step = (T6_FRAG - sizeof(struct t6_rect_header)) / (3 * w);
+	u32 base = t6_bufs[k] + 0x30;
+	int p, n, ret = 0;
+
+	for (p = p0; p < p1 && !ret; p += n) {
+		struct t6_rect_header *r = (struct t6_rect_header *)t6->xfer;
+		size_t ylen, uvlen;
+
+		n = min(step, p1 - p);
+		ylen = (size_t)n * 2 * w;
+		uvlen = (size_t)n * w;
+		memset(r, 0, sizeof(*r));
+		r->type = cpu_to_le32(7);
+		r->len = cpu_to_le32(ylen + uvlen);
+		r->y_addr = cpu_to_le32(base + p * 2 * w);
+		r->uv_addr = cpu_to_le32(base + w * h + p * w);
+		r->y_pitch = cpu_to_le16(w);
+		r->uv_pitch = cpu_to_le16(w);
+		r->width = cpu_to_le16(w);
+		r->height = cpu_to_le16(n * 2);
+		ret = t6_bulk(t6, r, sizeof(*r));
+		if (ret)
+			break;
+		memcpy(t6->xfer, t6->img + (size_t)p * 2 * w, ylen);
+		memcpy(t6->xfer + ylen, t6->img + (size_t)w * h + (size_t)p * w, uvlen);
+		ret = t6_bulk(t6, t6->xfer, ylen + uvlen);
+		t6->stats.rows += n * 2;
+		t6->stats.bytes += sizeof(*r) + ylen + uvlen;
+	}
+	return ret;
+}
+
+/* show frame buffer k: a flip header without image data; io_lock held */
+static int t6_flip(struct mct_t6 *t6, int k)
+{
+	struct {
+		struct t6_session s;
+		struct t6_video_header v;
+	} __packed f = { };
+	int w = t6->width, h = t6->height;
+	u32 base = t6_bufs[k];
+	int ret;
+
+	f.s.total_len = cpu_to_le32(sizeof(f.v));
+	f.s.dest = cpu_to_le32(base);
+	f.s.frag_len = cpu_to_le32(sizeof(f.v));
+	f.v.type = cpu_to_le32(3);
+	f.v.seq = cpu_to_le32(++t6->seq);
+	f.v.unk4 = cpu_to_le32(T6_FMT_NV12);		/* surface format */
+	f.v.width = cpu_to_le16(w);			/* Y pitch */
+	f.v.height = cpu_to_le16(w);			/* UV pitch */
+	f.v.start = cpu_to_le32(base + 0x30);		/* Y plane */
+	f.v.end = cpu_to_le32(base + 0x30 + w * h);	/* UV plane */
+	f.v.unk9 = cpu_to_le32(base + 0x30);		/* third plane, unused */
+	f.v.format = cpu_to_le32(T6_FMT_NV12);
+
+	ret = t6_bulk(t6, &f.s, sizeof(f.s));
+	if (!ret)
+		ret = t6_bulk(t6, &f.v, sizeof(f.v));
+	t6->stats.bytes += sizeof(f);
+	return ret;
+}
+
+/*
+ * Write what changed into the next of the three frame buffers (never the
+ * one on screen), then flip to it. io_lock held.
+ */
+static int t6_present(struct mct_t6 *t6)
+{
+	int bands[T6_MAX_BANDS][2];
+	int k = t6->buf, w = t6->width, h = t6->height;
+	int n, i, ret = 0;
+
+	n = t6_diff_bands(t6, k, bands);
+	t6->hw_valid[k] = false;
+	for (i = 0; i < n && !ret; i++)
+		ret = t6_send_band(t6, k, bands[i][0], bands[i][1]);
+	if (!ret)
+		ret = t6_flip(t6, k);
+	if (ret)
+		return ret;
+
+	for (i = 0; i < n; i++) {
+		size_t yo = (size_t)bands[i][0] * 2 * w, uvo = (size_t)w * h + bands[i][0] * w;
+		size_t pairs = bands[i][1] - bands[i][0];
+
+		memcpy(t6->hw[k] + yo, t6->img + yo, pairs * 2 * w);
+		memcpy(t6->hw[k] + uvo, t6->img + uvo, pairs * w);
+	}
+	t6->hw_valid[k] = true;
+	t6->stats.bands += n;
+	t6->buf = (k + 1) % ARRAY_SIZE(t6_bufs);
+	return 0;
 }
 
 static void t6_update_work(struct work_struct *work)
 {
 	struct mct_t6 *t6 = container_of(work, struct mct_t6, upd.work);
 	ktime_t t0, t1;
-	size_t len;
-	u32 base;
 	int idx, ret;
 
 	mutex_lock(&t6->upd.lock);
@@ -455,21 +572,17 @@ static void t6_update_work(struct work_struct *work)
 	t6->upd.dirty = false;
 	mutex_lock(&t6->io_lock);
 	t0 = ktime_get();
-	base = t6_bufs[t6->buf];
-	t6->buf = (t6->buf + 1) % ARRAY_SIZE(t6_bufs);
-	len = t6_build_frame(t6, base);
+	t6_convert(t6);
 	/* commits only wait for the conversion above, never for USB */
 	mutex_unlock(&t6->upd.lock);
 	t1 = ktime_get();
 
 	if (drm_dev_enter(&t6->dev, &idx)) {
-		ret = t6_send_frame(t6, len, base);
-		if (ret) {
+		ret = t6_present(t6);
+		if (ret)
 			drm_err_ratelimited(&t6->dev, "frame update error: %d\n", ret);
-		} else {
+		else
 			t6->stats.updates++;
-			t6->stats.bytes += len;
-		}
 		drm_dev_exit(idx);
 	}
 	t6->stats.ns_conv += ktime_to_ns(ktime_sub(t1, t0));
@@ -768,6 +881,9 @@ static void t6_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commi
 	t6->cur.uploaded = false;	/* upload the image again after a mode set */
 	t6->cur.visible = false;
 	mutex_lock(&t6->upd.lock);
+	/* nothing is known about the frame buffers after a mode set */
+	memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
+	t6->buf = 0;
 	t6->width = crtc_state->mode.hdisplay;
 	t6->height = crtc_state->mode.vdisplay;
 	memset(t6->shadow, 0, (size_t)t6->width * t6->height * 4);
@@ -989,6 +1105,8 @@ static int t6_stats_show(struct seq_file *m, void *data)
 		   div64_u64(t6->stats.updates * 10000, ms) % 10);
 	seq_printf(m, "skipped images   %llu\n", t6->stats.skipped);
 	seq_printf(m, "pixels damaged   %llu\n", t6->stats.px_damage);
+	seq_printf(m, "rows sent        %llu in %llu bands (%llu per update)\n",
+		   t6->stats.rows, t6->stats.bands, div64_u64(t6->stats.rows, n));
 	seq_printf(m, "usb bytes        %llu (avg %llu KB/s)\n",
 		   t6->stats.bytes, div64_u64(t6->stats.bytes, ms));
 	seq_printf(m, "ms per update    convert %llu.%02llu, usb %llu.%02llu\n",
@@ -1097,8 +1215,11 @@ static void t6_release(struct drm_device *dev, void *res)
 {
 	struct mct_t6 *t6 = to_t6(dev);
 
-	kvfree(t6->frame);
 	kvfree(t6->shadow);
+	kvfree(t6->img);
+	kvfree(t6->hw[0]);
+	kvfree(t6->hw[1]);
+	kvfree(t6->hw[2]);
 }
 
 /* 0xb0 index 0: 0 = "Lite" with a 48 MHz PLL base, 1 = "Super Lite", 40 MHz */
@@ -1168,12 +1289,15 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	}
 
 	px = (size_t)t6->max_w * t6->max_h;
-	t6->frame = kvmalloc(sizeof(struct t6_video_header) + px * 3, GFP_KERNEL);
+	t6->img = kvmalloc(px * 3 / 2, GFP_KERNEL);
+	t6->hw[0] = kvmalloc(px * 3 / 2, GFP_KERNEL);
+	t6->hw[1] = kvmalloc(px * 3 / 2, GFP_KERNEL);
+	t6->hw[2] = kvmalloc(px * 3 / 2, GFP_KERNEL);
 	t6->shadow = kvzalloc(px * 4, GFP_KERNEL);
 	ret = drmm_add_action_or_reset(dev, t6_release, NULL);
 	if (ret)
 		return ret;
-	if (!t6->frame || !t6->shadow)
+	if (!t6->shadow || !t6->img || !t6->hw[0] || !t6->hw[1] || !t6->hw[2])
 		return -ENOMEM;
 
 	ret = t6_modeset_init(t6);

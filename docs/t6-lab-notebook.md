@@ -251,3 +251,15 @@ partial updates.
 5. empty flip to buffer 1: red with the green band.
 So a partial update = write the changed rows into the next buffer with
 session 7, then an empty flip to it.
+
+**Partial updates at full speed** (`tools/t6_partial_motion_test.py`, the
+driver's scheme in Python: diff the new NV12 image against a copy of the
+target buffer by row pairs, session-7 writes of the changed bands, at most
+~100 KB each, then the empty flip, no pauses): a 300x300 block moving up
+and down, **325 frames per second** (104 rows per frame on average), clean
+on the LG twice. Flips sent right after the writes wait for them.
+
+**mct_t6 0.6**: partial updates as above. NV12 copies of all three frame
+buffers on the host (3 x 3.1 MB at 1080p), bands merged across gaps of up
+to 8 row pairs, at most 16 bands. The first frame after a mode set is sent
+whole. Stats gain rows and bands sent.
