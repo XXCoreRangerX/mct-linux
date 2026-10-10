@@ -55,15 +55,11 @@
 #include <drm/drm_vblank.h>
 #include <drm/drm_vblank_helper.h>
 
-static bool sysmem = true;
-module_param(sysmem, bool, 0644);
-MODULE_PARM_DESC(sysmem, "Import buffers shared by a GPU through a DMA attachment, so that e.g. amdgpu keeps them in system memory, which the CPU reads ~10x faster than VRAM; falls back to a plain mapping if that fails (default: on)");
-
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	9
-#define DRIVER_PATCH	1
+#define DRIVER_PATCH	2
 
 #define T6_EP_OUT	0x02
 
@@ -193,8 +189,6 @@ struct mct_t6 {
 	int output;			/* index the monitor is on */
 	int max_w, max_h;
 	int pll_base_khz;		/* 48 MHz ("Lite") or 40 MHz ("Super Lite") */
-	struct device *dma_dev;		/* the USB host controller */
-	bool dma_removable;		/* ... is in a dock: don't keep mappings on it */
 
 	struct mutex io_lock;		/* USB transfers, ctrl and xfer buffers */
 	u8 *ctrl;			/* DMA-able control transfer buffer */
@@ -225,7 +219,6 @@ struct mct_t6 {
 	struct {			/* debugfs statistics */
 		u64 updates, skipped, px_damage, bytes, ns_conv, ns_usb;
 		u64 rows, bands;		/* image rows and bands sent */
-		u64 imports_attached, imports_mapped;
 		u64 no_clips, clips, clip_px, rows_copied;	/* damage clips per commit */
 		u64 copies, ns_copy, ns_copy_max;	/* framebuffer -> shadow, in the commit */
 		u64 ns_commit, ns_commit_max;		/* the same incl. CPU access setup */
@@ -1284,8 +1277,6 @@ static int t6_stats_show(struct seq_file *m, void *data)
 		   div64_u64(t6->stats.ns_commit, max_t(u64, t6->stats.copies, 1) * 10000) % 100,
 		   div64_u64(t6->stats.ns_commit_max, 1000000),
 		   div64_u64(t6->stats.ns_commit_max, 10000) % 100);
-	seq_printf(m, "buffer imports   %llu attached (system memory), %llu mapped\n",
-		   t6->stats.imports_attached, t6->stats.imports_mapped);
 	seq_printf(m, "usb MB/s while busy %llu\n",
 		   div64_u64(t6->stats.bytes * 1000, max_t(u64, t6->stats.ns_usb, 1)));
 	return 0;
@@ -1293,35 +1284,6 @@ static int t6_stats_show(struct seq_file *m, void *data)
 
 /* ------------------------------------------------------------------ */
 /* driver							      */
-
-/*
- * A buffer shared by a dedicated GPU usually stays in its VRAM, which the
- * CPU reads at ~1 GB/s over PCIe (7 ms per 1080p frame with an RX 9070,
- * measured). Attaching to the dma-buf as the USB host controller, which
- * can't reach VRAM directly, makes the exporter keep it in system memory
- * instead (amdgpu pins it to GTT), read at ~10 GB/s. The no-map import
- * remains the fallback.
- */
-static struct drm_gem_object *t6_gem_prime_import(struct drm_device *dev,
-						  struct dma_buf *dma_buf)
-{
-	struct mct_t6 *t6 = to_t6(dev);
-	struct drm_gem_object *obj;
-
-	if (sysmem && t6->dma_dev && !t6->dma_removable) {
-		obj = drm_gem_prime_import_dev(dev, dma_buf, t6->dma_dev);
-		if (!IS_ERR(obj)) {
-			t6->stats.imports_attached++;
-			return obj;
-		}
-		drm_dbg_prime(dev, "attached import failed (%ld), mapping instead\n",
-			      PTR_ERR(obj));
-	}
-	obj = drm_gem_shmem_prime_import_no_map(dev, dma_buf);
-	if (!IS_ERR(obj))
-		t6->stats.imports_mapped++;
-	return obj;
-}
 
 DEFINE_DRM_GEM_FOPS(t6_fops);
 
@@ -1333,9 +1295,14 @@ static const struct drm_driver t6_drm_driver = {
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCH,
 	.fops = &t6_fops,
-	.dumb_create = drm_gem_shmem_dumb_create,
-	.gem_prime_import = t6_gem_prime_import,
-	.gem_prime_import_sg_table = drm_gem_shmem_prime_import_sg_table,
+	/*
+	 * Shared buffers are imported without a DMA mapping and read through
+	 * the exporter's vmap. With an amdgpu dGPU that is VRAM over PCIe
+	 * (~1 GB/s with streaming loads). An attached import would get the
+	 * buffer pinned in system memory, but amdgpu's vmap then insists on
+	 * pinning it to its preferred VRAM and fails (see the lab notebook).
+	 */
+	DRM_GEM_SHMEM_DRIVER_OPS,
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
 };
 
@@ -1432,7 +1399,6 @@ static void t6_release(struct drm_device *dev, void *res)
 {
 	struct mct_t6 *t6 = to_t6(dev);
 
-	put_device(t6->dma_dev);
 	kvfree(t6->shadow);
 	kvfree(t6->img);
 	kvfree(t6->hw[0]);
@@ -1472,7 +1438,6 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 {
 	struct mct_t6 *t6;
 	struct drm_device *dev;
-	struct device *d;
 	size_t px;
 	int ret;
 
@@ -1517,15 +1482,6 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	ret = drmm_add_action_or_reset(dev, t6_release, NULL);
 	if (ret)
 		return ret;
-	t6->dma_dev = usb_intf_get_dma_device(interface);	/* put in t6_release */
-	/*
-	 * An attached import keeps a DMA mapping on the host controller until
-	 * the compositor drops the buffer; one in an unpluggable dock (USB4,
-	 * Thunderbolt) could be gone by then.
-	 */
-	for (d = t6->dma_dev; d; d = d->parent)
-		if (dev_is_removable(d))
-			t6->dma_removable = true;
 	if (!t6->shadow || !t6->rowmask || !t6->img || !t6->hw[0] || !t6->hw[1] || !t6->hw[2])
 		return -ENOMEM;
 

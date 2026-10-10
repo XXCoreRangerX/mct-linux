@@ -362,3 +362,17 @@ fixed upstream; note in the lab's `upstream/smithay-rotated-damage-clips.md`.
   imports through host controllers in removable docks (USB4/Thunderbolt,
   the mapping could outlive the controller).
 The attached import itself checked out (references, fallback, release order).
+
+**0.9.1 live: grey screen, attached import is a dead end with amdgpu.** niri's
+page flips failed with EINVAL, and the kernel warned in `dma_buf_vmap`
+(called from `drm_gem_fb_vmap` in `prepare_planes`): amdgpu's vmap pins the
+buffer first, and `amdgpu_bo_pin()` narrows the requested domains to the
+buffer's preferred ones (VRAM for niri's scanout buffers); the attachment had
+already pinned it in GTT, so the pin returns -EINVAL. In short: through the
+regular interfaces an importer can't have an amdgpu dGPU buffer pinned in
+system memory *and* vmapped. Mapping the GTT pages from the sg table
+ourselves would work but breaks the dma-buf rules (importers must not use
+the pages), so not for a driver meant to go upstream. 0.9.2 drops the
+attached import (back to the no-map import) and keeps the review fixes.
+What remains for the 7 ms: smaller copies (damage), or the compositor
+rendering into system memory to begin with.
