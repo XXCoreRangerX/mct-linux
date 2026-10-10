@@ -15,8 +15,9 @@
  *    pixels start at dest + 0x30)
  *
  * Frames are converted to NV12, the T6's own surface format, and sent whole
- * into three device buffers in turn; the chip switches to a buffer once it
- * has arrived, without tearing. A worker does the sending, so commits never
+ * into three device buffers in turn. The header's payload length must be
+ * exact: the chip switches to a buffer once that many bytes have arrived.
+ * A worker does the sending, so commits never
  * wait for USB and the newest image always wins.
  */
 
@@ -29,6 +30,7 @@
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_atomic_state_helper.h>
+#include <drm/drm_cache.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_crtc_helper.h>
@@ -55,8 +57,8 @@
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	2
-#define DRIVER_PATCH	0
+#define DRIVER_MINOR	3
+#define DRIVER_PATCH	3
 
 #define T6_EP_OUT	0x02
 
@@ -65,6 +67,7 @@
 #define T6_REQ_MODES	0x89
 #define T6_REQ_SETMODE	0x12
 #define T6_REQ_OUTPUT	0x03
+#define T6_REQ_READY	0x31		/* "software ready", after a mode set */
 
 #define T6_MAX_MODES	30		/* 0x89 table: 512 + 448 bytes */
 #define T6_MAX_OUTPUTS	2
@@ -74,8 +77,11 @@
 
 #define T6_FMT_NV12	0x6
 
-/* scanout buffers in device memory, as used by the vendor driver */
-static const u32 t6_bufs[] = { 0x017ffe30, 0x01fffd90, 0x027ffcf0 };
+/*
+ * Three frame buffers in device memory, as the vendor driver lays them out
+ * for one output: frame header at the start, planes from +0x30.
+ */
+static const u32 t6_bufs[] = { 0x0, 0xfffec0, 0x1fffd80 };
 
 /* one entry of the device's mode table (0x89), also the 0x12 payload */
 struct t6_mode {
@@ -148,6 +154,8 @@ struct mct_t6 {
 
 	struct {			/* debugfs statistics */
 		u64 updates, skipped, px_damage, bytes, ns_conv, ns_usb;
+		u64 copies, ns_copy, ns_copy_max;	/* framebuffer -> shadow, in the commit */
+		u64 ns_commit, ns_commit_max;		/* the same incl. CPU access setup */
 		ktime_t since;
 	} stats;
 };
@@ -248,6 +256,9 @@ static const struct t6_mode *t6_find_mode(struct mct_t6 *t6, const struct drm_di
 {
 	int i;
 
+	/* the NV12 rows are sent unpadded; the vendor driver needs width % 16 too */
+	if (mode->hdisplay % 16 || mode->vdisplay % 2)
+		return NULL;
 	for (i = 0; i < t6->nmodes; i++) {
 		const struct t6_mode *m = &t6->modes[i];
 
@@ -265,6 +276,16 @@ static int t6_set_output(struct mct_t6 *t6, bool on)
 
 	mutex_lock(&t6->io_lock);
 	ret = t6_ctrl_out(t6, T6_REQ_OUTPUT, t6->output, on, 0);
+	mutex_unlock(&t6->io_lock);
+	return ret < 0 ? ret : 0;
+}
+
+static int t6_ready(struct mct_t6 *t6)
+{
+	int ret;
+
+	mutex_lock(&t6->io_lock);
+	ret = t6_ctrl_out(t6, T6_REQ_READY, 0, 0, 0);
 	mutex_unlock(&t6->io_lock);
 	return ret < 0 ? ret : 0;
 }
@@ -294,6 +315,7 @@ static int t6_send_frame(struct mct_t6 *t6, size_t len, u32 dest)
 		s.dest = cpu_to_le32(dest);
 		s.frag_len = cpu_to_le32(frag);
 		s.offset = cpu_to_le32(off);
+		s.more = cpu_to_le32(off + frag < len);
 		ret = t6_bulk(t6, &s, sizeof(s));
 		if (!ret)
 			ret = t6_bulk(t6, t6->frame + off, frag);
@@ -319,13 +341,14 @@ static size_t t6_build_frame(struct mct_t6 *t6, u32 base)
 
 	memset(hdr, 0, sizeof(*hdr));
 	hdr->type = cpu_to_le32(3);
-	hdr->data_len = cpu_to_le32(len);
+	hdr->data_len = cpu_to_le32(len - sizeof(*hdr));	/* image only */
 	hdr->seq = cpu_to_le32(++t6->seq);
 	hdr->unk4 = cpu_to_le32(T6_FMT_NV12);		/* surface format */
 	hdr->width = cpu_to_le16(w);			/* Y pitch */
 	hdr->height = cpu_to_le16(w);			/* UV pitch */
-	hdr->start = cpu_to_le32(base);			/* Y plane */
-	hdr->end = cpu_to_le32(base + w * h);		/* UV plane */
+	hdr->start = cpu_to_le32(base + 0x30);		/* Y plane */
+	hdr->end = cpu_to_le32(base + 0x30 + w * h);	/* UV plane */
+	hdr->unk9 = cpu_to_le32(base + 0x30);		/* third plane, unused */
 	hdr->format = cpu_to_le32(T6_FMT_NV12);
 
 	for (y = 0; y < h; y += 2) {
@@ -375,7 +398,7 @@ static void t6_update_work(struct work_struct *work)
 	t1 = ktime_get();
 
 	if (drm_dev_enter(&t6->dev, &idx)) {
-		ret = t6_send_frame(t6, len, base - 0x30);
+		ret = t6_send_frame(t6, len, base);
 		if (ret) {
 			drm_err_ratelimited(&t6->dev, "frame update error: %d\n", ret);
 		} else {
@@ -393,16 +416,32 @@ static void t6_mark_dirty(struct mct_t6 *t6, struct drm_framebuffer *fb,
 			  const struct iosys_map *map, const struct drm_rect *dirty)
 {
 	const u8 *src = map->vaddr;	/* shmem GEM: always a system-memory mapping */
+	ktime_t t0;
+	u64 ns;
 	int y;
 
 	mutex_lock(&t6->upd.lock);
+	t0 = ktime_get();
 	if (t6->upd.dirty)
 		t6->stats.skipped++;	/* the previous image never went out */
 	t6->stats.px_damage += drm_rect_width(dirty) * drm_rect_height(dirty);
-	for (y = dirty->y1; y < dirty->y2; y++)
-		memcpy(t6->shadow + (y * t6->width + dirty->x1) * 4,
-		       src + y * fb->pitches[0] + dirty->x1 * 4,
-		       drm_rect_width(dirty) * 4);
+	/*
+	 * Buffers shared by a GPU are usually mapped write-combined, where plain
+	 * reads crawl (~90 MB/s measured with amdgpu); the streaming-load copy
+	 * is many times faster.
+	 */
+	for (y = dirty->y1; y < dirty->y2; y++) {
+		struct iosys_map d = IOSYS_MAP_INIT_VADDR(t6->shadow +
+							  (y * t6->width + dirty->x1) * 4);
+		struct iosys_map sm = IOSYS_MAP_INIT_VADDR((void *)(src + y * fb->pitches[0] +
+								    dirty->x1 * 4));
+
+		drm_memcpy_from_wc(&d, &sm, drm_rect_width(dirty) * 4);
+	}
+	ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
+	t6->stats.copies++;
+	t6->stats.ns_copy += ns;
+	t6->stats.ns_copy_max = max(t6->stats.ns_copy_max, ns);
 	t6->upd.dirty = true;
 	mutex_unlock(&t6->upd.lock);
 
@@ -445,21 +484,30 @@ static void t6_primary_atomic_update(struct drm_plane *plane, struct drm_atomic_
 {
 	struct mct_t6 *t6 = to_t6(plane->dev);
 	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
-	struct drm_plane_state *old_state = drm_atomic_get_old_plane_state(state, plane);
 	struct drm_shadow_plane_state *shadow = to_drm_shadow_plane_state(new_state);
 	struct drm_framebuffer *fb = new_state->fb;
 	struct drm_rect rect;
+	ktime_t t0;
+	u64 ns;
 
 	if (!fb || !new_state->visible || !t6->width)
 		return;
 	if (fb->width != t6->width || fb->height != t6->height)
 		return;
-	if (!drm_atomic_helper_damage_merged(old_state, new_state, &rect))
-		return;
+	/*
+	 * Every frame is sent whole, so copy the whole framebuffer. The damage
+	 * clips are not used: niri's clips for a rotated output did not cover
+	 * what changed, which left stale parts on screen.
+	 */
+	drm_rect_init(&rect, 0, 0, fb->width, fb->height);
+	t0 = ktime_get();
 	if (drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
 		return;
 	t6_mark_dirty(t6, fb, &shadow->data[0], &rect);
 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
+	ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
+	t6->stats.ns_commit += ns;
+	t6->stats.ns_commit_max = max(t6->stats.ns_commit_max, ns);
 }
 
 static const struct drm_plane_helper_funcs t6_primary_helper_funcs = {
@@ -498,7 +546,7 @@ static void t6_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commi
 	if (!m)
 		return;
 	if (drm_dev_enter(crtc->dev, &idx)) {
-		if (t6_set_mode(t6, m) || t6_set_output(t6, true))
+		if (t6_set_mode(t6, m) || t6_ready(t6) || t6_set_output(t6, true))
 			drm_err(&t6->dev, "could not set mode %dx%d\n",
 				crtc_state->mode.hdisplay, crtc_state->mode.vdisplay);
 		drm_dev_exit(idx);
@@ -638,6 +686,16 @@ static int t6_stats_show(struct seq_file *m, void *data)
 		   div64_u64(t6->stats.ns_conv, n * 10000) % 100,
 		   div64_u64(t6->stats.ns_usb, n * 1000000),
 		   div64_u64(t6->stats.ns_usb, n * 10000) % 100);
+	seq_printf(m, "ms per fb copy   %llu.%02llu (max %llu.%02llu) over %llu copies\n",
+		   div64_u64(t6->stats.ns_copy, max_t(u64, t6->stats.copies, 1) * 1000000),
+		   div64_u64(t6->stats.ns_copy, max_t(u64, t6->stats.copies, 1) * 10000) % 100,
+		   div64_u64(t6->stats.ns_copy_max, 1000000),
+		   div64_u64(t6->stats.ns_copy_max, 10000) % 100, t6->stats.copies);
+	seq_printf(m, "ms per commit    %llu.%02llu (max %llu.%02llu) incl. cpu access setup\n",
+		   div64_u64(t6->stats.ns_commit, max_t(u64, t6->stats.copies, 1) * 1000000),
+		   div64_u64(t6->stats.ns_commit, max_t(u64, t6->stats.copies, 1) * 10000) % 100,
+		   div64_u64(t6->stats.ns_commit_max, 1000000),
+		   div64_u64(t6->stats.ns_commit_max, 10000) % 100);
 	seq_printf(m, "usb MB/s while busy %llu\n",
 		   div64_u64(t6->stats.bytes * 1000, max_t(u64, t6->stats.ns_usb, 1)));
 	return 0;

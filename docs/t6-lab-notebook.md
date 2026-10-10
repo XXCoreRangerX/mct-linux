@@ -149,3 +149,31 @@ full frames round robin into three buffers. 1080p60 needs ~187 MB/s, well
 inside the measured ~300 MB/s. Cost: 4:2:0 chroma, so colour edges are
 softer than raw (fine detail in coloured text). A lossless option would need
 raw frames with proper flips, still open.
+
+**Flip rules and the frame recipe.** Slow-sent test frames (one fragment every
+100 ms): with the vendor driver's exact recipe (session `dest = fb`, video
+header data_len = image bytes only, planes at fb + 0x30, the `more` flag, 0x31
+"software ready"), a green frame sent over 3 s appeared all at once. 0.2 had
+data_len 48 bytes too large; the chip then switches only when bytes of the
+next frame arrive (cursor one update behind). Research reports saved in the
+lab: `captures/t6-research/` (capture analysis, DLL analysis, web research)
+and `third_party/t6-sources/` (MCT's Linux source, other drivers, macOS and
+Windows packages).
+
+**mct_t6 0.3.x live** (cachyos 7.2.7, niri, LG rotated 90 degrees):
+- 0.3.0 (vendor recipe): half the screen still broken, cursor buggy.
+- 0.3.1: copy the **whole** framebuffer instead of the damage clips. Whole
+  screen right. With the rotated output, niri's damage clips did not cover
+  what changed; to look into before using damage again.
+- 0.3.1 stats: convert 1.66 ms, USB 8.85 ms per frame (351 MB/s while busy),
+  yet only ~10 updates/s and laggy.
+- 0.3.2 adds a timer around the framebuffer copy in the commit: **87.5 ms per
+  copy** (8 MB at ~95 MB/s). amdgpu shares the buffer write-combined, where
+  plain CPU reads crawl. That was the whole lag, and probably trigger6's too.
+- 0.3.3 copies with `drm_memcpy_from_wc()` (SSE4.1 streaming loads):
+  **5.85 ms per copy** (max 6.96), 45 updates/s while moving things, convert
+  1.84 ms, USB 8.62 ms. "Finally good, really good now", some latency left.
+
+Next: hardware cursor (requests 0x10/0x04/0x05 decoded), copy and send only
+what changed (fix damage handling for rotated outputs first), overlap the
+stages.
