@@ -58,10 +58,15 @@
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	9
-#define DRIVER_PATCH	2
+#define DRIVER_MINOR	10
+#define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
+#define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
+/* byte 0x13 of an event: what happened */
+#define T6_EV_CHANGE0	0x01		/* monitor change on output 0 */
+#define T6_EV_CHANGE1	0x02		/* ... output 1 */
+#define T6_EV_DONE	0x04		/* frame done, fence ID at 0x0c */
 
 #define T6_REQ_EDID	0x80
 #define T6_REQ_STATUS	0x87
@@ -209,6 +214,9 @@ struct mct_t6 {
 		bool dirty;
 	} upd;
 
+	struct urb *ev_urb;		/* interrupt IN, always queued */
+	struct work_struct hpd_work;
+
 	struct {
 		u8 *img;		/* header + image being built */
 		u8 *shown;		/* last uploaded */
@@ -219,6 +227,7 @@ struct mct_t6 {
 	struct {			/* debugfs statistics */
 		u64 updates, skipped, px_damage, bytes, ns_conv, ns_usb;
 		u64 rows, bands;		/* image rows and bands sent */
+		u64 ev_done, ev_change, ev_other;	/* interrupt events */
 		u64 no_clips, clips, clip_px, rows_copied;	/* damage clips per commit */
 		u64 copies, ns_copy, ns_copy_max;	/* framebuffer -> shadow, in the commit */
 		u64 ns_commit, ns_commit_max;		/* the same incl. CPU access setup */
@@ -1238,6 +1247,68 @@ static const struct drm_connector_funcs t6_conn_funcs = {
 };
 
 /* ------------------------------------------------------------------ */
+/* interrupt events						      */
+
+static void t6_hpd_work(struct work_struct *work)
+{
+	struct mct_t6 *t6 = container_of(work, struct mct_t6, hpd_work);
+
+	drm_helper_hpd_irq_event(&t6->dev);
+}
+
+static void t6_event_complete(struct urb *urb)
+{
+	struct mct_t6 *t6 = urb->context;
+	const u8 *ev = urb->transfer_buffer;
+
+	switch (urb->status) {
+	case 0:
+		break;
+	case -ENOENT:
+	case -ECONNRESET:
+	case -ESHUTDOWN:
+	case -EPROTO:
+	case -EILSEQ:
+	case -EPIPE:
+		return;		/* killed, gone or broken: don't spin */
+	default:
+		goto resubmit;
+	}
+	if (urb->actual_length > 0x13) {
+		if (ev[0x13] & T6_EV_DONE)
+			t6->stats.ev_done++;
+		if (ev[0x13] & (T6_EV_CHANGE0 | T6_EV_CHANGE1)) {
+			t6->stats.ev_change++;
+			schedule_work(&t6->hpd_work);
+		}
+		if (!(ev[0x13] & (T6_EV_DONE | T6_EV_CHANGE0 | T6_EV_CHANGE1)))
+			t6->stats.ev_other++;
+	}
+resubmit:
+	usb_submit_urb(urb, GFP_ATOMIC);
+}
+
+/* keep an interrupt transfer queued on the event endpoint, as the vendor driver does */
+static int t6_events_init(struct mct_t6 *t6, struct usb_interface *intf)
+{
+	struct usb_device *udev = interface_to_usbdev(intf);
+	struct usb_endpoint_descriptor *ep;
+	u8 *buf;
+	int ret;
+
+	ret = usb_find_int_in_endpoint(intf->cur_altsetting, &ep);
+	if (ret)
+		return ret;
+	t6->ev_urb = usb_alloc_urb(0, GFP_KERNEL);
+	buf = drmm_kmalloc(&t6->dev, T6_EVENT_LEN, GFP_KERNEL);
+	if (!t6->ev_urb || !buf)
+		return -ENOMEM;
+	usb_fill_int_urb(t6->ev_urb, udev, usb_rcvintpipe(udev, ep->bEndpointAddress), buf,
+			 T6_EVENT_LEN, t6_event_complete, t6, ep->bInterval);
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* debugfs							      */
 
 static int t6_stats_show(struct seq_file *m, void *data)
@@ -1277,6 +1348,8 @@ static int t6_stats_show(struct seq_file *m, void *data)
 		   div64_u64(t6->stats.ns_commit, max_t(u64, t6->stats.copies, 1) * 10000) % 100,
 		   div64_u64(t6->stats.ns_commit_max, 1000000),
 		   div64_u64(t6->stats.ns_commit_max, 10000) % 100);
+	seq_printf(m, "events           %llu frame done, %llu monitor change, %llu other\n",
+		   t6->stats.ev_done, t6->stats.ev_change, t6->stats.ev_other);
 	seq_printf(m, "usb MB/s while busy %llu\n",
 		   div64_u64(t6->stats.bytes * 1000, max_t(u64, t6->stats.ns_usb, 1)));
 	return 0;
@@ -1382,7 +1455,9 @@ static int t6_modeset_init(struct mct_t6 *t6)
 	ret = drm_connector_init(dev, &t6->conn, &t6_conn_funcs, DRM_MODE_CONNECTOR_HDMIA);
 	if (ret)
 		return ret;
-	t6->conn.polled = DRM_CONNECTOR_POLL_CONNECT | DRM_CONNECTOR_POLL_DISCONNECT;
+	/* events for changes, polling as well in case a model doesn't send them */
+	t6->conn.polled = DRM_CONNECTOR_POLL_HPD | DRM_CONNECTOR_POLL_CONNECT |
+			  DRM_CONNECTOR_POLL_DISCONNECT;
 	ret = drm_connector_attach_encoder(&t6->conn, &t6->encoder);
 	if (ret)
 		return ret;
@@ -1399,6 +1474,7 @@ static void t6_release(struct drm_device *dev, void *res)
 {
 	struct mct_t6 *t6 = to_t6(dev);
 
+	usb_free_urb(t6->ev_urb);
 	kvfree(t6->shadow);
 	kvfree(t6->img);
 	kvfree(t6->hw[0]);
@@ -1454,6 +1530,7 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	dev = &t6->dev;
 
 	INIT_WORK(&t6->upd.work, t6_update_work);
+	INIT_WORK(&t6->hpd_work, t6_hpd_work);
 	mutex_init(&t6->upd.lock);
 	mutex_init(&t6->io_lock);
 
@@ -1488,6 +1565,9 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	ret = t6_modeset_init(t6);
 	if (ret)
 		return ret;
+	ret = t6_events_init(t6, interface);
+	if (ret)
+		return ret;
 
 	t6->stats.since = ktime_get();
 	drm_debugfs_add_file(dev, "mct_t6_stats", t6_stats_show, NULL);
@@ -1497,6 +1577,8 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	ret = drm_dev_register(dev, 0);
 	if (ret)
 		return ret;
+	if (usb_submit_urb(t6->ev_urb, GFP_KERNEL))
+		drm_warn(dev, "no monitor change events, polling only\n");
 
 	drm_client_setup(dev, NULL);
 	return 0;
@@ -1505,19 +1587,31 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 static void t6_usb_disconnect(struct usb_interface *interface)
 {
 	struct drm_device *dev = usb_get_intfdata(interface);
+	struct mct_t6 *t6 = to_t6(dev);
 
+	usb_kill_urb(t6->ev_urb);
+	cancel_work_sync(&t6->hpd_work);
 	drm_dev_unplug(dev);
 	drm_atomic_helper_shutdown(dev);
 }
 
 static int t6_suspend(struct usb_interface *interface, pm_message_t message)
 {
-	return drm_mode_config_helper_suspend(usb_get_intfdata(interface));
+	struct drm_device *dev = usb_get_intfdata(interface);
+	int ret;
+
+	ret = drm_mode_config_helper_suspend(dev);
+	usb_kill_urb(to_t6(dev)->ev_urb);
+	cancel_work_sync(&to_t6(dev)->hpd_work);
+	return ret;
 }
 
 static int t6_resume(struct usb_interface *interface)
 {
-	return drm_mode_config_helper_resume(usb_get_intfdata(interface));
+	struct drm_device *dev = usb_get_intfdata(interface);
+
+	usb_submit_urb(to_t6(dev)->ev_urb, GFP_KERNEL);
+	return drm_mode_config_helper_resume(dev);
 }
 
 static const struct usb_device_id id_table[] = {
