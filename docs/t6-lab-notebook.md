@@ -110,3 +110,23 @@ chmod for the session).
   This confirms the single-buffer explanation for mct_t6 0.1's cut-off
   bottom: with one destination every frame overwrites the visible one. USB
   bandwidth is not the problem; full raw 1080p frames nearly reach 60 fps.
+
+**Capture decoded properly** (subagent, full report kept in the session
+scratchpad; the rules are now in protocol-t6.md): session `dest` is where the
+USB data lands, video header `start`/`end` are the plane addresses the T6
+scans out from (Y and UV for NV12), the "unknown" dword 3 is the surface
+format (6 NV12, 9 BGR24), the 0x550 dword holds the two plane pitches.
+Windows rotates full frames through three buffers (0x017ffe30, 0x01fffd90,
+0x027ffcf0, 0x7fff60 apart) and writes partial (type 7) updates into the one
+on screen, with the position encoded in the addresses. trigger6's dest 0x30 +
+48-byte header puts the pixels exactly at start 0x60: it always writes into
+the visible picture.
+
+**Triple buffering, raw BGR24**: same moving block, frame n into Windows'
+buffer n % 3, `dest = start - 0x30`, `start = end = buffer`. 315 frames in
+6 s, 52.5 fps. On the LG: tearing **less often but sharper**, motion as
+smooth, no garbage. Reading: the T6 now shows only complete frames, but it
+switches to a new frame as soon as it has arrived, not at the start of a
+refresh, so a switch in mid-scan is one hard cut between two whole frames.
+Open: is there a vsync-synchronised flip (a header flag or a request)? Waiting
+for the static analysis of T6InDisp.dll before trying unknown fields.
