@@ -83,3 +83,30 @@ it from userspace with still images first, keep trigger6 as the fallback.
 Started two research subagents: a deep pass over the capture for the exact
 addressing / partial update / timing rules, and a web search for other T6
 work, OEM driver packages and the chip's formats.
+
+**t6dev.py, first live session** (mct_t6 unbound, device node opened up with
+chmod for the session).
+
+- Status: output 0 = 1 (LG), output 1 = 0.
+- Device info: `b0` index 0 `01000000`, 1 `99280616`, 2 `01140917`,
+  3 "JUA254H" (chip/board name; the 5601 in the capture says "A8613HV"),
+  4 `06000000`; `b4` `04000000`; `88` `3a`.
+- Mode table: 30 entries from 640x480@60 to **2048x1152@60**, highest pixel
+  clock 197 MHz (1920x1200@60 193.25 MHz, 2048x1152@60 197 MHz). No entry
+  above 75 Hz. 1080p120 would need 297 MHz. Besides the timings, each entry has
+  three more 16-bit fields: `u1` is always 1000; `u0` and `u2` change per mode
+  (e.g. 148.5 MHz: 699 / 285, 74.25 MHz: 699 / 541, 25.175 MHz: 140 / 20), probably
+  clock generator settings, which a custom mode would have to get right.
+  1360x768 and 1680x1050 have 512 in the last field, 1600x900 has 1.
+- Full raw frames with trigger6's header values (`send_raw`): two still test
+  images (yellow bars to tell them apart; the LG stands rotated 90 degrees, so
+  the bars show at the top) arrived complete. 6.2 MB each in 17-18 ms, about
+  350 MB/s, from Python.
+- Continuous: a white block moving across 24 positions, sent back to back for
+  6 s: **316 frames, 52.5 fps, 327 MB/s**. Frame-done notifications came back
+  on EP 0x83 (`04 00 ...` with the frame counter at byte 12; the first one after
+  mode set was `20 00 ...`, then `24 00 ... 05`).
+  On the LG: motion fairly smooth, but **tearing at the sides of the block**.
+  This confirms the single-buffer explanation for mct_t6 0.1's cut-off
+  bottom: with one destination every frame overwrites the visible one. USB
+  bandwidth is not the problem; full raw 1080p frames nearly reach 60 fps.
