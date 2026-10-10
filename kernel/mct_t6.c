@@ -59,7 +59,7 @@
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	6
-#define DRIVER_PATCH	0
+#define DRIVER_PATCH	1
 
 #define T6_EP_OUT	0x02
 
@@ -976,12 +976,20 @@ static struct drm_display_mode *t6_rb_mode(struct drm_device *dev, int w, int h,
 	return mode;
 }
 
+/*
+ * Whether the EDID already brings a usable mode of this size and rate. One
+ * the T6 can't drive doesn't count: the LG 27GN750's 1080p 144 Hz timing
+ * needs 350.4 MHz, while the reduced blanking one here needs 333 MHz.
+ */
 static bool t6_has_mode(struct drm_connector *connector, int w, int h, int hz)
 {
+	struct mct_t6 *t6 = to_t6(connector->dev);
 	struct drm_display_mode *mode;
+	struct t6_mode m;
 
 	list_for_each_entry(mode, &connector->probed_modes, head)
-		if (mode->hdisplay == w && mode->vdisplay == h && drm_mode_vrefresh(mode) == hz)
+		if (mode->hdisplay == w && mode->vdisplay == h && drm_mode_vrefresh(mode) == hz &&
+		    !t6_mode_entry(t6, mode, &m))
 			return true;
 	return false;
 }
