@@ -300,3 +300,11 @@ clean green rectangle.
 (rounded out to 16 pixels) and sends each band as a rectangle of just those
 columns; the framebuffer copy does one `drm_memcpy_from_wc()` per run of rows
 instead of per row (each call saves and restores FPU state).
+
+**0.8 stats (31 s, 144 Hz, "works good")**: 57.8 updates/s, 6 skipped;
+1.35 MB per update over USB (full NV12 frame: 3.1 MB), USB 4.49 ms and
+convert 1.73 ms per update. niri's damage clips: ~1.35 M px per commit (two
+thirds of the screen), so the copy still takes ~1063 rows per commit:
+**7.34 ms** (one call per run of rows changed nothing, so it is bandwidth,
+~1.1 GB/s). Likely the scanout buffer sits in the RX 9070's VRAM and is read
+over PCIe. Ceiling for full-screen motion at 1080p144: ~135 fps.
