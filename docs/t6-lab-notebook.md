@@ -284,3 +284,19 @@ whole. Stats gain rows and bands sent.
   Upstream report to write. 0.7 marks the rows a raw clip covers under every
   rotation/flip. First stats at 150 Hz: still ~whole frames copied per
   commit (6.7 ms); 0.7.1 counts clips to see why.
+
+**0.7.1 stats (light use, 144 Hz)**: 0 commits without clips, ~2 clips per
+commit, ~1.14 M px of clips per commit (half the screen), 1057 rows copied
+per commit, 513 rows sent per update. The LG stands rotated: a line of text
+in portrait is a narrow column strip of the landscape framebuffer, covering
+all rows, so row-based copying and sending can't save anything there.
+
+**Column-limited rectangle writes** (`tools/t6_rect_test.py`): session 7 with
+x offset 600 and width 300 (Y address = base + y*W + x, UV address = base +
+W*H + (y/2)*W + x, pitch W) into the hidden buffer, then an empty flip: a
+clean green rectangle.
+
+**mct_t6 0.8**: the diff finds the first and last changed column per row pair
+(rounded out to 16 pixels) and sends each band as a rectangle of just those
+columns; the framebuffer copy does one `drm_memcpy_from_wc()` per run of rows
+instead of per row (each call saves and restores FPU state).

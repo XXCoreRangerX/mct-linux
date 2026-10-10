@@ -58,8 +58,8 @@
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	7
-#define DRIVER_PATCH	1
+#define DRIVER_MINOR	8
+#define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
 
@@ -430,72 +430,100 @@ static void t6_convert(struct mct_t6 *t6)
 	}
 }
 
+struct t6_band {
+	int p0, p1;			/* row pairs [p0, p1) */
+	int x0, x1;			/* columns [x0, x1), multiples of 16 */
+};
+
+/* first and last differing byte of two rows, as [*lo, *hi); false if equal */
+static bool t6_row_diff(const u8 *a, const u8 *b, int n, int *lo, int *hi)
+{
+	int l = 0, h = n;
+
+	if (!memcmp(a, b, n))
+		return false;
+	while (l + 8 <= n && !memcmp(a + l, b + l, 8))
+		l += 8;
+	while (h - 8 >= l && !memcmp(a + h - 8, b + h - 8, 8))
+		h -= 8;
+	*lo = min(*lo, l);
+	*hi = max(*hi, h);
+	return true;
+}
+
 /*
  * Bands of row pairs (two Y rows and their UV row) where t6->img differs
- * from what frame buffer k holds, as [start, end) pairs; returns the count.
+ * from what frame buffer k holds, each with the columns that changed;
+ * returns the count.
  */
-static int t6_diff_bands(struct mct_t6 *t6, int k, int bands[][2])
+static int t6_diff_bands(struct mct_t6 *t6, int k, struct t6_band *bands)
 {
 	int w = t6->width, pairs = t6->height / 2, n = 0, p;
 	const u8 *ny = t6->img, *oy = t6->hw[k];
 	const u8 *nuv = ny + (size_t)w * t6->height, *ouv = oy + (size_t)w * t6->height;
 
 	if (!t6->hw_valid[k]) {
-		bands[0][0] = 0;
-		bands[0][1] = pairs;
+		bands[0] = (struct t6_band){ 0, pairs, 0, w };
 		return 1;
 	}
 	for (p = 0; p < pairs; p++) {
 		size_t yo = (size_t)p * 2 * w, uvo = (size_t)p * w;
+		int lo = w, hi = 0;
+		bool d;
 
-		if (!memcmp(ny + yo, oy + yo, 2 * w) && !memcmp(nuv + uvo, ouv + uvo, w))
+		d = t6_row_diff(ny + yo, oy + yo, w, &lo, &hi);
+		d |= t6_row_diff(ny + yo + w, oy + yo + w, w, &lo, &hi);
+		d |= t6_row_diff(nuv + uvo, ouv + uvo, w, &lo, &hi);
+		if (!d)
 			continue;
-		if (n && p - bands[n - 1][1] <= T6_BAND_GAP) {
-			bands[n - 1][1] = p + 1;
-		} else if (n == T6_MAX_BANDS) {
-			bands[n - 1][1] = p + 1;	/* too scattered: grow the last band */
+		lo = round_down(lo, 16);
+		hi = min(round_up(hi, 16), w);
+		if (n && (p - bands[n - 1].p1 <= T6_BAND_GAP || n == T6_MAX_BANDS)) {
+			bands[n - 1].p1 = p + 1;
+			bands[n - 1].x0 = min(bands[n - 1].x0, lo);
+			bands[n - 1].x1 = max(bands[n - 1].x1, hi);
 		} else {
-			bands[n][0] = p;
-			bands[n][1] = p + 1;
-			n++;
+			bands[n++] = (struct t6_band){ p, p + 1, lo, hi };
 		}
 	}
 	return n;
 }
 
-/* write pairs [p0, p1) of t6->img into frame buffer k; io_lock held */
-static int t6_send_band(struct mct_t6 *t6, int k, int p0, int p1)
+/* write a band of t6->img into frame buffer k; io_lock held */
+static int t6_send_band(struct mct_t6 *t6, int k, const struct t6_band *b)
 {
-	int w = t6->width, h = t6->height;
-	/* each write fits the transfer buffer */
-	int step = (T6_FRAG - sizeof(struct t6_rect_header)) / (3 * w);
+	int w = t6->width, h = t6->height, bw = b->x1 - b->x0;
+	/* each write fits the transfer buffer: per pair 2 Y rows + 1 UV row */
+	int step = T6_FRAG / (3 * bw);
 	u32 base = t6_bufs[k] + 0x30;
-	int p, n, ret = 0;
+	int p, n, i, ret = 0;
 
-	for (p = p0; p < p1 && !ret; p += n) {
+	for (p = b->p0; p < b->p1 && !ret; p += n) {
 		struct t6_rect_header *r = (struct t6_rect_header *)t6->xfer;
-		size_t ylen, uvlen;
+		size_t yo = (size_t)p * 2 * w + b->x0, uvo = (size_t)w * h + (size_t)p * w + b->x0;
+		u8 *d;
 
-		n = min(step, p1 - p);
-		ylen = (size_t)n * 2 * w;
-		uvlen = (size_t)n * w;
+		n = min(step, b->p1 - p);
 		memset(r, 0, sizeof(*r));
 		r->type = cpu_to_le32(7);
-		r->len = cpu_to_le32(ylen + uvlen);
-		r->y_addr = cpu_to_le32(base + p * 2 * w);
-		r->uv_addr = cpu_to_le32(base + w * h + p * w);
+		r->len = cpu_to_le32(3 * n * bw);
+		r->y_addr = cpu_to_le32(base + yo);
+		r->uv_addr = cpu_to_le32(base + uvo);
 		r->y_pitch = cpu_to_le16(w);
 		r->uv_pitch = cpu_to_le16(w);
-		r->width = cpu_to_le16(w);
+		r->width = cpu_to_le16(bw);
 		r->height = cpu_to_le16(n * 2);
 		ret = t6_bulk(t6, r, sizeof(*r));
 		if (ret)
 			break;
-		memcpy(t6->xfer, t6->img + (size_t)p * 2 * w, ylen);
-		memcpy(t6->xfer + ylen, t6->img + (size_t)w * h + (size_t)p * w, uvlen);
-		ret = t6_bulk(t6, t6->xfer, ylen + uvlen);
+		d = t6->xfer;
+		for (i = 0; i < 2 * n; i++, d += bw)
+			memcpy(d, t6->img + yo + (size_t)i * w, bw);
+		for (i = 0; i < n; i++, d += bw)
+			memcpy(d, t6->img + uvo + (size_t)i * w, bw);
+		ret = t6_bulk(t6, t6->xfer, 3 * n * bw);
 		t6->stats.rows += n * 2;
-		t6->stats.bytes += sizeof(*r) + ylen + uvlen;
+		t6->stats.bytes += sizeof(*r) + 3 * n * bw;
 	}
 	return ret;
 }
@@ -537,25 +565,30 @@ static int t6_flip(struct mct_t6 *t6, int k)
  */
 static int t6_present(struct mct_t6 *t6)
 {
-	int bands[T6_MAX_BANDS][2];
+	struct t6_band bands[T6_MAX_BANDS];
 	int k = t6->buf, w = t6->width, h = t6->height;
-	int n, i, ret = 0;
+	int n, i, p, ret = 0;
 
 	n = t6_diff_bands(t6, k, bands);
 	t6->hw_valid[k] = false;
 	for (i = 0; i < n && !ret; i++)
-		ret = t6_send_band(t6, k, bands[i][0], bands[i][1]);
+		ret = t6_send_band(t6, k, &bands[i]);
 	if (!ret)
 		ret = t6_flip(t6, k);
 	if (ret)
 		return ret;
 
 	for (i = 0; i < n; i++) {
-		size_t yo = (size_t)bands[i][0] * 2 * w, uvo = (size_t)w * h + bands[i][0] * w;
-		size_t pairs = bands[i][1] - bands[i][0];
+		int bw = bands[i].x1 - bands[i].x0;
 
-		memcpy(t6->hw[k] + yo, t6->img + yo, pairs * 2 * w);
-		memcpy(t6->hw[k] + uvo, t6->img + uvo, pairs * w);
+		for (p = bands[i].p0; p < bands[i].p1; p++) {
+			size_t yo = (size_t)p * 2 * w + bands[i].x0;
+			size_t uvo = (size_t)w * h + (size_t)p * w + bands[i].x0;
+
+			memcpy(t6->hw[k] + yo, t6->img + yo, bw);
+			memcpy(t6->hw[k] + yo + w, t6->img + yo + w, bw);
+			memcpy(t6->hw[k] + uvo, t6->img + uvo, bw);
+		}
 	}
 	t6->hw_valid[k] = true;
 	t6->stats.bands += n;
@@ -613,15 +646,34 @@ static void t6_mark_dirty(struct mct_t6 *t6, struct drm_framebuffer *fb,
 	 * reads crawl (~90 MB/s measured with amdgpu); the streaming-load copy
 	 * is many times faster.
 	 */
-	for (y = 0; y < t6->height; y++) {
-		struct iosys_map d = IOSYS_MAP_INIT_VADDR(t6->shadow + (size_t)y * w * 4);
-		struct iosys_map sm = IOSYS_MAP_INIT_VADDR((void *)(src + y * fb->pitches[0]));
+	for (y = 0; y < t6->height; ) {
+		int n = 0;
 
-		if (!t6->rowmask[y])
+		while (y + n < t6->height && t6->rowmask[y + n])
+			n++;
+		if (!n) {
+			y++;
 			continue;
-		drm_memcpy_from_wc(&d, &sm, w * 4);
-		t6->stats.px_damage += w;
-		t6->stats.rows_copied++;
+		}
+		/* one call per run of rows: each call saves and restores FPU state */
+		if (fb->pitches[0] == w * 4) {
+			struct iosys_map d = IOSYS_MAP_INIT_VADDR(t6->shadow + (size_t)y * w * 4);
+			struct iosys_map sm = IOSYS_MAP_INIT_VADDR((void *)(src + y * fb->pitches[0]));
+
+			drm_memcpy_from_wc(&d, &sm, (size_t)n * w * 4);
+		} else {
+			int i;
+
+			for (i = y; i < y + n; i++) {
+				struct iosys_map d = IOSYS_MAP_INIT_VADDR(t6->shadow + (size_t)i * w * 4);
+				struct iosys_map sm = IOSYS_MAP_INIT_VADDR((void *)(src + i * fb->pitches[0]));
+
+				drm_memcpy_from_wc(&d, &sm, w * 4);
+			}
+		}
+		t6->stats.px_damage += (u64)n * w;
+		t6->stats.rows_copied += n;
+		y += n;
 	}
 	t6->shadow_valid = true;
 	ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
