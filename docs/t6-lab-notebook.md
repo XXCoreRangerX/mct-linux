@@ -234,3 +234,20 @@ table, capped at 350 MHz, widths a multiple of 16. Besides the EDID's
 modes it offers reduced-blanking modes at 75, 100, 120, 144, 150, 165, 200
 and 240 Hz for the monitor's preferred size and for 1280x720, where the
 EDID's range limits and the clock cap allow (1080p: up to 150 Hz).
+
+**0.5 at 120 Hz judders** (stats over 104 s): convert 1.92 ms + USB 8.65 ms per
+full frame = ~10.6 ms against an 8.3 ms frame period; 68 skipped images.
+USB is at its ceiling (359 MB/s while busy), so the fix is sending less:
+partial updates.
+
+**Partial update primitives** (`tools/t6_partial_test.py`), all confirmed:
+1. full frame into buffer 0: blue; 2. full frame into buffer 1: red;
+3. **empty flip** (video header type 3 with data_len 0, session total 48,
+   dest = buffer 0): blue again;
+4. **session type 7 rectangle write** into buffer 1, not on screen: 32-byte
+   header `{7, data length, Y address, UV address, u16 Y pitch, u16 UV pitch,
+   u16 w, u16 h, 0, 0}` + Y rows + interleaved UV rows (a green band, rows
+   400-679, 806 KB in one session): screen unchanged (blue);
+5. empty flip to buffer 1: red with the green band.
+So a partial update = write the changed rows into the next buffer with
+session 7, then an empty flip to it.
