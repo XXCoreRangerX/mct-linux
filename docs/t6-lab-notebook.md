@@ -337,3 +337,8 @@ why niri couldn't use the T6 at first.
 (`sysmem` module parameter, default on, runtime writable; falls back to the
 no-map import if the attachment fails), `gem_prime_import_sg_table` set to
 the shmem helper. Stats count attached vs. mapped imports. Untested live.
+
+The rotated damage clips are a bug in smithay 0.7.0 (vendored by niri 26.04):
+`PlaneDamageClips::from_damage` maps damage with `Transform::Normal`. smithay
+master already takes `dst_transform` / `damage_transform` there, so it is
+fixed upstream; note in the lab's `upstream/smithay-rotated-damage-clips.md`.
