@@ -1,1 +1,2 @@
 obj-m += mct_t2.o
+obj-m += mct_t6.o
