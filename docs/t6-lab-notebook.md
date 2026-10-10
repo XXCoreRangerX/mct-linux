@@ -342,3 +342,23 @@ The rotated damage clips are a bug in smithay 0.7.0 (vendored by niri 26.04):
 `PlaneDamageClips::from_damage` maps damage with `Transform::Normal`. smithay
 master already takes `dst_transform` / `damage_transform` there, so it is
 fixed upstream; note in the lab's `upstream/smithay-rotated-damage-clips.md`.
+
+**Code review of 0.9** (subagent, read-only). Fixed in 0.9.1:
+- The default commit tail updates planes before enabling the CRTC; the
+  enable resets the frame buffer and cursor bookkeeping, so the first frame
+  and the cursor after a mode set or resume were dropped (idle screens stayed
+  black or garbage after resume). Own commit tail: disables, enables, planes.
+- Framebuffers larger than the mode, panned (src x/y) or with an offset were
+  accepted but never shown; now rejected in atomic_check.
+- A failed `begin_cpu_access` lost that commit's damage for good; the shadow
+  is now marked invalid so the next commit copies everything.
+- `drm_kms_helper_poll_init` before a failing `drm_dev_register` left the poll
+  work running on freed memory; now `drmm_kms_helper_poll_init`.
+- Hardening: mode table entries above 4096x2304 ignored and the band step
+  can't be 0 (a bogus table could spin the worker); reduced blanking clock
+  computed in u64; the worker takes the USB lock before the image lock so a
+  commit never waits behind a cursor upload or a connector poll; mappings
+  handled as iosys_map (I/O memory on a plain VRAM import); no attached
+  imports through host controllers in removable docks (USB4/Thunderbolt,
+  the mapping could outlive the controller).
+The attached import itself checked out (references, fallback, release order).

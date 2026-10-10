@@ -63,7 +63,7 @@ MODULE_PARM_DESC(sysmem, "Import buffers shared by a GPU through a DMA attachmen
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	9
-#define DRIVER_PATCH	0
+#define DRIVER_PATCH	1
 
 #define T6_EP_OUT	0x02
 
@@ -194,6 +194,7 @@ struct mct_t6 {
 	int max_w, max_h;
 	int pll_base_khz;		/* 48 MHz ("Lite") or 40 MHz ("Super Lite") */
 	struct device *dma_dev;		/* the USB host controller */
+	bool dma_removable;		/* ... is in a dock: don't keep mappings on it */
 
 	struct mutex io_lock;		/* USB transfers, ctrl and xfer buffers */
 	u8 *ctrl;			/* DMA-able control transfer buffer */
@@ -316,7 +317,8 @@ static int t6_read_modes(struct mct_t6 *t6)
 		int w = le16_to_cpu(t6->modes[i].hdisplay);
 		int h = le16_to_cpu(t6->modes[i].vdisplay);
 
-		if (!w || !h || w == 0xffff)
+		/* the frame paths are sized for these at most */
+		if (!w || !h || w > 4096 || h > 2304)
 			continue;
 		t6->nmodes = i + 1;
 		t6->max_w = max(t6->max_w, w);
@@ -500,7 +502,7 @@ static int t6_send_band(struct mct_t6 *t6, int k, const struct t6_band *b)
 {
 	int w = t6->width, h = t6->height, bw = b->x1 - b->x0;
 	/* each write fits the transfer buffer: per pair 2 Y rows + 1 UV row */
-	int step = T6_FRAG / (3 * bw);
+	int step = max(T6_FRAG / (3 * bw), 1);
 	u32 base = t6_bufs[k] + 0x30;
 	int p, n, i, ret = 0;
 
@@ -608,13 +610,18 @@ static void t6_update_work(struct work_struct *work)
 	ktime_t t0, t1;
 	int idx, ret;
 
+	/*
+	 * Take the USB lock first: a commit waits on upd.lock, and must not end
+	 * up waiting behind a cursor upload or connector poll on io_lock.
+	 */
+	mutex_lock(&t6->io_lock);
 	mutex_lock(&t6->upd.lock);
 	if (!t6->upd.dirty || !t6->width) {
 		mutex_unlock(&t6->upd.lock);
+		mutex_unlock(&t6->io_lock);
 		return;
 	}
 	t6->upd.dirty = false;
-	mutex_lock(&t6->io_lock);
 	t0 = ktime_get();
 	t6_convert(t6);
 	/* commits only wait for the conversion above, never for USB */
@@ -638,7 +645,6 @@ static void t6_update_work(struct work_struct *work)
 static void t6_mark_dirty(struct mct_t6 *t6, struct drm_framebuffer *fb,
 			  const struct iosys_map *map)
 {
-	const u8 *src = map->vaddr;	/* shmem GEM: always a system-memory mapping */
 	int w = t6->width, y;
 	ktime_t t0;
 	u64 ns;
@@ -661,19 +667,25 @@ static void t6_mark_dirty(struct mct_t6 *t6, struct drm_framebuffer *fb,
 			y++;
 			continue;
 		}
-		/* one call per run of rows: each call saves and restores FPU state */
+		/*
+		 * One call per run of rows: each call saves and restores FPU state.
+		 * The mapping may be I/O memory (a plain-mapped VRAM import), so
+		 * offset it as an iosys_map.
+		 */
 		if (fb->pitches[0] == w * 4) {
 			struct iosys_map d = IOSYS_MAP_INIT_VADDR(t6->shadow + (size_t)y * w * 4);
-			struct iosys_map sm = IOSYS_MAP_INIT_VADDR((void *)(src + y * fb->pitches[0]));
+			struct iosys_map sm = *map;
 
+			iosys_map_incr(&sm, (size_t)y * fb->pitches[0]);
 			drm_memcpy_from_wc(&d, &sm, (size_t)n * w * 4);
 		} else {
 			int i;
 
 			for (i = y; i < y + n; i++) {
 				struct iosys_map d = IOSYS_MAP_INIT_VADDR(t6->shadow + (size_t)i * w * 4);
-				struct iosys_map sm = IOSYS_MAP_INIT_VADDR((void *)(src + i * fb->pitches[0]));
+				struct iosys_map sm = *map;
 
+				iosys_map_incr(&sm, (size_t)i * fb->pitches[0]);
 				drm_memcpy_from_wc(&d, &sm, w * 4);
 			}
 		}
@@ -761,13 +773,22 @@ static const u64 t6_modifiers[] = {
 static int t6_primary_atomic_check(struct drm_plane *plane, struct drm_atomic_commit *state)
 {
 	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
+	struct drm_framebuffer *fb = new_state->fb;
 	struct drm_crtc_state *crtc_state = NULL;
+	int ret;
 
 	if (new_state->crtc)
 		crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
-	return drm_atomic_helper_check_plane_state(new_state, crtc_state,
-						   DRM_PLANE_NO_SCALING, DRM_PLANE_NO_SCALING,
-						   false, false);
+	ret = drm_atomic_helper_check_plane_state(new_state, crtc_state,
+						  DRM_PLANE_NO_SCALING, DRM_PLANE_NO_SCALING,
+						  false, false);
+	if (ret || !fb || !new_state->visible)
+		return ret;
+	/* the whole framebuffer is the image: no panning, no larger buffers */
+	if (fb->width != crtc_state->mode.hdisplay || fb->height != crtc_state->mode.vdisplay ||
+	    new_state->src_x || new_state->src_y || fb->offsets[0])
+		return -EINVAL;
+	return 0;
 }
 
 static void t6_primary_atomic_update(struct drm_plane *plane, struct drm_atomic_commit *state)
@@ -782,17 +803,24 @@ static void t6_primary_atomic_update(struct drm_plane *plane, struct drm_atomic_
 	if (!fb || !new_state->visible || !t6->width)
 		return;
 	if (fb->width != t6->width || fb->height != t6->height)
-		return;
+		goto invalid;
 	if (!t6_damage_rows(t6, new_state))
 		return;
 	t0 = ktime_get();
 	if (drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
-		return;
+		goto invalid;
 	t6_mark_dirty(t6, fb, &shadow->data[0]);
 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
 	ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
 	t6->stats.ns_commit += ns;
 	t6->stats.ns_commit_max = max(t6->stats.ns_commit_max, ns);
+	return;
+
+invalid:
+	/* this commit's changes never reached the shadow: copy all next time */
+	mutex_lock(&t6->upd.lock);
+	t6->shadow_valid = false;
+	mutex_unlock(&t6->upd.lock);
 }
 
 static const struct drm_plane_helper_funcs t6_primary_helper_funcs = {
@@ -900,7 +928,6 @@ static void t6_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_c
 	struct drm_shadow_plane_state *shadow = to_drm_shadow_plane_state(new_state);
 	struct drm_framebuffer *fb = new_state->fb;
 	int x, y, sx, sy, i, j, idx;
-	const u8 *src;
 	u8 *dst;
 
 	if (!drm_dev_enter(plane->dev, &idx))
@@ -933,7 +960,6 @@ static void t6_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_c
 	put_unaligned_le16(T6_CUR * 4, t6->cur.img + 6);
 	if (drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
 		goto out;
-	src = shadow->data[0].vaddr;
 	dst = t6->cur.img + 8;
 	for (j = 0; j < T6_CUR; j++) {
 		for (i = 0; i < T6_CUR; i++, dst += 4) {
@@ -942,7 +968,8 @@ static void t6_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_c
 			if (vx >= fb->width || vy >= fb->height)
 				memset(dst, 0, 4);
 			else
-				memcpy(dst, src + vy * fb->pitches[0] + vx * 4, 4);
+				iosys_map_memcpy_from(dst, &shadow->data[0],
+						      vy * fb->pitches[0] + vx * 4, 4);
 		}
 	}
 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
@@ -1090,7 +1117,7 @@ static struct drm_display_mode *t6_rb_mode(struct drm_device *dev, int w, int h,
 	mode->vsync_start = vtotal - 14;
 	mode->vsync_end = vtotal - 6;
 	mode->vtotal = vtotal;
-	mode->clock = DIV_ROUND_CLOSEST(mode->htotal * vtotal * hz, 1000);
+	mode->clock = DIV_ROUND_CLOSEST_ULL((u64)mode->htotal * vtotal * hz, 1000);
 	mode->flags = DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_NVSYNC;
 	mode->type = DRM_MODE_TYPE_DRIVER;
 	drm_mode_set_name(mode);
@@ -1281,7 +1308,7 @@ static struct drm_gem_object *t6_gem_prime_import(struct drm_device *dev,
 	struct mct_t6 *t6 = to_t6(dev);
 	struct drm_gem_object *obj;
 
-	if (sysmem && t6->dma_dev) {
+	if (sysmem && t6->dma_dev && !t6->dma_removable) {
 		obj = drm_gem_prime_import_dev(dev, dma_buf, t6->dma_dev);
 		if (!IS_ERR(obj)) {
 			t6->stats.imports_attached++;
@@ -1306,10 +1333,33 @@ static const struct drm_driver t6_drm_driver = {
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCH,
 	.fops = &t6_fops,
-	DRM_GEM_SHMEM_DRIVER_OPS,
+	.dumb_create = drm_gem_shmem_dumb_create,
 	.gem_prime_import = t6_gem_prime_import,
 	.gem_prime_import_sg_table = drm_gem_shmem_prime_import_sg_table,
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
+};
+
+/*
+ * Enable the CRTC before updating the planes: the mode set clears what the
+ * driver knows about the device's frame buffers and cursor, so the planes
+ * of the same commit must come after it, or the first frame and the cursor
+ * after a mode set or resume would be dropped.
+ */
+static void t6_commit_tail(struct drm_atomic_commit *state)
+{
+	struct drm_device *dev = state->dev;
+
+	drm_atomic_helper_commit_modeset_disables(dev, state);
+	drm_atomic_helper_commit_modeset_enables(dev, state);
+	drm_atomic_helper_commit_planes(dev, state, 0);
+	drm_atomic_helper_fake_vblank(state);
+	drm_atomic_helper_commit_hw_done(state);
+	drm_atomic_helper_wait_for_vblanks(dev, state);
+	drm_atomic_helper_cleanup_planes(dev, state);
+}
+
+static const struct drm_mode_config_helper_funcs t6_mode_config_helpers = {
+	.atomic_commit_tail = t6_commit_tail,
 };
 
 static const struct drm_mode_config_funcs t6_mode_config_funcs = {
@@ -1333,6 +1383,7 @@ static int t6_modeset_init(struct mct_t6 *t6)
 	dev->mode_config.cursor_width = T6_CUR;
 	dev->mode_config.cursor_height = T6_CUR;
 	dev->mode_config.funcs = &t6_mode_config_funcs;
+	dev->mode_config.helper_private = &t6_mode_config_helpers;
 
 	ret = drm_universal_plane_init(dev, &t6->primary, 0, &t6_primary_funcs,
 				       t6_formats, ARRAY_SIZE(t6_formats),
@@ -1421,6 +1472,7 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 {
 	struct mct_t6 *t6;
 	struct drm_device *dev;
+	struct device *d;
 	size_t px;
 	int ret;
 
@@ -1466,6 +1518,14 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	if (ret)
 		return ret;
 	t6->dma_dev = usb_intf_get_dma_device(interface);	/* put in t6_release */
+	/*
+	 * An attached import keeps a DMA mapping on the host controller until
+	 * the compositor drops the buffer; one in an unpluggable dock (USB4,
+	 * Thunderbolt) could be gone by then.
+	 */
+	for (d = t6->dma_dev; d; d = d->parent)
+		if (dev_is_removable(d))
+			t6->dma_removable = true;
 	if (!t6->shadow || !t6->rowmask || !t6->img || !t6->hw[0] || !t6->hw[1] || !t6->hw[2])
 		return -ENOMEM;
 
@@ -1477,7 +1537,7 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	drm_debugfs_add_file(dev, "mct_t6_stats", t6_stats_show, NULL);
 
 	usb_set_intfdata(interface, dev);
-	drm_kms_helper_poll_init(dev);
+	drmm_kms_helper_poll_init(dev);
 	ret = drm_dev_register(dev, 0);
 	if (ret)
 		return ret;
@@ -1490,7 +1550,6 @@ static void t6_usb_disconnect(struct usb_interface *interface)
 {
 	struct drm_device *dev = usb_get_intfdata(interface);
 
-	drm_kms_helper_poll_fini(dev);
 	drm_dev_unplug(dev);
 	drm_atomic_helper_shutdown(dev);
 }
