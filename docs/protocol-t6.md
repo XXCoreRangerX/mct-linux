@@ -123,6 +123,19 @@ A 1920x1080 frame is 6.2 MB.
    format it tried, not the real failure). modetest worked either way since it
    uses dumb buffers.
 
+## mct_t6 0.1 first test (2026-10-10)
+
+Loaded fine and niri used it, but the picture was bad: glitches when it
+started and the bottom of the screen cut off, worst with the output rotated
+90 degrees (niri then redraws everything on every change). Likely cause: every
+frame goes to the same device buffer (`dest = 0x30`, `start = end = 0x60`) and
+0.1 sends synchronously, slower than trigger6's queued URBs, so the panel
+scans out a half-written frame. The Windows driver writes each frame to a new
+place in a ring (`dest` advancing from `0x03000000`, `start`/`end` per frame),
+which acts as multiple buffering. Next: reproduce that addressing for raw
+frames, queue transfers like trigger6, and only then compare. Not a candidate
+for use until tested much more carefully.
+
 ## Open questions
 
 - Partial updates with raw BGR24: does type 7 work with format 9, and what
