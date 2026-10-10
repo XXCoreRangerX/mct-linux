@@ -130,3 +130,22 @@ switches to a new frame as soon as it has arrived, not at the start of a
 refresh, so a switch in mid-scan is one hard cut between two whole frames.
 Open: is there a vsync-synchronised flip (a header flag or a request)? Waiting
 for the static analysis of T6InDisp.dll before trying unknown fields.
+
+**NV12 works.** Still image: test card converted to NV12 (BT.601 limited
+range, 4:2:0, Y plane then interleaved Cb/Cr), video header
+`3, len, seq, 6, W | W << 16, start = buf, end = buf + W*H, 0, 6`, session
+`dest = buf - 0x30`. Acked, and on the LG the picture and colours were
+correct (dark blue, white border, gradient, yellow bars).
+
+**NV12 motion, triple buffered**: the same moving block, frames precomputed,
+3.1 MB each: **589 frames in 6 s = 98 fps, 305 MB/s**. On the LG: no tearing
+at all, colours and motion right, smoother than raw, no ghosting or
+artifacts. Raw BGR24 into the same three buffers tore (hard single cuts), so
+the chip seems to flip NV12 surfaces properly and raw ones immediately; NV12
+is the surface format the vendor driver decodes into.
+
+Conclusion for the driver: convert to NV12 (half the data of BGR24) and send
+full frames round robin into three buffers. 1080p60 needs ~187 MB/s, well
+inside the measured ~300 MB/s. Cost: 4:2:0 chroma, so colour edges are
+softer than raw (fine detail in coloured text). A lossless option would need
+raw frames with proper flips, still open.
