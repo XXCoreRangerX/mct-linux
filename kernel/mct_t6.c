@@ -59,7 +59,7 @@
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	5
-#define DRIVER_PATCH	0
+#define DRIVER_PATCH	1
 
 #define T6_EP_OUT	0x02
 
@@ -870,19 +870,29 @@ static bool t6_has_mode(struct drm_connector *connector, int w, int h, int hz)
 	return false;
 }
 
-/* higher refresh rates than the EDID lists, within the monitor's range */
+/*
+ * Higher refresh rates than the EDID lists, up to the monitor's maximum:
+ * the range descriptor if the kernel parsed one (EDID 1.4 only), else the
+ * highest refresh rate among the EDID's own modes.
+ */
 static int t6_add_extra_modes(struct drm_connector *connector, int w, int h)
 {
 	const struct drm_monitor_range_info *range = &connector->display_info.monitor_range;
 	struct mct_t6 *t6 = to_t6(connector->dev);
+	int min_hz = range->min_vfreq, max_hz = range->max_vfreq;
 	struct drm_display_mode *mode;
 	struct t6_mode m;
 	int i, count = 0;
 
+	if (!max_hz) {
+		list_for_each_entry(mode, &connector->probed_modes, head)
+			max_hz = max(max_hz, drm_mode_vrefresh(mode));
+		min_hz = 0;
+	}
 	for (i = 0; i < ARRAY_SIZE(t6_extra_hz); i++) {
 		int hz = t6_extra_hz[i];
 
-		if (hz < range->min_vfreq || hz > range->max_vfreq || t6_has_mode(connector, w, h, hz))
+		if (hz < min_hz || hz > max_hz || t6_has_mode(connector, w, h, hz))
 			continue;
 		mode = t6_rb_mode(connector->dev, w, h, hz);
 		if (!mode)
