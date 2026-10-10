@@ -308,3 +308,32 @@ thirds of the screen), so the copy still takes ~1063 rows per commit:
 **7.34 ms** (one call per run of rows changed nothing, so it is bandwidth,
 ~1.1 GB/s). Likely the scanout buffer sits in the RX 9070's VRAM and is read
 over PCIe. Ceiling for full-screen motion at 1080p144: ~135 fps.
+
+**Why the framebuffer copy costs 7 ms** (`tools/gbm_read_bench.c`: allocate a
+1920x1080 XRGB8888 LINEAR buffer through GBM the way niri does for a
+display-only device, mmap the dma-buf, time CPU reads; no device or root
+needed):
+
+| GPU (render node) | plain memcpy | SSE4.1 streaming loads |
+|---|---|---|
+| RX 9070 (renderD128), RENDERING\\|SCANOUT | 109.5 ms (0.08 GB/s) | 7.0-13.0 ms (0.6-1.2 GB/s) |
+| Raphael iGPU (renderD129), same flags | 10.2 ms | **0.77 ms (10.7 GB/s)** |
+
+The RX 9070 buffers sit in VRAM and are read over PCIe; that is exactly the
+87 ms (plain) and 7 ms (streaming) seen in the driver. System memory reads
+10x faster.
+
+amdgpu (amdgpu_dma_buf.c, 7.2): `begin_cpu_access` would move a buffer to GTT,
+but only if it isn't pinned (the shadow plane's vmap pins it where it is)
+and only within the display domains (VRAM only on a dGPU). An importer that
+attaches and maps without peer-to-peer access gets the buffer pinned in GTT
+instead (`amdgpu_dma_buf_pin` drops VRAM for non-p2p attachments).
+`drm_gem_prime_import_dev()` does that, but needs the driver's
+`gem_prime_import_sg_table` hook: trigger6 overrode `gem_prime_import` with
+it but never set the hook, so every import failed with -EINVAL, which is
+why niri couldn't use the T6 at first.
+
+**mct_t6 0.9**: imports through a DMA attachment as the USB host controller
+(`sysmem` module parameter, default on, runtime writable; falls back to the
+no-map import if the attachment fails), `gem_prime_import_sg_table` set to
+the shmem helper. Stats count attached vs. mapped imports. Untested live.
