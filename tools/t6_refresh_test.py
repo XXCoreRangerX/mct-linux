@@ -3,7 +3,7 @@ import sys, struct, time, math
 import numpy as np
 sys.path.insert(0, "tools")
 import t6dev
-W, H = 1920, 1080
+W, H = (int(v) for v in sys.argv[2].split('x')) if len(sys.argv) > 2 else (1920, 1080)
 BASE = 40.0          # MHz; b0 index 0 = 1 -> "Super Lite" platform
 
 def pll(f_mhz):
@@ -43,7 +43,7 @@ elif hz == 6035:                     # 60 Hz with the pixel clock of 152 Hz RB: 
     print("60 Hz at 353 MHz: 5230 x 1125", flush=True)
 else:
     m, clk, vtot = rb2(hz)
-    print(f"{hz} Hz reduced blanking: 2000 x {vtot}, {clk} kHz", flush=True)
+    print(f"{W}x{H} {hz} Hz reduced blanking: {W + 80} x {vtot}, {clk} kHz", flush=True)
 t.cout(0x12, t.out, 0, m); t.cout(0x31, 0, 0); t.output(True)
 print(f"mode set: {hz} Hz", flush=True)
 time.sleep(2)

@@ -222,3 +222,15 @@ back 6), hsync +, vsync -. Back at 144 Hz afterwards, stable.
 
 USB still limits full-screen raw motion to ~95 fps (NV12, 3.1 MB per frame);
 higher refresh rates pay off with partial updates.
+
+**720p at 240 Hz**: reduced blanking 1360 x 810, 264.4 MHz. Picture, LG OSD
+"240Hz", smooth; **195 fps** of NV12 frames (1.4 MB) sent from Python. Since
+the limit is the pixel clock, lower resolutions go faster: anything up to
+~350 MHz works (1080p up to 150 Hz, 720p up to the monitor's 240).
+
+**mct_t6 0.5**: mode entries are computed from the DRM mode (PLL formula
+above, base clock from `b0` index 0) instead of looked up in the device's
+table, capped at 350 MHz, widths a multiple of 16. Besides the EDID's
+modes it offers reduced-blanking modes at 75, 100, 120, 144, 150, 165, 200
+and 240 Hz for the monitor's preferred size and for 1280x720, where the
+EDID's range limits and the clock cap allow (1080p: up to 150 Hz).

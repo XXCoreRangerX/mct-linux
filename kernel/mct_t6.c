@@ -58,7 +58,7 @@
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	4
+#define DRIVER_MINOR	5
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -91,10 +91,15 @@
  */
 static const u32 t6_bufs[] = { 0x0, 0xfffec0, 0x1fffd80 };
 
-/* one entry of the device's mode table (0x89), also the 0x12 payload */
+/*
+ * One entry of the device's mode table (0x89), also the 0x12 payload. The
+ * pixel clock comes from a PLL: f * x >= 800 MHz with x = 4, 8, 16 or 32
+ * (pll_out selects which), N + P / Q = f * x / base clock.
+ */
 struct t6_mode {
 	__le32 clock_khz;
-	__le16 refresh;
+	u8 refresh;
+	u8 rsvd;
 	__le16 htotal;
 	__le16 hdisplay;
 	__le16 hsync_start;
@@ -103,11 +108,27 @@ struct t6_mode {
 	__le16 vdisplay;
 	__le16 vsync_start;
 	__le16 vsync_len;
-	__le16 unk[3];
+	__le16 pll_p;
+	__le16 pll_q;
+	u8 pll_n;
+	u8 pll_out;
 	u8 hsync_pol;
 	u8 vsync_pol;
-	__le16 unk2;
+	u8 reduced;
+	u8 flags;
 } __packed;
+
+/*
+ * The output works up to about 350 MHz pixel clock whatever the refresh
+ * rate (clean at 348 MHz, artifacts at 353, no signal from 360; see
+ * docs/t6-lab-notebook.md), well above what the mode table offers.
+ */
+#define T6_MAX_CLOCK_KHZ	350000
+/* frame buffers are 0xfffec0 apart; a frame is 0x30 bytes header + NV12 */
+#define T6_BUF_SIZE		0xfffec0
+
+/* extra refresh rates offered for the monitor's own sizes, within its range */
+static const int t6_extra_hz[] = { 75, 100, 120, 144, 150, 165, 200, 240 };
 
 struct t6_session {
 	__le32 type;			/* 0 = video, 3 = audio */
@@ -145,6 +166,7 @@ struct mct_t6 {
 	int nmodes;
 	int output;			/* index the monitor is on */
 	int max_w, max_h;
+	int pll_base_khz;		/* 48 MHz ("Lite") or 40 MHz ("Super Lite") */
 
 	struct mutex io_lock;		/* USB transfers, ctrl and xfer buffers */
 	u8 *ctrl;			/* DMA-able control transfer buffer */
@@ -267,22 +289,50 @@ static int t6_read_modes(struct mct_t6 *t6)
 	return t6->nmodes ? 0 : -ENODEV;
 }
 
-static const struct t6_mode *t6_find_mode(struct mct_t6 *t6, const struct drm_display_mode *mode)
+/* device mode entry for a DRM mode; -ERANGE if the T6 can't drive it */
+static int t6_mode_entry(struct mct_t6 *t6, const struct drm_display_mode *mode,
+			 struct t6_mode *m)
 {
+	static const u8 out_sel[] = { 3, 1, 2, 0 };
+	u64 vco;
 	int i;
 
+	if (mode->clock > T6_MAX_CLOCK_KHZ || mode->flags & DRM_MODE_FLAG_INTERLACE)
+		return -ERANGE;
 	/* the NV12 rows are sent unpadded; the vendor driver needs width % 16 too */
 	if (mode->hdisplay % 16 || mode->vdisplay % 2)
-		return NULL;
-	for (i = 0; i < t6->nmodes; i++) {
-		const struct t6_mode *m = &t6->modes[i];
+		return -ERANGE;
+	if (mode->hdisplay > t6->max_w || mode->vdisplay > t6->max_h ||
+	    0x30 + (u64)mode->hdisplay * mode->vdisplay * 3 / 2 > T6_BUF_SIZE)
+		return -ERANGE;
 
-		if (le16_to_cpu(m->hdisplay) == mode->hdisplay &&
-		    le16_to_cpu(m->vdisplay) == mode->vdisplay &&
-		    le16_to_cpu(m->refresh) == drm_mode_vrefresh(mode))
-			return m;
+	memset(m, 0, sizeof(*m));
+	for (i = 0; i < 4; i++) {
+		vco = (u64)mode->clock << (i + 2);	/* f * 4, 8, 16, 32 in kHz */
+		if (vco >= 800000)
+			break;
 	}
-	return NULL;
+	if (i == 4)
+		return -ERANGE;
+	m->pll_n = div_u64(vco, t6->pll_base_khz);
+	m->pll_p = cpu_to_le16(div_u64((vco - (u64)m->pll_n * t6->pll_base_khz) * 1000,
+				       t6->pll_base_khz));
+	m->pll_q = cpu_to_le16(1000);
+	m->pll_out = out_sel[i];
+
+	m->clock_khz = cpu_to_le32(mode->clock);
+	m->refresh = drm_mode_vrefresh(mode);
+	m->htotal = cpu_to_le16(mode->htotal);
+	m->hdisplay = cpu_to_le16(mode->hdisplay);
+	m->hsync_start = cpu_to_le16(mode->hsync_start);
+	m->hsync_len = cpu_to_le16(mode->hsync_end - mode->hsync_start);
+	m->vtotal = cpu_to_le16(mode->vtotal);
+	m->vdisplay = cpu_to_le16(mode->vdisplay);
+	m->vsync_start = cpu_to_le16(mode->vsync_start);
+	m->vsync_len = cpu_to_le16(mode->vsync_end - mode->vsync_start);
+	m->hsync_pol = !!(mode->flags & DRM_MODE_FLAG_PHSYNC);
+	m->vsync_pol = !!(mode->flags & DRM_MODE_FLAG_PVSYNC);
+	return 0;
 }
 
 static int t6_set_output(struct mct_t6 *t6, bool on)
@@ -693,8 +743,9 @@ static int t6_crtc_atomic_check(struct drm_crtc *crtc, struct drm_atomic_commit 
 {
 	struct mct_t6 *t6 = to_t6(crtc->dev);
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
+	struct t6_mode m;
 
-	if (crtc_state->enable && !t6_find_mode(t6, &crtc_state->mode))
+	if (crtc_state->enable && t6_mode_entry(t6, &crtc_state->mode, &m))
 		return -EINVAL;
 	return drm_crtc_helper_atomic_check(crtc, state);
 }
@@ -703,13 +754,13 @@ static void t6_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commi
 {
 	struct mct_t6 *t6 = to_t6(crtc->dev);
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
-	const struct t6_mode *m = t6_find_mode(t6, &crtc_state->mode);
+	struct t6_mode m;
 	int idx;
 
-	if (!m)
+	if (t6_mode_entry(t6, &crtc_state->mode, &m))
 		return;
 	if (drm_dev_enter(crtc->dev, &idx)) {
-		if (t6_set_mode(t6, m) || t6_ready(t6) || t6_set_output(t6, true))
+		if (t6_set_mode(t6, &m) || t6_ready(t6) || t6_set_output(t6, true))
 			drm_err(&t6->dev, "could not set mode %dx%d\n",
 				crtc_state->mode.hdisplay, crtc_state->mode.vdisplay);
 		drm_dev_exit(idx);
@@ -780,23 +831,106 @@ static int t6_read_edid_block(void *data, u8 *buf, unsigned int block, size_t le
 	return ret == len ? 0 : -EIO;
 }
 
+/*
+ * Reduced blanking as tested on the T6 (80 pixels horizontal blanking, at
+ * least 460 us vertical blanking): low pixel clocks for high refresh rates.
+ */
+static struct drm_display_mode *t6_rb_mode(struct drm_device *dev, int w, int h, int hz)
+{
+	struct drm_display_mode *mode;
+	int vtotal = h + 20;
+
+	while ((u64)(vtotal - h) * 1000000 < (u64)460 * hz * vtotal)
+		vtotal++;
+	mode = drm_mode_create(dev);
+	if (!mode)
+		return NULL;
+	mode->hdisplay = w;
+	mode->hsync_start = w + 8;
+	mode->hsync_end = w + 40;
+	mode->htotal = w + 80;
+	mode->vdisplay = h;
+	mode->vsync_start = vtotal - 14;
+	mode->vsync_end = vtotal - 6;
+	mode->vtotal = vtotal;
+	mode->clock = DIV_ROUND_CLOSEST(mode->htotal * vtotal * hz, 1000);
+	mode->flags = DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_NVSYNC;
+	mode->type = DRM_MODE_TYPE_DRIVER;
+	drm_mode_set_name(mode);
+	return mode;
+}
+
+static bool t6_has_mode(struct drm_connector *connector, int w, int h, int hz)
+{
+	struct drm_display_mode *mode;
+
+	list_for_each_entry(mode, &connector->probed_modes, head)
+		if (mode->hdisplay == w && mode->vdisplay == h && drm_mode_vrefresh(mode) == hz)
+			return true;
+	return false;
+}
+
+/* higher refresh rates than the EDID lists, within the monitor's range */
+static int t6_add_extra_modes(struct drm_connector *connector, int w, int h)
+{
+	const struct drm_monitor_range_info *range = &connector->display_info.monitor_range;
+	struct mct_t6 *t6 = to_t6(connector->dev);
+	struct drm_display_mode *mode;
+	struct t6_mode m;
+	int i, count = 0;
+
+	for (i = 0; i < ARRAY_SIZE(t6_extra_hz); i++) {
+		int hz = t6_extra_hz[i];
+
+		if (hz < range->min_vfreq || hz > range->max_vfreq || t6_has_mode(connector, w, h, hz))
+			continue;
+		mode = t6_rb_mode(connector->dev, w, h, hz);
+		if (!mode)
+			break;
+		if (t6_mode_entry(t6, mode, &m)) {
+			drm_mode_destroy(connector->dev, mode);
+			continue;
+		}
+		drm_mode_probed_add(connector, mode);
+		count++;
+	}
+	return count;
+}
+
 static int t6_conn_get_modes(struct drm_connector *connector)
 {
 	struct mct_t6 *t6 = to_t6(connector->dev);
+	struct drm_display_mode *mode;
 	const struct drm_edid *edid;
-	int count;
+	int count, w = 0, h = 0;
+	bool has_720p = false;
 
 	edid = drm_edid_read_custom(connector, t6_read_edid_block, t6);
 	drm_edid_connector_update(connector, edid);
 	count = drm_edid_connector_add_modes(connector);
 	drm_edid_free(edid);
+
+	list_for_each_entry(mode, &connector->probed_modes, head) {
+		if (mode->type & DRM_MODE_TYPE_PREFERRED && !w) {
+			w = mode->hdisplay;
+			h = mode->vdisplay;
+		}
+		if (mode->hdisplay == 1280 && mode->vdisplay == 720)
+			has_720p = true;
+	}
+	if (w)
+		count += t6_add_extra_modes(connector, w, h);
+	if (has_720p && (w != 1280 || h != 720))
+		count += t6_add_extra_modes(connector, 1280, 720);
 	return count;
 }
 
 static enum drm_mode_status t6_conn_mode_valid(struct drm_connector *connector,
 					       const struct drm_display_mode *mode)
 {
-	return t6_find_mode(to_t6(connector->dev), mode) ? MODE_OK : MODE_BAD;
+	struct t6_mode m;
+
+	return t6_mode_entry(to_t6(connector->dev), mode, &m) ? MODE_CLOCK_RANGE : MODE_OK;
 }
 
 static int t6_conn_detect(struct drm_connector *connector, struct drm_modeset_acquire_ctx *ctx,
@@ -957,6 +1091,17 @@ static void t6_release(struct drm_device *dev, void *res)
 	kvfree(t6->shadow);
 }
 
+/* 0xb0 index 0: 0 = "Lite" with a 48 MHz PLL base, 1 = "Super Lite", 40 MHz */
+static void t6_read_platform(struct mct_t6 *t6)
+{
+	int ret;
+
+	mutex_lock(&t6->io_lock);
+	ret = t6_ctrl_in(t6, 0xb0, 0, 0, 4);
+	t6->pll_base_khz = (ret == 4 && t6->ctrl[0] == 0) ? 48000 : 40000;
+	mutex_unlock(&t6->io_lock);
+}
+
 /*
  * The 5601 in the vendor capture reports its HDMI port as output 1, the
  * 5600 here as output 0: use the first one with a monitor, else 0.
@@ -1005,6 +1150,7 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 		return -ENOMEM;
 
 	t6_pick_output(t6);
+	t6_read_platform(t6);
 	ret = t6_read_modes(t6);
 	if (ret) {
 		drm_err(dev, "could not read the mode table: %d\n", ret);
