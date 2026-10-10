@@ -59,7 +59,7 @@
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	7
-#define DRIVER_PATCH	0
+#define DRIVER_PATCH	1
 
 #define T6_EP_OUT	0x02
 
@@ -120,10 +120,11 @@ struct t6_mode {
 
 /*
  * The output works up to about 350 MHz pixel clock whatever the refresh
- * rate (clean at 348 MHz, artifacts at 353, no signal from 360; see
- * docs/t6-lab-notebook.md), well above what the mode table offers.
+ * rate (artifacts at 353, no signal from 360; see docs/t6-lab-notebook.md),
+ * well above what the mode table offers. At 348 MHz (1080p150) a few green
+ * pixels showed up in daily use, so keep a margin: 1080p144 is 333 MHz.
  */
-#define T6_MAX_CLOCK_KHZ	350000
+#define T6_MAX_CLOCK_KHZ	340000
 /* frame buffers are 0xfffec0 apart; a frame is 0x30 bytes header + NV12 */
 #define T6_BUF_SIZE		0xfffec0
 
@@ -218,6 +219,7 @@ struct mct_t6 {
 	struct {			/* debugfs statistics */
 		u64 updates, skipped, px_damage, bytes, ns_conv, ns_usb;
 		u64 rows, bands;		/* image rows and bands sent */
+		u64 no_clips, clips, clip_px, rows_copied;	/* damage clips per commit */
 		u64 copies, ns_copy, ns_copy_max;	/* framebuffer -> shadow, in the commit */
 		u64 ns_commit, ns_commit_max;		/* the same incl. CPU access setup */
 		ktime_t since;
@@ -619,6 +621,7 @@ static void t6_mark_dirty(struct mct_t6 *t6, struct drm_framebuffer *fb,
 			continue;
 		drm_memcpy_from_wc(&d, &sm, w * 4);
 		t6->stats.px_damage += w;
+		t6->stats.rows_copied++;
 	}
 	t6->shadow_valid = true;
 	ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
@@ -647,6 +650,12 @@ static bool t6_damage_rows(struct mct_t6 *t6, const struct drm_plane_state *stat
 	int h = t6->height, j, k;
 	bool any = false;
 
+	if (!n)
+		t6->stats.no_clips++;
+	t6->stats.clips += n;
+	for (i = 0; i < n; i++)
+		t6->stats.clip_px += (u64)max(clips[i].x2 - clips[i].x1, 0) *
+				     max(clips[i].y2 - clips[i].y1, 0);
 	if (!n || !t6->shadow_valid) {
 		memset(t6->rowmask, 1, h);
 		return true;
@@ -1167,6 +1176,10 @@ static int t6_stats_show(struct seq_file *m, void *data)
 		   div64_u64(t6->stats.updates * 10000, ms) % 10);
 	seq_printf(m, "skipped images   %llu\n", t6->stats.skipped);
 	seq_printf(m, "pixels damaged   %llu\n", t6->stats.px_damage);
+	seq_printf(m, "damage clips     %llu commits without, %llu clips, %llu px in clips\n",
+		   t6->stats.no_clips, t6->stats.clips, t6->stats.clip_px);
+	seq_printf(m, "rows copied      %llu per commit\n",
+		   div64_u64(t6->stats.rows_copied, max_t(u64, t6->stats.copies, 1)));
 	seq_printf(m, "rows sent        %llu in %llu bands (%llu per update)\n",
 		   t6->stats.rows, t6->stats.bands, div64_u64(t6->stats.rows, n));
 	seq_printf(m, "usb bytes        %llu (avg %llu KB/s)\n",
