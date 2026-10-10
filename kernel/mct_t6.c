@@ -58,8 +58,8 @@
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	6
-#define DRIVER_PATCH	1
+#define DRIVER_MINOR	7
+#define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
 
@@ -193,6 +193,8 @@ struct mct_t6 {
 	u8 *ctrl;			/* DMA-able control transfer buffer */
 	u8 *xfer;			/* DMA-able bulk fragment buffer */
 	u8 *shadow;			/* XRGB8888 image as committed by userspace */
+	bool shadow_valid;		/* holds a whole committed image */
+	u8 *rowmask;			/* rows to copy from the framebuffer */
 	u8 *img;			/* the shadow in NV12 */
 	u8 *hw[3];			/* NV12 image each frame buffer holds */
 	bool hw_valid[3];
@@ -209,6 +211,7 @@ struct mct_t6 {
 	struct {
 		u8 *img;		/* header + image being built */
 		u8 *shown;		/* last uploaded */
+		int slot;		/* 0 or 1: which of our two slots is in use */
 		bool uploaded, visible;
 	} cur;
 
@@ -590,32 +593,34 @@ static void t6_update_work(struct work_struct *work)
 	mutex_unlock(&t6->io_lock);
 }
 
+/* copy the rows set in t6->rowmask from the (mapped) framebuffer, kick the worker */
 static void t6_mark_dirty(struct mct_t6 *t6, struct drm_framebuffer *fb,
-			  const struct iosys_map *map, const struct drm_rect *dirty)
+			  const struct iosys_map *map)
 {
 	const u8 *src = map->vaddr;	/* shmem GEM: always a system-memory mapping */
+	int w = t6->width, y;
 	ktime_t t0;
 	u64 ns;
-	int y;
 
 	mutex_lock(&t6->upd.lock);
 	t0 = ktime_get();
 	if (t6->upd.dirty)
 		t6->stats.skipped++;	/* the previous image never went out */
-	t6->stats.px_damage += drm_rect_width(dirty) * drm_rect_height(dirty);
 	/*
 	 * Buffers shared by a GPU are usually mapped write-combined, where plain
 	 * reads crawl (~90 MB/s measured with amdgpu); the streaming-load copy
 	 * is many times faster.
 	 */
-	for (y = dirty->y1; y < dirty->y2; y++) {
-		struct iosys_map d = IOSYS_MAP_INIT_VADDR(t6->shadow +
-							  (y * t6->width + dirty->x1) * 4);
-		struct iosys_map sm = IOSYS_MAP_INIT_VADDR((void *)(src + y * fb->pitches[0] +
-								    dirty->x1 * 4));
+	for (y = 0; y < t6->height; y++) {
+		struct iosys_map d = IOSYS_MAP_INIT_VADDR(t6->shadow + (size_t)y * w * 4);
+		struct iosys_map sm = IOSYS_MAP_INIT_VADDR((void *)(src + y * fb->pitches[0]));
 
-		drm_memcpy_from_wc(&d, &sm, drm_rect_width(dirty) * 4);
+		if (!t6->rowmask[y])
+			continue;
+		drm_memcpy_from_wc(&d, &sm, w * 4);
+		t6->stats.px_damage += w;
 	}
+	t6->shadow_valid = true;
 	ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
 	t6->stats.copies++;
 	t6->stats.ns_copy += ns;
@@ -624,6 +629,46 @@ static void t6_mark_dirty(struct mct_t6 *t6, struct drm_framebuffer *fb,
 	mutex_unlock(&t6->upd.lock);
 
 	queue_work(system_long_wq, &t6->upd.work);
+}
+
+/*
+ * Rows to copy for this commit, in t6->rowmask; false if nothing changed.
+ *
+ * smithay (niri 26.04) computes FB_DAMAGE_CLIPS for a rotated output in the
+ * output's rotated coordinates without mapping them to the framebuffer, and
+ * the kernel then clips away what lies outside it. So take the raw clips and
+ * mark the rows each one would cover under any rotation or flip: correct
+ * clips give a few extra rows, unrotated ones still cover the change.
+ */
+static bool t6_damage_rows(struct mct_t6 *t6, const struct drm_plane_state *state)
+{
+	unsigned int n = drm_plane_get_damage_clips_count(state), i;
+	const struct drm_mode_rect *clips = drm_plane_get_damage_clips(state);
+	int h = t6->height, j, k;
+	bool any = false;
+
+	if (!n || !t6->shadow_valid) {
+		memset(t6->rowmask, 1, h);
+		return true;
+	}
+	memset(t6->rowmask, 0, h);
+	for (i = 0; i < n; i++) {
+		const struct drm_mode_rect *c = &clips[i];
+		int r[4][2] = {
+			{ c->y1, c->y2 },		/* as given, or flipped horizontally */
+			{ h - c->y2, h - c->y1 },	/* upside down */
+			{ c->x1, c->x2 },		/* rotated by 90 or 270 */
+			{ h - c->x2, h - c->x1 },
+		};
+
+		for (j = 0; j < 4; j++) {
+			for (k = max(r[j][0], 0); k < min(r[j][1], h); k++) {
+				t6->rowmask[k] = 1;
+				any = true;
+			}
+		}
+	}
+	return any;
 }
 
 static void t6_stop_updates(struct mct_t6 *t6)
@@ -664,7 +709,6 @@ static void t6_primary_atomic_update(struct drm_plane *plane, struct drm_atomic_
 	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
 	struct drm_shadow_plane_state *shadow = to_drm_shadow_plane_state(new_state);
 	struct drm_framebuffer *fb = new_state->fb;
-	struct drm_rect rect;
 	ktime_t t0;
 	u64 ns;
 
@@ -672,16 +716,12 @@ static void t6_primary_atomic_update(struct drm_plane *plane, struct drm_atomic_
 		return;
 	if (fb->width != t6->width || fb->height != t6->height)
 		return;
-	/*
-	 * Every frame is sent whole, so copy the whole framebuffer. The damage
-	 * clips are not used: niri's clips for a rotated output did not cover
-	 * what changed, which left stale parts on screen.
-	 */
-	drm_rect_init(&rect, 0, 0, fb->width, fb->height);
+	if (!t6_damage_rows(t6, new_state))
+		return;
 	t0 = ktime_get();
 	if (drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
 		return;
-	t6_mark_dirty(t6, fb, &shadow->data[0], &rect);
+	t6_mark_dirty(t6, fb, &shadow->data[0]);
 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
 	ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
 	t6->stats.ns_commit += ns;
@@ -708,10 +748,15 @@ static const u32 t6_cursor_formats[] = {
 	DRM_FORMAT_ARGB8888,
 };
 
-/* the vendor driver gives output 1 the cursor slots from 5 on */
-static int t6_cursor_slot(struct mct_t6 *t6)
+/*
+ * The device has 5 cursor slots per output (output 1 from slot 5 on). A new
+ * image goes into the slot not on screen and is then selected with the show
+ * request: overwriting the visible slot left it scrambled until the next
+ * show.
+ */
+static int t6_cursor_slot(struct mct_t6 *t6, int which)
 {
-	return t6->output ? 5 : 0;
+	return (t6->output ? 5 : 0) + which;
 }
 
 static int t6_cursor_show(struct mct_t6 *t6, bool show)
@@ -721,7 +766,7 @@ static int t6_cursor_show(struct mct_t6 *t6, bool show)
 	if (t6->cur.visible == show)
 		return 0;
 	mutex_lock(&t6->io_lock);
-	ret = t6_ctrl_out(t6, T6_REQ_CUR_SHOW(t6->output), t6_cursor_slot(t6), show, 0);
+	ret = t6_ctrl_out(t6, T6_REQ_CUR_SHOW(t6->output), t6_cursor_slot(t6, t6->cur.slot), show, 0);
 	mutex_unlock(&t6->io_lock);
 	if (ret < 0)
 		return ret;
@@ -729,22 +774,30 @@ static int t6_cursor_show(struct mct_t6 *t6, bool show)
 	return 0;
 }
 
-/* image in chunks of up to 512 bytes, wIndex = byte offset */
+/*
+ * Image in chunks of up to 512 bytes (wIndex = byte offset) into the other
+ * slot, then select that slot; leaves the cursor visible.
+ */
 static int t6_cursor_upload(struct mct_t6 *t6)
 {
+	int next = !t6->cur.slot, slot = t6_cursor_slot(t6, next);
 	int off, n, ret = 0;
 
 	mutex_lock(&t6->io_lock);
 	for (off = 0; off < T6_CUR_BYTES && ret >= 0; off += n) {
 		n = min(T6_CUR_BYTES - off, T6_CTRL_BUF);
 		memcpy(t6->ctrl, t6->cur.img + off, n);
-		ret = t6_ctrl_out(t6, T6_REQ_CUR_IMG(t6->output), t6_cursor_slot(t6), off, n);
+		ret = t6_ctrl_out(t6, T6_REQ_CUR_IMG(t6->output), slot, off, n);
 	}
+	if (ret >= 0)
+		ret = t6_ctrl_out(t6, T6_REQ_CUR_SHOW(t6->output), slot, 1, 0);
 	mutex_unlock(&t6->io_lock);
 	if (ret < 0)
 		return ret;
 	memcpy(t6->cur.shown, t6->cur.img, T6_CUR_BYTES);
+	t6->cur.slot = next;
 	t6->cur.uploaded = true;
+	t6->cur.visible = true;
 	return 0;
 }
 
@@ -827,10 +880,10 @@ static void t6_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_c
 	}
 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
 
+	t6_cursor_move(t6, x, y);
 	if (!t6->cur.uploaded || memcmp(t6->cur.img, t6->cur.shown, T6_CUR_BYTES))
 		if (t6_cursor_upload(t6))
 			goto out;
-	t6_cursor_move(t6, x, y);
 	t6_cursor_show(t6, true);
 out:
 	drm_dev_exit(idx);
@@ -884,6 +937,7 @@ static void t6_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commi
 	/* nothing is known about the frame buffers after a mode set */
 	memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
 	t6->buf = 0;
+	t6->shadow_valid = false;
 	t6->width = crtc_state->mode.hdisplay;
 	t6->height = crtc_state->mode.vdisplay;
 	memset(t6->shadow, 0, (size_t)t6->width * t6->height * 4);
@@ -1302,10 +1356,11 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	t6->hw[1] = kvmalloc(px * 3 / 2, GFP_KERNEL);
 	t6->hw[2] = kvmalloc(px * 3 / 2, GFP_KERNEL);
 	t6->shadow = kvzalloc(px * 4, GFP_KERNEL);
+	t6->rowmask = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
 	ret = drmm_add_action_or_reset(dev, t6_release, NULL);
 	if (ret)
 		return ret;
-	if (!t6->shadow || !t6->img || !t6->hw[0] || !t6->hw[1] || !t6->hw[2])
+	if (!t6->shadow || !t6->rowmask || !t6->img || !t6->hw[0] || !t6->hw[1] || !t6->hw[2])
 		return -ENOMEM;
 
 	ret = t6_modeset_init(t6);
