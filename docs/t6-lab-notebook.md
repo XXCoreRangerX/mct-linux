@@ -17,11 +17,13 @@ drop off the bus until a power cycle).
   5 Gbit/s, 248 mA. One vendor interface: bulk OUT 0x02 and bulk IN 0x81
   (1024 B, bMaxBurst 15), interrupt IN 0x83 (64 B). No audio or network
   functions. Dump: `captures/t6-device/lsusb-v.txt`.
-- Monitor: LG 27GN7 (27GN750, made week 8/2020) on the adapter's HDMI port.
-  EDID 1.3 with a CTA extension, `captures/t6-device/lg-27gn7.edid` and
-  `lg-27gn7-edid-decode.txt`. HDMI VSDB: max TMDS clock 600 MHz (HDMI 2.0
-  class). Preferred timing 1920x1080 at 239.76 Hz (577 MHz), also
-  1920x1080@120 (VIC 63), 1920x1080@60, and 3840x2160 up to 60 Hz (VIC 93-97).
+- Monitor: LG 27GN750 (EDID name "27GN7", made week 8/2020), a **1920x1080
+  240 Hz panel**, on the adapter's HDMI port. EDID 1.3 with a CTA extension,
+  `captures/t6-device/lg-27gn7.edid` and `lg-27gn7-edid-decode.txt`. HDMI VSDB:
+  max TMDS clock 600 MHz (HDMI 2.0 class). Preferred timing 1920x1080 at
+  239.76 Hz (577 MHz), also 1920x1080@120 (VIC 63) and @60. The EDID also
+  lists 3840x2160 VICs (93-97): the monitor accepts a 4K signal and scales it
+  down (common on LG gaming monitors for consoles); the panel is not 4K.
   Range limits 48-240 Hz.
 - The T6's own mode table lets through only modes up to **1920x1080@60**
   (plus 50/59.94 Hz, 1280x1024, 1280x720, 1024x768, 800x600, 640x480 at 60/75).
