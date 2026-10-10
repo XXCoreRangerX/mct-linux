@@ -263,3 +263,24 @@ on the LG twice. Flips sent right after the writes wait for them.
 buffers on the host (3 x 3.1 MB at 1080p), bands merged across gaps of up
 to 8 row pairs, at most 16 bands. The first frame after a mode set is sent
 whole. Stats gain rows and bands sent.
+
+**0.6/0.7 in daily use.**
+- 1080p 144 Hz was missing from the mode list: the LG's EDID has its own
+  1080p 143.98 Hz timing (DTD 3) at 350.39 MHz, rejected by the clock cap
+  but still counted as "already there", hiding the 333 MHz reduced blanking
+  mode. 0.6.1 only counts modes the T6 can drive.
+- 1080p 150 Hz (348.3 MHz): fine in the short test, but **tiny green pixel
+  artifacts** in daily use. 0.7.1 caps at 340 MHz; 1080p144 (333 MHz) is
+  the top mode and stays clean.
+- Cursor sometimes scrambled after a shape change, fixed by moving the
+  pointer to another monitor and back. Cause: the new image was uploaded
+  into the slot on screen and no show request followed. 0.7 uploads into
+  the other of two slots and then selects it (show request with that slot),
+  like the vendor driver's slot handling.
+- smithay 0.7 (niri 26.04) computes FB_DAMAGE_CLIPS for a rotated output in
+  rotated coordinates (`PlaneDamageClips::from_damage` maps with
+  `Transform::Normal`), the kernel clips away what lies outside the
+  framebuffer, so half the screen stayed stale with damage-based copies.
+  Upstream report to write. 0.7 marks the rows a raw clip covers under every
+  rotation/flip. First stats at 150 Hz: still ~whole frames copied per
+  commit (6.7 ms); 0.7.1 counts clips to see why.
