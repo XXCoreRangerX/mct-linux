@@ -9,11 +9,15 @@
  *    table, 0x12 set mode, 0x03 output on/off
  *  - bulk EP 0x02 carries frames: per fragment of at most 0x19000 bytes a
  *    32-byte session header in its own transfer, then the fragment
- *  - a frame is a 48-byte video header plus the image (raw BGR24 here; the
- *    vendor driver sends JPEG)
+ *  - a frame is a 48-byte video header plus the image; the header names the
+ *    surface format and the device addresses to scan out from, and the
+ *    session header's dest is where the data lands (header first, so the
+ *    pixels start at dest + 0x30)
  *
- * Full frames only for now: every update resends the whole screen from a
- * worker, so commits never wait for USB and the newest image always wins.
+ * Frames are converted to NV12, the T6's own surface format, and sent whole
+ * into three device buffers in turn; the chip switches to a buffer once it
+ * has arrived, without tearing. A worker does the sending, so commits never
+ * wait for USB and the newest image always wins.
  */
 
 #include <linux/module.h>
@@ -51,7 +55,7 @@
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	1
+#define DRIVER_MINOR	2
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -68,7 +72,10 @@
 #define T6_CTRL_BUF	512
 #define T6_TIMEOUT	2000
 
-#define T6_FMT_BGR24	0x9
+#define T6_FMT_NV12	0x6
+
+/* scanout buffers in device memory, as used by the vendor driver */
+static const u32 t6_bufs[] = { 0x017ffe30, 0x01fffd90, 0x027ffcf0 };
 
 /* one entry of the device's mode table (0x89), also the 0x12 payload */
 struct t6_mode {
@@ -127,9 +134,11 @@ struct mct_t6 {
 	struct mutex io_lock;		/* USB transfers, ctrl and xfer buffers */
 	u8 *ctrl;			/* DMA-able control transfer buffer */
 	u8 *xfer;			/* DMA-able bulk fragment buffer */
-	u8 *frame;			/* video header + BGR24 image being sent */
+	u8 *frame;			/* video header + NV12 image being sent */
 	u8 *shadow;			/* XRGB8888 image as committed by userspace */
 	int width, height;		/* current mode */
+	unsigned int buf;		/* next scanout buffer */
+	u32 seq;
 
 	struct {
 		struct work_struct work;
@@ -272,7 +281,7 @@ static int t6_set_mode(struct mct_t6 *t6, const struct t6_mode *m)
 }
 
 /* send t6->frame (len bytes) as session header + fragment pairs; io_lock held */
-static int t6_send_frame(struct mct_t6 *t6, size_t len)
+static int t6_send_frame(struct mct_t6 *t6, size_t len, u32 dest)
 {
 	struct t6_session s = { };
 	size_t off;
@@ -281,9 +290,8 @@ static int t6_send_frame(struct mct_t6 *t6, size_t len)
 	for (off = 0; off < len && !ret; off += T6_FRAG) {
 		size_t frag = min_t(size_t, len - off, T6_FRAG);
 
-		/* layout that works on the 5600; the vendor driver differs (see docs) */
 		s.total_len = cpu_to_le32(len);
-		s.dest = cpu_to_le32(0x30);
+		s.dest = cpu_to_le32(dest);
 		s.frag_len = cpu_to_le32(frag);
 		s.offset = cpu_to_le32(off);
 		ret = t6_bulk(t6, &s, sizeof(s));
@@ -296,31 +304,49 @@ static int t6_send_frame(struct mct_t6 *t6, size_t len)
 /* ------------------------------------------------------------------ */
 /* frame updates						      */
 
-/* shadow (XRGB8888) to video header + BGR24 in t6->frame; upd.lock held */
-static size_t t6_build_frame(struct mct_t6 *t6)
+/*
+ * Shadow (XRGB8888) to video header + NV12 (BT.601 limited range, 4:2:0:
+ * Y plane, then interleaved Cb/Cr) in t6->frame, for scanout buffer base.
+ * All modes in the device's table have even sizes. upd.lock held.
+ */
+static size_t t6_build_frame(struct mct_t6 *t6, u32 base)
 {
 	struct t6_video_header *hdr = (struct t6_video_header *)t6->frame;
-	int w = t6->width, h = t6->height;
-	size_t len = sizeof(*hdr) + (size_t)w * h * 3;
-	const u8 *src = t6->shadow;
-	u8 *dst = t6->frame + sizeof(*hdr);
-	size_t i;
+	int w = t6->width, h = t6->height, x, y;
+	size_t len = sizeof(*hdr) + (size_t)w * h * 3 / 2;
+	u8 *py = t6->frame + sizeof(*hdr);
+	u8 *puv = py + (size_t)w * h;
 
 	memset(hdr, 0, sizeof(*hdr));
 	hdr->type = cpu_to_le32(3);
 	hdr->data_len = cpu_to_le32(len);
-	hdr->seq = cpu_to_le32(1);
-	hdr->unk4 = cpu_to_le32(9);
-	hdr->width = cpu_to_le16(w * 3);
-	hdr->start = cpu_to_le32(0x60);
-	hdr->end = cpu_to_le32(0x60);
-	hdr->format = cpu_to_le32(T6_FMT_BGR24);
+	hdr->seq = cpu_to_le32(++t6->seq);
+	hdr->unk4 = cpu_to_le32(T6_FMT_NV12);		/* surface format */
+	hdr->width = cpu_to_le16(w);			/* Y pitch */
+	hdr->height = cpu_to_le16(w);			/* UV pitch */
+	hdr->start = cpu_to_le32(base);			/* Y plane */
+	hdr->end = cpu_to_le32(base + w * h);		/* UV plane */
+	hdr->format = cpu_to_le32(T6_FMT_NV12);
 
-	/* XRGB8888 is B, G, R, X in memory; BGR24 keeps the first three */
-	for (i = 0; i < (size_t)w * h; i++, src += 4, dst += 3) {
-		dst[0] = src[0];
-		dst[1] = src[1];
-		dst[2] = src[2];
+	for (y = 0; y < h; y += 2) {
+		const u8 *s0 = t6->shadow + (size_t)y * w * 4;	/* B, G, R, X */
+		const u8 *s1 = s0 + w * 4;
+		u8 *y0 = py + (size_t)y * w, *y1 = y0 + w;
+		u8 *uv = puv + (size_t)(y / 2) * w;
+
+		for (x = 0; x < w; x += 2, s0 += 8, s1 += 8, y0 += 2, y1 += 2, uv += 2) {
+			int b = s0[0] + s0[4] + s1[0] + s1[4];
+			int g = s0[1] + s0[5] + s1[1] + s1[5];
+			int r = s0[2] + s0[6] + s1[2] + s1[6];
+
+			y0[0] = ((66 * s0[2] + 129 * s0[1] + 25 * s0[0] + 128) >> 8) + 16;
+			y0[1] = ((66 * s0[6] + 129 * s0[5] + 25 * s0[4] + 128) >> 8) + 16;
+			y1[0] = ((66 * s1[2] + 129 * s1[1] + 25 * s1[0] + 128) >> 8) + 16;
+			y1[1] = ((66 * s1[6] + 129 * s1[5] + 25 * s1[4] + 128) >> 8) + 16;
+			/* chroma of the 2x2 block: sums are 4x, so shift by 10 */
+			uv[0] = ((-38 * r - 74 * g + 112 * b + 512) >> 10) + 128;
+			uv[1] = ((112 * r - 94 * g - 18 * b + 512) >> 10) + 128;
+		}
 	}
 	return len;
 }
@@ -330,6 +356,7 @@ static void t6_update_work(struct work_struct *work)
 	struct mct_t6 *t6 = container_of(work, struct mct_t6, upd.work);
 	ktime_t t0, t1;
 	size_t len;
+	u32 base;
 	int idx, ret;
 
 	mutex_lock(&t6->upd.lock);
@@ -340,13 +367,15 @@ static void t6_update_work(struct work_struct *work)
 	t6->upd.dirty = false;
 	mutex_lock(&t6->io_lock);
 	t0 = ktime_get();
-	len = t6_build_frame(t6);
+	base = t6_bufs[t6->buf];
+	t6->buf = (t6->buf + 1) % ARRAY_SIZE(t6_bufs);
+	len = t6_build_frame(t6, base);
 	/* commits only wait for the conversion above, never for USB */
 	mutex_unlock(&t6->upd.lock);
 	t1 = ktime_get();
 
 	if (drm_dev_enter(&t6->dev, &idx)) {
-		ret = t6_send_frame(t6, len);
+		ret = t6_send_frame(t6, len, base - 0x30);
 		if (ret) {
 			drm_err_ratelimited(&t6->dev, "frame update error: %d\n", ret);
 		} else {
