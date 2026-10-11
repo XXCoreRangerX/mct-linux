@@ -23,7 +23,7 @@
       devShells.${system}.default = pkgs.mkShell {
         packages = [
           pkgs.gcc pkgs.gnumake pkgs.pkg-config pkgs.libusb1
-          (pkgs.python3.withPackages (ps: [ ps.pyusb ps.pillow ps.capstone ]))
+          (pkgs.python3.withPackages (ps: [ ps.pyusb ps.numpy ps.pillow ps.capstone ]))
         ];
       };
     };

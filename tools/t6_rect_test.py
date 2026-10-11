@@ -1,3 +1,5 @@
+"""Session 7 rectangle write into a hidden NV12 frame buffer, then an empty
+flip to it: a green box should appear on blue. 1080p60."""
 import os
 import sys, struct, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

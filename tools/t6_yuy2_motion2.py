@@ -1,3 +1,5 @@
+"""YUYV at 1080p: moving block with plane 1 offsets varied, to rule out a
+second plane setting behind the row limit."""
 import os
 import sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

@@ -1,3 +1,4 @@
+"""YUYV byte order: Y0 U Y1 V against Y0 V Y1 U on the same picture."""
 import os
 import sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

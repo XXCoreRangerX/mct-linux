@@ -1,3 +1,5 @@
+"""YUYV frames sent as session 7 rectangle writes instead of the flip's
+payload, to see if the row limit depends on the write path."""
 import os
 import sys, struct, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

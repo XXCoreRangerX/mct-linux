@@ -1,3 +1,5 @@
+"""YUYV at 1080p: colour bands with tick marks, to see how far along a row
+the scanout stays correct (about 1150 px)."""
 import os
 import sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

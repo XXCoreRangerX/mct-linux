@@ -1,3 +1,5 @@
+"""Partial updates on the T6: full frames into two buffers, an empty flip, then
+a session 7 band written into the hidden buffer and flipped to. 1080p60, NV12."""
 import os
 import sys, struct, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

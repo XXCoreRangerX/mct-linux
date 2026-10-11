@@ -1,3 +1,4 @@
+"""YUYV at 1080p: a moving block, for tearing and the stale right part."""
 import os
 import sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

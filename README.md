@@ -1,94 +1,147 @@
 mct-linux
 =========
 
-Linux support for USB displays built on MCT (Magic Control Technology)
-Trigger chips:
+A Linux DRM/KMS driver for USB displays built on MCT (Magic Control
+Technology) Trigger chips:
 
+- Trigger 6 (T6): USB 3 to HDMI adapters such as the "T6 USB Station"
+  (0711:5600; 0711:5601 should work too). Any HDMI monitor, from its EDID:
+  up to 1080p at 144 Hz, 2560x1440 and 3440x1440 at 60 Hz, 3840x2160 at
+  30 Hz.
 - Trigger II (T2): the Wacom DTU-1031X pen display (1024x600, USB
   0711:520d / 0711:5209). The pen (056a:032f) is a separate USB function
   handled by the in-kernel wacom driver. This backend is written for the
-  DTU-1031X: its fixed panel and 180 degree scanout, its init sequence
-  (taken from Wacom's driver) and its brightness control through the pen
-  function. Other T2 adapters are untested and would need changes.
-- Trigger 6 (T6): USB 3 to HDMI adapters such as the "T6 USB Station"
-  (0711:5600; 0711:5601 likely works too), up to 1080p at 144 Hz.
+  DTU-1031X (its fixed panel and 180 degree scanout, its init sequence taken
+  from Wacom's driver, its brightness control through the pen function);
+  other T2 adapters are untested and would need changes.
 
-The vendor drivers are for Windows and macOS (and a closed userspace Linux
-daemon for the T6); the protocols were worked out from USB captures, the
-vendor drivers' disassembly and testing on real hardware.
+MCT's own drivers are for Windows and macOS, plus a userspace Linux driver
+for the T6. The protocols here were worked out from USB captures, the vendor
+drivers' disassembly and testing on real hardware.
+
+Features
+--------
+
+Both chips:
+- works with Wayland and X11 compositors and the text console
+- hardware cursor, DPMS, suspend/resume, hotplug of the USB device
+- commits never wait for USB: a worker sends what changed, the newest image
+  wins, tear-free
+- only rows that really changed are sent
+- statistics in debugfs (mct_t2_stats, mct_t6_stats)
+
+Trigger 6:
+- modes from the monitor's EDID, plus extra refresh rates up to what the
+  monitor and the adapter can do; reduced blanking or a lower rate when a
+  monitor's own timing is out of the adapter's reach
+- pixel formats: exact RGB or YUV 4:4:4 while the screen is still, NV12
+  during large changes (auto, the default), or a fixed format
+- monitor hotplug (debounced), recovery from USB transfer errors; fallbacks
+  for monitors without a usable EDID and for USB 2 links (both not yet
+  tried on hardware)
+- hardware cursor up to 128 px
+- software gamma (the adapter has no gamma tables)
+
+Trigger II (DTU-1031X):
+- lossless picture by default, optional lossy mode for heavy motion that
+  turns lossless again once motion stops
+- backlight brightness, recovery from a device left mid-frame
+
+Not supported: the T6's JPEG mode (it would need an encoder in the kernel;
+see docs/roadmap.md), HDMI audio, models with two outputs, hardware rotation
+(compositors rotate), the T6's YUYV format (doesn't scan out properly).
 
 Contents
 --------
 
-  kernel/   mct, a DRM/KMS driver: a shared core (mct_drv.c) and a backend
-            per chip (mct_t2.c, mct_t6.c). Works with Wayland/X11 and the
-            text console,
-            hardware cursor, DPMS. This is the one to use.
-  t2d/      userspace daemon on top of EVDI. Older, handy for protocol work
-            since it needs no kernel module reloads.
-  nix/      flake packages and a NixOS module.
-  tools/    Python tools used during reverse engineering (codec, init
-            replay, capture parsing, live register experiments).
-  docs/     protocol and research notes.
-  captures/ USB capture of the Windows driver's init.
-  vm/       Windows VM setup used for captures (vendor driver not included).
+  kernel/   the driver, module "mct": a shared DRM core (mct_drv.c) and a
+            backend per chip (mct_t2.c, mct_t6.c)
+  nix/      flake package and NixOS module, two optional niri patches
+  docs/     protocol references, limits, lab notes (docs/README.md)
+  tools/    test and research scripts (tools/README.md)
+  t2d/      older userspace daemon for the T2 on top of EVDI
+  data/, captures/, vm/
+            first probe outputs, one USB capture of the Windows init, the
+            Windows VM setup used for captures (no vendor files)
 
 Building
 --------
 
-Kernel module, out of tree:
+Kernel module, out of tree, against the running kernel's headers:
 
     make -C kernel KDIR=/lib/modules/$(uname -r)/build
     sudo insmod kernel/mct.ko
 
-`MCT_T2=n` or `MCT_T6=n` on the make command line leaves a backend out.
-The driver binds to supported devices automatically; the tablet shows up as
-a USB-n connector, a T6 as HDMI-A-n. To put a text console on it, map a VT to its framebuffer, e.g.
-`con2fbmap 2 1`.
+`MCT_T2=n` or `MCT_T6=n` on the make command line leaves a backend out. The
+driver binds to supported devices automatically. The T6 shows up as an
+HDMI-A-n connector, the tablet as USB-n.
 
 NixOS, plain configuration.nix:
 
     imports = [ /path/to/mct-linux/nix/nixos.nix ];
     hardware.mct.enable = true;
 
-or with flakes, add this repository as an input and use
-`nixosModules.default` with the same option. `hardware.mct.driver =
-"evdi"` selects the EVDI + t2d setup instead of the kernel driver.
+or with flakes, add this repository as an input and import
+`nixosModules.default`; the package is `packages.<system>.mct-kmod`. The
+module also installs `mct-reload`, which unbinds the devices and loads the
+module again (after a rebuild, without a reboot).
 
-`hardware.mct.consoleMap = "01";` adds fbcon=map:01 to the kernel command
-line, which puts every second VT (tty2, tty4, ...) on the tablet once its
-framebuffer appears (assuming the GPU is fb0 and the tablet fb1).
+Options
+-------
 
-`hardware.mct.niriFix = true;` builds niri with two patches: it drops a
-USB display's output properly when it is unplugged (niri 26.04 leaves a
-stale output behind), and it renders display-only devices into their own
-system-memory buffers instead of the GPU's VRAM, which the driver reads ~10x
-faster.
+Module parameters, also writable at runtime in /sys/module/mct/parameters/:
 
-`hardware.mct.lossy = 4;` lets T2 updates too big for one 60 Hz frame go
-lossy (heavy video, photo scrolling); the picture is refined to lossless once
-motion stops. Off by default.
+  format    T6 pixel format: auto (default), rgb24, rgb32, yuv444, nv12.
+            Fixed formats are used where the adapter can scan them out at
+            the current mode, NV12 elsewhere.
+  lossy     T2: maximum lossy tolerance (1-8) for updates too big for one
+            60 Hz frame, refined to lossless once motion stops. 0 = off
+            (default).
 
-`hardware.mct.format` picks the pixel format for T6 adapters: "auto"
-(default: exact RGB, or YUV 4:4:4 where RGB exceeds the adapter's memory
-bandwidth, while the screen is still, NV12 during large changes), or fixed
-"rgb24", "rgb32", "yuv444", "nv12". Both settings can be changed at runtime
-in /sys/module/mct/parameters/.
+NixOS options (hardware.mct.*): `enable`, `format` and `lossy` as above,
+`driver = "evdi"` for the EVDI + t2d route instead of the kernel driver,
+`consoleMap` to put text consoles on the tablet (adds fbcon=map:..., e.g.
+"01" for every second VT), `niriFix` to build niri with the two patches in
+nix/ (drop a removed USB display's output; render display-only devices into
+system memory, which makes reading frames many times faster).
 
-Brightness is exposed as /sys/class/backlight/mct_t2-N (0 = off, 1-9), e.g.
-`brightnessctl -d 'mct_t2-*' set 3`.
+Brightness of the DTU-1031X: /sys/class/backlight/mct_t2-N (0 = off, 1-9),
+e.g. `brightnessctl -d 'mct_t2-*' set 3`.
 
-t2d needs EVDI. EVDI 1.14.x does not build on Linux 7.2 without
-nix/evdi-linux-7.2.patch; 1.15.1 and later build as is.
+Text console on a display: map a VT to its framebuffer, e.g. `con2fbmap 2 1`.
+
+Debugging
+---------
+
+    sudo cat /sys/kernel/debug/dri/*/mct_t6_stats
+    sudo cat /sys/kernel/debug/dri/*/mct_t2_stats
+
+show the mode, the format in use, update rates, bytes sent, timings and
+error counters. The T6 logs its feature level and video memory at probe.
+
+Known issues
+------------
+
+- Some monitors hang their on-screen menu after the signal goes away and
+  comes back, or on a timing they list but don't accept; a power cycle of
+  the monitor brings them back. Over HDMI from the T6, a Gigabyte MO34WQC2
+  showed nothing on its own 3440x1440@60 timing; the driver offers reduced
+  blanking there instead.
+- After a USB transfer error the T6 is reset with the vendor's cancel
+  request; the adapter then reconnects, about 3 s without picture.
+- On some starts the DTU-1031X's picture shows faint vertical lines, a
+  sampling issue of its analog panel link; reloading the driver or a replug
+  gives another try.
+- Compositors that hand over buffers in GPU memory make the driver read
+  them over PCIe (a few ms per frame at 1080p); niri with the patch above
+  doesn't.
 
 Documentation
 -------------
 
-docs/protocol-t2.md and docs/protocol-t6.md are the protocol references.
-docs/t6-lab-notebook.md is the running log of the T6 work and
-docs/t6-comparison.md compares the drivers with each other and with the
-vendor's. The other files cover the T2's init sequence, the hardware, the
-vendor driver, the capture setup and notes on the drivers.
+docs/README.md lists everything: protocol references (protocol-t6.md,
+protocol-t2.md), the T6 limits and the measurements behind them, the
+comparison with the vendor drivers, the roadmap and the lab notebooks.
 
 Credits
 -------

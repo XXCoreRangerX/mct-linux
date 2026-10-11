@@ -1,3 +1,5 @@
+"""YUYV (surface format 0) at 1024x768: rows fit the line buffer here; a
+moving block shows whether its flips are synchronised (they are not)."""
 import os
 import sys, struct, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
