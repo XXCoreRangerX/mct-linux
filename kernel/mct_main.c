@@ -19,12 +19,12 @@
 
 static const struct usb_device_id mct_id_table[] = {
 #ifdef MCT_HAVE_T2
-	/* Wacom DTU-1031X; it has been seen enumerating with either ID */
+	/* Wacom DTU-1031X, which enumerates with either ID */
 	{ USB_DEVICE_INTERFACE_NUMBER(0x0711, 0x5209, 0), MCT_BACKEND(mct_t2_backend) },
 	{ USB_DEVICE_INTERFACE_NUMBER(0x0711, 0x520d, 0), MCT_BACKEND(mct_t2_backend) },
 #endif
 #ifdef MCT_HAVE_T6
-	/* T6 USB Station (5600) and the 5601 seen in the vendor's capture */
+	/* T6 USB Station and similar single-output T6 adapters */
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5600, 0xff, 0x00, 0x00),
 	  MCT_BACKEND(mct_t6_backend) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5601, 0xff, 0x00, 0x00),

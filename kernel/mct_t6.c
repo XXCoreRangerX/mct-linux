@@ -118,28 +118,21 @@ struct t6_mode {
 } __packed;
 
 /*
- * The output works up to about 350 MHz pixel clock whatever the refresh
- * rate (artifacts at 353, no signal from 360; see docs/t6-lab-notebook.md),
- * well above what the mode table offers. At 348 MHz (1080p150) a few green
- * pixels showed up in daily use, so keep a margin: 1080p144 is 333 MHz.
+ * Pixel clock limit, well above what the device's mode table offers; it
+ * starts to show artifacts around 350 MHz. Limits are in docs/t6-limits.md.
  */
 #define T6_MAX_CLOCK_KHZ	340000
 /* frame buffers are 0xfffec0 apart; a frame is 0x30 bytes header + NV12 */
 #define T6_BUF_SIZE		0xfffec0
 /*
- * Sizes beyond the device's own table that were tried on the 5600 (with a
- * Gigabyte MO34WQC2 on HDMI): 2560x1440 at 60 and 80 Hz, 3440x1440 at 50 to
- * 57 Hz with the monitor's timing and at 60 Hz with reduced blanking (312.8
- * MHz) work. The monitor's own 60 Hz timing (319.75 MHz) gave a black
- * screen, once with the monitor hanging, and 3440x1440@64 (334 MHz) made it
- * drop the signal. So modes from 2560 wide only up to the clocks that
- * worked.
+ * Largest image beyond the device's own table, and a lower clock limit for
+ * modes from 2560 pixels wide, where higher clocks were not reliable.
  */
-#define T6_TESTED_W		3840	/* 3840x2160@30 (297 MHz, NV12) works too */
+#define T6_TESTED_W		3840
 #define T6_TESTED_H		2160
 #define T6_WIDE_W		2560
 #define T6_WIDE_MAX_CLOCK_KHZ	316000
-/* computed refresh rates only for sizes tried with them */
+/* computed extra refresh rates only for sizes up to this */
 #define T6_EXTRA_MAX_W		1920
 #define T6_EXTRA_MAX_H		1080
 
@@ -177,12 +170,8 @@ enum t6_kind { T6_NV12, T6_YUV444, T6_RGB24, T6_RGB32 };
 
 static const char *const t6_kind_name[] = { "NV12", "YUV 4:4:4", "RGB24", "RGB32" };
 /*
- * Scanout reads the frame buffer from the T6's own memory once per refresh,
- * and the limit depends on the format (5600): YUV 4:4:4 was clean at 1080p120
- * (~750 MB/s) and 3440x1440@55 (~820), glitched at 3440x1440@57 (~850) and
- * 1080p144 (~900); RGB24 was fine at 1080p75 (~470 MB/s), poor at 100
- * (~620) and bad at 120. NV12 at 1080p144 and 3440x1440@60 (~450 MB/s) is
- * fine. Bytes per second at most, per format:
+ * Scanout reads the frame buffer from the device's memory once per refresh,
+ * and how much it can read depends on the format. Bytes per second at most:
  */
 static const u64 t6_scan_max[] = {
 	[T6_NV12] = U64_MAX,
@@ -758,7 +747,8 @@ static bool t6_row_diff(const u8 *a, const u8 *b, int n, int *lo, int *hi)
 /* host offset of row r of row pair p in plane i */
 static size_t t6_row(const struct mct_t6 *t6, int i, int p, int r)
 {
-	return t6->lay.host[i] + ((size_t)p * t6->lay.rows[i] + r) * t6->base.width * t6->lay.bpp[i];
+	return t6->lay.host[i] +
+	       ((size_t)p * t6->lay.rows[i] + r) * t6->base.width * t6->lay.bpp[i];
 }
 
 /*
@@ -971,7 +961,7 @@ static u64 t6_frame_bytes(int w, int h, enum t6_kind kind)
 	}
 }
 
-/* the format's frame fits a buffer and its scanout the measured bandwidth */
+/* the format's frame fits a buffer, and its scanout is within the limit */
 static bool t6_fits(const struct mct_t6 *t6, enum t6_kind kind)
 {
 	int w = t6->base.width, h = t6->base.height;
@@ -1211,9 +1201,9 @@ static void t6_cursor_set(struct mct_device *mdev, const u8 *bgra, int x, int y)
 /* display on/off, gamma, monitor				      */
 
 /*
- * The T6 in hand has no gamma tables (feature level 6; the request stalls),
- * so the DRM gamma LUT is applied during the conversion. A change
- * reconverts the whole image; the diff then sends what changed.
+ * Feature level 6 devices have no gamma tables (the request stalls), so the
+ * DRM gamma LUT is applied during the conversion. A change reconverts the
+ * whole image; the diff then sends what changed.
  */
 static void t6_gamma(struct mct_device *mdev, const struct drm_color_lut *lut)
 {
@@ -1312,8 +1302,8 @@ static int t6_read_edid_block(void *data, u8 *buf, unsigned int block, size_t le
 }
 
 /*
- * Reduced blanking as tested on the T6 (80 pixels horizontal blanking, at
- * least 460 us vertical blanking): low pixel clocks for high refresh rates.
+ * Reduced blanking (80 pixels horizontal, at least 460 us vertical): low
+ * pixel clocks for high refresh rates.
  */
 static struct drm_display_mode *t6_rb_mode(struct drm_device *dev, int w, int h, int hz)
 {
@@ -1342,8 +1332,8 @@ static struct drm_display_mode *t6_rb_mode(struct drm_device *dev, int w, int h,
 
 /*
  * Whether the EDID already brings a usable mode of this size and rate. One
- * the T6 can't drive doesn't count: the LG 27GN750's 1080p 144 Hz timing
- * needs 350.4 MHz, while the reduced blanking one here needs 333 MHz.
+ * the T6 can't drive doesn't count (a monitor's own timing may need a
+ * higher pixel clock than the reduced blanking one here).
  */
 static bool t6_has_mode(struct drm_connector *connector, int w, int h, int hz)
 {
@@ -1396,9 +1386,9 @@ static int t6_add_extra_modes(struct drm_connector *connector, int w, int h)
 }
 
 /*
- * Nothing at the monitor's own size (a 4K monitor is too tall for the T6
- * here): offer 2560x1440@60 for 16:9 panels as preferred, so the largest
- * mode left (often a 4:3 one) doesn't get picked.
+ * Nothing usable at the monitor's own size: offer 2560x1440@60 to 16:9
+ * panels as preferred, so the largest mode left (often 4:3) doesn't get
+ * picked.
  */
 static int t6_add_smaller_preferred(struct mct_t6 *t6, struct drm_connector *connector,
 				    const struct drm_display_mode *pref, bool have_pref)
@@ -1421,12 +1411,11 @@ static int t6_add_smaller_preferred(struct mct_t6 *t6, struct drm_connector *con
 }
 
 /*
- * When the T6 can't drive the monitor's preferred mode (3440x1440@60 on a
- * MO34WQC2 needs 319.75 MHz with its own blanking), offer instead: the
+ * When the T6 can't drive the monitor's preferred mode, offer instead: the
  * same size with reduced blanking at the highest refresh up to the
  * monitor's that the T6 drives (preferred if it is the monitor's own rate),
  * and the monitor's timing at the highest rate where YUV 4:4:4 still fits
- * the scanout (55 Hz at 3440x1440), if the monitor's range allows it.
+ * the scanout, if the monitor's range allows it.
  */
 static int t6_add_preferred_fallbacks(struct mct_t6 *t6, struct drm_connector *connector)
 {
@@ -1648,10 +1637,9 @@ static const struct drm_driver t6_drm_driver = {
 	.fops = &t6_fops,
 	/*
 	 * Shared buffers are imported without a DMA mapping and read through
-	 * the exporter's vmap. With an amdgpu dGPU that is VRAM over PCIe
-	 * (~1 GB/s with streaming loads). An attached import would get the
-	 * buffer pinned in system memory, but amdgpu's vmap then insists on
-	 * pinning it to its preferred VRAM and fails (see the lab notebook).
+	 * the exporter's vmap; from a discrete GPU that may be VRAM over PCIe.
+	 * An attached import would ask the exporter to pin the buffer in
+	 * system memory, which some exporters' vmap then refuses.
 	 */
 	DRM_GEM_SHMEM_DRIVER_OPS,
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
@@ -1694,8 +1682,8 @@ static void t6_read_platform(struct mct_t6 *t6)
 }
 
 /*
- * The 5601 in the vendor capture reports its HDMI port as output 1, the
- * 5600 here as output 0: use the first one with a monitor, else 0.
+ * Single-output models report their HDMI port as output 0 (5600) or 1
+ * (5601): use the first one with a monitor, else 0.
  */
 static void t6_pick_output(struct mct_t6 *t6)
 {

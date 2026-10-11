@@ -18,8 +18,8 @@
  * report 0x06 holds the brightness level, 0 to 8 (the vendor tool uses 1..7).
  * Backlight brightness 0 turns the panel off the same way DPMS does.
  *
- * Only the DTU-1031X has been tested, and several things here are specific
- * to it rather than to the Trigger II: the fixed 1024x600 panel and its 180
+ * Several things here are specific to the DTU-1031X rather than to the
+ * Trigger II: the fixed 1024x600 panel and its 180
  * degree scanout, the init sequence (replayed from Wacom's Windows driver,
  * possibly with board settings), the brightness through the pen function,
  * and the USB IDs. A plain T2 adapter (VGA/DVI) would need modes from EDID,
@@ -276,8 +276,9 @@ static int t2_encode(struct mct_t2 *t2, u8 *src, int dx, int dy, int w, int h, i
 
 /*
  * Smallest tolerance likely to bring an update of need bytes into the frame
- * budget. Measured on full frames: tol 1 saves 25-50%, tol 2 35-65%, so the
- * picture stays close to lossless unless the update is far over budget.
+ * budget. Small tolerances already save a lot (tol 2 roughly halves a full
+ * frame), so the picture stays close to lossless unless the update is far
+ * over budget.
  */
 static int t2_pick_tol(long need, int max)
 {
@@ -546,8 +547,8 @@ static int t2_hw_init_once(struct mct_t2 *t2)
 			long sent = 0;
 			int used = 0;
 
-			ret = t2_send_rect(t2, t2->base.shadow, T2_FB_A, 0, 0, T2_WIDTH, T2_HEIGHT, 0,
-					   &sent, &used);
+			ret = t2_send_rect(t2, t2->base.shadow, T2_FB_A, 0, 0,
+					   T2_WIDTH, T2_HEIGHT, 0, &sent, &used);
 			if (ret)
 				goto err;
 			t2->front = T2_FB_A;

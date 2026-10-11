@@ -109,7 +109,7 @@ static void mct_copy_rows(struct mct_device *mdev, struct drm_framebuffer *fb,
 	if (mdev->dirty)
 		mdev->stats.skipped++;	/* the previous image never went out */
 	/*
-	 * Our own (shmem) buffers are cached system memory, cheap to read:
+	 * Buffers allocated here (shmem) are cached system memory, cheap to read:
 	 * compare each damaged row with the shadow and only take the ones that
 	 * really changed. Compositors' damage is coarse (whole windows, or all
 	 * rows on a rotated output with the clip workaround below).
@@ -130,8 +130,7 @@ static void mct_copy_rows(struct mct_device *mdev, struct drm_framebuffer *fb,
 	}
 	/*
 	 * Buffers shared by a GPU are usually mapped write-combined, where plain
-	 * reads crawl (~90 MB/s measured with amdgpu); the streaming-load copy
-	 * is many times faster.
+	 * reads are very slow; the streaming-load copy is many times faster.
 	 */
 	for (y = 0; y < mdev->height; ) {
 		int n = 0;
@@ -187,11 +186,11 @@ done:
 /*
  * Rows to copy for this commit, in rowmask; false if nothing changed.
  *
- * smithay (niri 26.04) computes FB_DAMAGE_CLIPS for a rotated output in the
- * output's rotated coordinates without mapping them to the framebuffer, and
- * the kernel then clips away what lies outside it. So take the raw clips and
- * mark the rows each one would cover under any rotation or flip: correct
- * clips give a few extra rows, unrotated ones still cover the change.
+ * Some compositors have sent FB_DAMAGE_CLIPS for a rotated output in the
+ * output's rotated coordinates instead of the framebuffer's, and the kernel
+ * then clips away what lies outside it. So take the raw clips and mark the
+ * rows each one would cover under any rotation or flip: correct clips give
+ * a few extra rows, unrotated ones still cover the change.
  */
 static bool mct_damage_rows(struct mct_device *mdev, const struct drm_plane_state *state)
 {
@@ -368,7 +367,8 @@ static void mct_crtc_atomic_flush(struct drm_crtc *crtc, struct drm_atomic_commi
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
 
 	if (crtc_state->color_mgmt_changed && mdev->funcs->gamma)
-		mdev->funcs->gamma(mdev, crtc_state->gamma_lut ? crtc_state->gamma_lut->data : NULL);
+		mdev->funcs->gamma(mdev, crtc_state->gamma_lut ?
+					 crtc_state->gamma_lut->data : NULL);
 	drm_crtc_vblank_atomic_flush(crtc, state);
 }
 
@@ -509,7 +509,13 @@ static const struct drm_connector_funcs mct_conn_funcs = {
 /* ------------------------------------------------------------------ */
 /* debugfs							      */
 
-#define MS2(ns, n)	div64_u64(ns, (n) * 1000000), div64_u64(ns, (n) * 10000) % 100
+/* "ms.hh" for a total of ns over n events */
+static void mct_print_ms(struct seq_file *m, u64 ns, u64 n)
+{
+	u64 hundredths = div64_u64(ns, n * 10000);
+
+	seq_printf(m, "%llu.%02llu", div_u64(hundredths, 100), hundredths % 100);
+}
 
 static int mct_stats_show(struct seq_file *m, void *data)
 {
@@ -527,11 +533,16 @@ static int mct_stats_show(struct seq_file *m, void *data)
 		   mdev->stats.no_clips, mdev->stats.clips, mdev->stats.clip_px);
 	seq_printf(m, "rows changed     %llu per commit\n",
 		   div64_u64(mdev->stats.rows_copied, copies));
-	seq_printf(m, "ms per fb copy   %llu.%02llu (max %llu.%02llu) over %llu copies\n",
-		   MS2(mdev->stats.ns_copy, copies), MS2(mdev->stats.ns_copy_max, 1),
-		   mdev->stats.copies);
-	seq_printf(m, "ms per commit    %llu.%02llu (max %llu.%02llu) incl. cpu access setup\n",
-		   MS2(mdev->stats.ns_commit, copies), MS2(mdev->stats.ns_commit_max, 1));
+	seq_puts(m, "ms per fb copy   ");
+	mct_print_ms(m, mdev->stats.ns_copy, copies);
+	seq_puts(m, " (max ");
+	mct_print_ms(m, mdev->stats.ns_copy_max, 1);
+	seq_printf(m, ") over %llu copies\n", mdev->stats.copies);
+	seq_puts(m, "ms per commit    ");
+	mct_print_ms(m, mdev->stats.ns_commit, copies);
+	seq_puts(m, " (max ");
+	mct_print_ms(m, mdev->stats.ns_commit_max, 1);
+	seq_puts(m, ") incl. cpu access setup\n");
 	return 0;
 }
 
