@@ -444,3 +444,9 @@ plane 0 = plane 1 = fb + 0x30, pitch in bytes, second pitch 0):
   a JPEG 4:2:2 decode target); left open.
 BGR24 needs the same bandwidth as YUV 4:4:4 and is exact, so it is the
 better full-quality format.
+
+**mct_t6 0.15**: module parameter `format` replaces `yuv444`: auto (BGR24
+at rest, NV12 during large changes; default), rgb24, rgb32, yuv444, nv12;
+the full colour formats only where the scanout bandwidth allows (otherwise
+NV12). Layouts carry bytes per pixel; packed RGB partial updates are
+session 7 writes with both parts on the same plane (3n rows per write).
