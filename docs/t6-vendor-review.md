@@ -5,7 +5,13 @@ the decompiled Windows T6InDisp.dll (`captures/t6-research/dll-analysis-files/dr
 the Windows capture and the macOS driver binaries, looking for what they do that
 mct doesn't. Things already covered in [t6-comparison.md](t6-comparison.md)
 (JPEG, audio, dual output, rotation, idle refresh, full-range YUV) are left out.
-Ranked by expected value; none of it is implemented yet.
+Ranked by expected value.
+
+Status (mct_t6 0.20.0): done 1 (`0x14` turned out to restart the 5600), 2, 3,
+4, 5, 6, 8, 10 (read, logged, feature level and memory gated), 12, 14 (96 px,
+128 doesn't fit the upload offsets). Tried and dropped: 7 (flag 2 doesn't
+fix the 3440x1440@60 monitor timing), 15 (frame done isn't tied to the
+refresh). Open: 9, 11, 13, 16.
 
 ## Robustness
 
