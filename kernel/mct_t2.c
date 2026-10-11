@@ -58,6 +58,7 @@
 #include <drm/drm_vblank.h>
 #include <drm/drm_vblank_helper.h>
 
+#include "mct.h"
 #include "mct_t2_init.h"
 
 static int lossy;
@@ -1530,30 +1531,9 @@ static int t2_resume(struct usb_interface *interface)
 	return drm_mode_config_helper_resume(dev);
 }
 
-static const struct usb_device_id id_table[] = {
-	/* Wacom DTU-1031X; it has been seen enumerating with either ID */
-	{ USB_DEVICE_INTERFACE_NUMBER(0x0711, 0x5209, 0) },
-	{ USB_DEVICE_INTERFACE_NUMBER(0x0711, 0x520d, 0) },
-	{},
-};
-MODULE_DEVICE_TABLE(usb, id_table);
-
-static struct usb_driver t2_usb_driver = {
-	.name = DRIVER_NAME,
+const struct mct_backend mct_t2_backend = {
 	.probe = t2_usb_probe,
 	.disconnect = t2_usb_disconnect,
-	.id_table = id_table,
-	/*
-	 * Keep URBs alive on a software unbind (sysfs, rmmod): disconnect waits
-	 * for the in-flight frame, so the firmware is never left halfway through
-	 * a command's payload, which garbles the next init.
-	 */
-	.soft_unbind = 1,
-	.suspend = pm_ptr(t2_suspend),
-	.resume = pm_ptr(t2_resume),
-	.reset_resume = pm_ptr(t2_resume),
+	.suspend = t2_suspend,
+	.resume = t2_resume,
 };
-
-module_usb_driver(t2_usb_driver);
-MODULE_DESCRIPTION("DRM driver for MCT Trigger II USB displays (Wacom DTU-1031X)");
-MODULE_LICENSE("GPL");

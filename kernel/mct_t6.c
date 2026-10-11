@@ -56,6 +56,8 @@
 #include <drm/drm_vblank.h>
 #include <drm/drm_vblank_helper.h>
 
+#include "mct.h"
+
 static char *format = "auto";
 module_param(format, charp, 0644);
 MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at rest, NV12 during large changes; default), rgb24, rgb32, yuv444, nv12. The full colour formats are only used where the device can scan them out at the current mode.");
@@ -2158,24 +2160,9 @@ static int t6_resume(struct usb_interface *interface)
 	return drm_mode_config_helper_resume(dev);
 }
 
-static const struct usb_device_id id_table[] = {
-	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5600, 0xff, 0x00, 0x00) },
-	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5601, 0xff, 0x00, 0x00) },
-	{},
-};
-MODULE_DEVICE_TABLE(usb, id_table);
-
-static struct usb_driver t6_usb_driver = {
-	.name = DRIVER_NAME,
+const struct mct_backend mct_t6_backend = {
 	.probe = t6_usb_probe,
 	.disconnect = t6_usb_disconnect,
-	.id_table = id_table,
-	.soft_unbind = 1,
-	.suspend = pm_ptr(t6_suspend),
-	.resume = pm_ptr(t6_resume),
-	.reset_resume = pm_ptr(t6_resume),
+	.suspend = t6_suspend,
+	.resume = t6_resume,
 };
-
-module_usb_driver(t6_usb_driver);
-MODULE_DESCRIPTION("DRM driver for MCT Trigger 6 USB displays");
-MODULE_LICENSE("GPL");

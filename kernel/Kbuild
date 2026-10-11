@@ -1,2 +1,11 @@
-obj-m += mct_t2.o
-obj-m += mct_t6.o
+# One module for all MCT Trigger chips; leave out a backend with MCT_T2=n or
+# MCT_T6=n on the make command line.
+MCT_T2 ?= y
+MCT_T6 ?= y
+
+obj-m += mct.o
+mct-y := mct_main.o
+mct-$(MCT_T2) += mct_t2.o
+mct-$(MCT_T6) += mct_t6.o
+ccflags-$(MCT_T2) += -DMCT_HAVE_T2
+ccflags-$(MCT_T6) += -DMCT_HAVE_T6

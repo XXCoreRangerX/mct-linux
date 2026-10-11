@@ -1,8 +1,8 @@
-# mct_t2 DRM kernel module, built against the given kernelPackages.
+# mct DRM kernel module (Trigger II and Trigger 6), built against the given kernelPackages.
 { lib, stdenv, kernel }:
 stdenv.mkDerivation {
-  pname = "mct-t2";
-  version = "0.3.19-${kernel.version}";
+  pname = "mct";
+  version = "0.4.0-${kernel.version}";
   src = ../kernel;
   nativeBuildInputs = kernel.moduleBuildDependencies;
   # toolchain flags only; drop the in-tree O=/--eval flags
@@ -12,7 +12,7 @@ stdenv.mkDerivation {
   ];
   installTargets = [ "install" ];
   meta = {
-    description = "DRM driver for MCT Trigger II USB displays (Wacom DTU-1031X)";
+    description = "DRM driver for MCT Trigger USB displays (Trigger II, Trigger 6)";
     license = lib.licenses.gpl2Only;
     platforms = lib.platforms.linux;
   };

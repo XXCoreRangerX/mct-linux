@@ -46,15 +46,28 @@ in
         fit into one 60 Hz frame (heavy video, photo scrolling). The driver
         uses 1 or 2 when that is enough and this value only for updates far
         over budget; the picture is refined to lossless about 150 ms after
-        motion stops. 0 = always lossless. 4 matches the vendor driver. Can be changed at runtime through
-        /sys/module/mct_t2/parameters/lossy.
+        motion stops. 0 = always lossless. 4 matches the vendor driver.
+        Trigger II (Wacom DTU-1031X) only. Can be changed at runtime through
+        /sys/module/mct/parameters/lossy.
+      '';
+    };
+    format = lib.mkOption {
+      type = lib.types.enum [ "auto" "rgb24" "rgb32" "yuv444" "nv12" ];
+      default = "auto";
+      description = ''
+        Pixel format for Trigger 6 adapters. "auto": exact RGB (or YUV 4:4:4
+        where RGB exceeds the adapter's memory bandwidth) while the screen is
+        still, NV12 during large changes. The others fix the format; full
+        colour formats still fall back to NV12 at modes the adapter can't
+        scan them out at. Can be changed at runtime through
+        /sys/module/mct/parameters/format.
       '';
     };
     driver = lib.mkOption {
       type = lib.types.enum [ "kernel" "evdi" ];
       default = "kernel";
       description = ''
-        "kernel": native DRM driver mct_t2 (works on the text console too).
+        "kernel": native DRM driver (module mct; works on the text console too).
         "evdi": EVDI virtual connector + t2d userspace daemon.
       '';
     };
@@ -72,28 +85,34 @@ in
 
     (lib.mkIf (cfg.driver == "kernel") {
       boot.extraModulePackages = [ kmod ];
-      boot.extraModprobeConfig = lib.mkIf (cfg.lossy != 0) "options mct_t2 lossy=${toString cfg.lossy}";
+      boot.extraModprobeConfig = "options mct lossy=${toString cfg.lossy} format=${cfg.format}";
       # swap in the module of the current generation without rebooting
-      environment.systemPackages = [
-        (pkgs.writeShellScriptBin "mct-t2-reload" ''
-          set -eu
-          [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
-          for intf in /sys/bus/usb/drivers/mct_t2/*:*; do
-            [ -e "$intf" ] && basename "$intf" > /sys/bus/usb/drivers/mct_t2/unbind
-          done
-          sleep 2
-          rmmod mct_t2 || { echo "mct_t2 still in use (compositor holding the old device?)" >&2; exit 1; }
-          insmod /run/current-system/kernel-modules/lib/modules/$(uname -r)/updates/mct_t2.ko.xz
-          echo "mct_t2 reloaded"
-        '')
-      ];
+      environment.systemPackages =
+        let
+          reload = pkgs.writeShellScriptBin "mct-reload" ''
+            set -eu
+            [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+            for intf in /sys/bus/usb/drivers/mct/*:*; do
+              [ -e "$intf" ] && basename "$intf" > /sys/bus/usb/drivers/mct/unbind
+            done
+            sleep 2
+            rmmod mct || { echo "mct still in use (compositor holding the old device?)" >&2; exit 1; }
+            modprobe mct
+            echo "mct reloaded"
+          '';
+        in
+        [
+          reload
+          # the old name
+          (pkgs.writeShellScriptBin "mct-t2-reload" ''exec ${reload}/bin/mct-reload "$@"'')
+        ];
       boot.kernelParams = lib.optional (cfg.consoleMap != null) "fbcon=map:${cfg.consoleMap}";
-      # the USB alias autoloads mct_t2 when the tablet appears
+      # the USB aliases autoload mct when a supported device appears
       # raw device access for the logged-in user (tools/, after unbinding the driver).
       # uaccess must be tagged before 73-seat-late.rules, so not via extraRules (99-local).
       services.udev.packages = [
         (pkgs.writeTextDir "etc/udev/rules.d/70-mct-t2.rules" ''
-          SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d", TAG+="uaccess"
+          SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d|5600|5601", TAG+="uaccess"
         '')
       ];
     })
@@ -102,7 +121,7 @@ in
       boot.extraModulePackages = [ evdi ];
       boot.kernelModules = [ "evdi" ];
       boot.extraModprobeConfig = "options evdi initial_device_count=1";
-      boot.blacklistedKernelModules = [ "mct_t2" ];
+      boot.blacklistedKernelModules = [ "mct" ];
 
       # video function of the tablet: accessible to the logged-in user, pulls in the daemon
       services.udev.extraRules = ''
