@@ -51,10 +51,19 @@ Later:
   with reduced blanking in NV12, 3440x1440@50 in 4:4:4. The monitor's own
   3440x1440@60 timing (319.75 MHz) stays off. Buffers are sized per mode
   (~41 MB at 1080p, ~99 MB at 3440x1440). 4K30 (3840x2160, NV12) works too.
-- **T6 JPEG** for full-screen motion above the USB limit: not in the kernel
-  driver (no in-kernel encoder, would not be accepted upstream). Possible as a
-  userspace program (EVDI + encoder, like t2d), optionally using a GPU JPEG
-  encoder through VA-API. The chip only decodes.
+- **Userspace companion app** (like DisplayLink Manager or the vendors'
+  tray apps): settings in one place (format/auto mode, T2 lossy, brightness,
+  modes), and optional extras the kernel driver can't carry:
+  - **T6 JPEG** for full-screen motion above the USB limit. The chip only
+    decodes; the host has to encode, which can't live in the kernel driver
+    (no in-kernel JPEG encoder, CPU heavy, wouldn't be accepted upstream).
+    MCT's Ubuntu driver does it in userspace: EVDI virtual display +
+    libjpeg-turbo. Where it would help on USB 3: full-screen video/games at
+    large sizes (3440x1440 NV12 full frames top out around 48 fps; JPEG
+    could reach 60). Options: an EVDI-based mode like t2d, or a path where
+    the kernel driver hands frames to a userspace encoder; a GPU JPEG
+    encoder through VA-API where available.
+  - On USB 2 links, JPEG is what keeps the vendor drivers usable.
 - **Other compositors:** KDE/GNOME read the frame from VRAM (~5.8 ms per
   1080p frame). Test them; upstream the niri display-only allocation patch.
 - **T6 second output and audio:** needs a 5601 or a dock.
