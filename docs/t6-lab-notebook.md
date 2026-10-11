@@ -615,3 +615,14 @@ convert 0.70 ms and USB 2.06 ms per update, 471 MB/s while busy.
   fit at 3440x1440). Live: niri picked 3440x1440@60 by itself, NV12 (4:4:4
   needs ~890 MB/s there), convert 1.54 ms, USB 4.01 ms per update, 461 MB/s
   while busy.
+
+**3440x1440 limits** (`tools/t6_clock_sweep.py more` / `color`):
+- Refresh: 62 Hz with reduced blanking (323.7 MHz) shows; 64 Hz (334.3 MHz)
+  made the MO34WQC2 drop the signal and fall back to its DP input (the LG
+  takes 1080p144 at 333 MHz, so this is the monitor). The driver only adds
+  the 60 Hz reduced blanking mode for it.
+- YUV 4:4:4 scanout: clean at 52 and 55 Hz (~817 MB/s), lines/flicker at 57
+  (~847). Together with 1080p120 clean (~746) and 1080p144 bad (~896), the
+  limit is ~820 MB/s, not 760. Driver: 4:4:4 up to 820 MB/s; the extra
+  mode next to the reduced blanking 60 Hz one is now the monitor's timing
+  at the highest rate 4:4:4 fits (3440x1440@55, was 50).
