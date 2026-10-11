@@ -431,3 +431,4 @@ measured only against buffers whose content is known, so refilling after a
 switch doesn't count), back to 4:4:4 150 ms after the last large update
 (timer resends the image). `yuv444=1` forces 4:4:4, `0` NV12; the bandwidth
 guard applies to both 4:4:4 settings.
+0.14 live at 120 Hz: drags snappy, text sharpens quickly after stopping.
