@@ -77,7 +77,7 @@ MODULE_PARM_DESC(lossy, "Maximum lossy tolerance (1-8) for updates too big to se
 #define T2_ENC_MAX	(T2_WIDTH * (T2_HEIGHT + 16) * 3 + 4096)
 #define T2_TIMEOUT	2000
 
-#define T2_CUR		MCT_CUR			/* hardware cursor is 64x64 */
+#define T2_CUR		64			/* hardware cursor is 64x64 */
 #define T2_CUR_BYTES	(T2_CUR * T2_CUR * 4)
 
 /* rows of unchanged pixels that still get merged into one update rect */
@@ -1014,7 +1014,7 @@ static void t2_cursor_set(struct mct_device *mdev, const u8 *bgra, int x, int y)
 				memset(dst, 0, 4);
 				continue;
 			}
-			px = bgra + vy * MCT_CUR_PITCH + vx * 4;
+			px = bgra + vy * T2_CUR * 4 + vx * 4;
 			dst[0] = min_t(u8, px[3], 0xfe);	/* vendor uses 0xfe for opaque */
 			dst[1] = px[0];
 			dst[2] = px[1];
@@ -1173,6 +1173,7 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 		.max_w = T2_WIDTH,
 		.max_h = T2_HEIGHT,
 		.connector_type = DRM_MODE_CONNECTOR_USB,
+		.cursor_size = T2_CUR,
 		.encoder_type = DRM_MODE_ENCODER_NONE,
 		.stats_name = "mct_t2_stats",
 	};

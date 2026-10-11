@@ -22,8 +22,6 @@ struct usb_interface;
 struct drm_color_lut;
 struct mct_device;
 
-#define MCT_CUR		64		/* cursor size */
-#define MCT_CUR_PITCH	(MCT_CUR * 4)
 
 struct mct_funcs {
 	/* monitor and modes */
@@ -49,9 +47,10 @@ struct mct_funcs {
 	void (*gamma)(struct mct_device *mdev, const struct drm_color_lut *lut);
 
 	/*
-	 * Cursor: MCT_CUR x MCT_CUR pixels B, G, R, A as on the screen
-	 * (transparent outside the framebuffer), (x, y) = the box's top left
-	 * on the screen, may be negative.
+	 * Cursor: cursor_size x cursor_size pixels B, G, R, A as on the
+	 * screen, rows cursor_size * 4 bytes apart (transparent outside the
+	 * framebuffer), (x, y) = the box's top left on the screen, may be
+	 * negative.
 	 */
 	void (*cursor_set)(struct mct_device *mdev, const u8 *bgra, int x, int y);
 	void (*cursor_hide)(struct mct_device *mdev);
@@ -63,6 +62,7 @@ struct mct_config {
 	const struct mct_funcs *funcs;
 	int min_w, min_h, max_w, max_h;	/* image sizes */
 	int connector_type, encoder_type;
+	int cursor_size;		/* square hardware cursor, pixels */
 	bool poll;			/* monitor can change: poll the connector */
 	bool gamma;			/* offer a 256-entry gamma LUT */
 	const char *stats_name;		/* debugfs file */
@@ -91,6 +91,7 @@ struct mct_device {
 	struct work_struct work;	/* runs funcs->update */
 	struct delayed_work settle_work;	/* marks dirty and runs the worker */
 	u8 *cur;			/* cursor pixels for funcs->cursor_set */
+	int cur_size;
 
 	struct {			/* debugfs statistics of the commit side */
 		u64 skipped;			/* images replaced before they went out */

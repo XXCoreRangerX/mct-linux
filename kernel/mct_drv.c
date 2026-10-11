@@ -300,13 +300,14 @@ static const struct drm_plane_funcs mct_plane_funcs = {
 
 static int mct_cursor_atomic_check(struct drm_plane *plane, struct drm_atomic_commit *state)
 {
+	struct mct_device *mdev = to_mct(plane->dev);
 	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
 	struct drm_framebuffer *fb = new_state->fb;
 	struct drm_crtc_state *crtc_state = NULL;
 
 	if (new_state->crtc)
 		crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
-	if (fb && (fb->width > MCT_CUR || fb->height > MCT_CUR))
+	if (fb && (fb->width > mdev->cur_size || fb->height > mdev->cur_size))
 		return -EINVAL;
 	return drm_atomic_helper_check_plane_state(new_state, crtc_state,
 						   DRM_PLANE_NO_SCALING, DRM_PLANE_NO_SCALING,
@@ -329,10 +330,10 @@ static void mct_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_
 	}
 	if (drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
 		goto out;
-	memset(mdev->cur, 0, MCT_CUR * MCT_CUR_PITCH);
-	w = min_t(int, fb->width, MCT_CUR) * 4;
-	for (y = 0; y < min_t(int, fb->height, MCT_CUR); y++)
-		iosys_map_memcpy_from(mdev->cur + y * MCT_CUR_PITCH, &shadow->data[0],
+	memset(mdev->cur, 0, mdev->cur_size * mdev->cur_size * 4);
+	w = min_t(int, fb->width, mdev->cur_size) * 4;
+	for (y = 0; y < min_t(int, fb->height, mdev->cur_size); y++)
+		iosys_map_memcpy_from(mdev->cur + y * mdev->cur_size * 4, &shadow->data[0],
 				      y * fb->pitches[0], w);
 	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
 	mdev->funcs->cursor_set(mdev, mdev->cur, new_state->crtc_x, new_state->crtc_y);
@@ -599,7 +600,8 @@ int mct_init(struct mct_device *mdev, const struct mct_config *cfg)
 		return ret;
 	mdev->rowmask = drmm_kzalloc(dev, rows, GFP_KERNEL);
 	mdev->changed = drmm_kzalloc(dev, rows, GFP_KERNEL);
-	mdev->cur = drmm_kzalloc(dev, MCT_CUR * MCT_CUR_PITCH, GFP_KERNEL);
+	mdev->cur_size = cfg->cursor_size;
+	mdev->cur = drmm_kzalloc(dev, mdev->cur_size * mdev->cur_size * 4, GFP_KERNEL);
 	if (!mdev->rowmask || !mdev->changed || !mdev->cur)
 		return -ENOMEM;
 
@@ -610,8 +612,8 @@ int mct_init(struct mct_device *mdev, const struct mct_config *cfg)
 	dev->mode_config.max_width = cfg->max_w;
 	dev->mode_config.min_height = cfg->min_h;
 	dev->mode_config.max_height = cfg->max_h;
-	dev->mode_config.cursor_width = MCT_CUR;
-	dev->mode_config.cursor_height = MCT_CUR;
+	dev->mode_config.cursor_width = cfg->cursor_size;
+	dev->mode_config.cursor_height = cfg->cursor_size;
 	dev->mode_config.funcs = &mct_mode_config_funcs;
 	dev->mode_config.helper_private = &mct_mode_config_helpers;
 

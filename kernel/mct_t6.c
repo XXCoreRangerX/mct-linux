@@ -50,7 +50,7 @@ MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at re
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	19
+#define DRIVER_MINOR	20
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -76,14 +76,21 @@ MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at re
 #define T6_REQ_CUR_SHOW(o)	((o) ? 0x07 : 0x05)
 #define T6_REQ_CUR_IMG(o)	((o) ? 0x11 : 0x10)
 
-#define T6_CUR		MCT_CUR		/* cursor size used here (device: up to 128) */
-#define T6_CUR_BYTES	(8 + T6_CUR * T6_CUR * 4)	/* header + ARGB */
+/*
+ * Cursor images are 64 or 96 pixels square: header + B, G, R, A. 128 would
+ * need upload offsets past 0xffff, which the 16-bit wIndex can't carry.
+ */
+#define T6_CUR		96
+#define T6_CUR_SMALL	64
+#define T6_CUR_BYTES	(8 + T6_CUR * T6_CUR * 4)
 
 #define T6_MAX_MODES	30		/* 0x89 table: 512 + 448 bytes */
 #define T6_MAX_OUTPUTS	2
 #define T6_FRAG		0x19000		/* largest fragment the vendor driver sends */
+#define T6_FRAG_HS	0x6400		/* ... on a USB 2 link */
+#define T6_HS_MAX_W	2048		/* widest mode on a USB 2 link, as the vendor's */
 #define T6_URBS		16		/* bulk transfers in flight at most */
-#define T6_CTRL_BUF	512
+#define T6_CTRL_BUF	4096		/* also the cursor upload chunk size */
 #define T6_TIMEOUT	2000
 
 #define T6_FMT_NV12	0x6
@@ -247,6 +254,12 @@ struct mct_t6 {
 	int output;			/* index the monitor is on */
 	int max_w, max_h;
 	int pll_base_khz;		/* 48 MHz ("Lite") or 40 MHz ("Super Lite") */
+	int level;			/* feature level, -1 if unknown */
+	int vram_mb;
+	u32 disp_func;			/* DISP descriptor display function flags */
+	int mon_max_khz, mon_max_hfreq;	/* monitor limits from its EDID, 0 if none */
+	int frag;			/* largest bulk write: smaller on USB 2 */
+	bool usb2;
 
 	struct mutex io_lock;		/* USB transfers and the ctrl buffer */
 	u8 *ctrl;			/* DMA-able control transfer buffer */
@@ -288,6 +301,7 @@ struct mct_t6 {
 		struct mutex lock;	/* cursor state: plane updates and redraws */
 		u8 *img;		/* header + image being built */
 		u8 *shown;		/* last uploaded */
+		int bytes, shown_bytes;	/* of the two images */
 		int slot;		/* 0 or 1: which of our two slots is in use */
 		int x, y;		/* last position sent */
 		bool uploaded, visible;
@@ -507,6 +521,8 @@ static int t6_mode_entry(struct mct_t6 *t6, const struct drm_display_mode *mode,
 		return -ERANGE;
 	/* the NV12 rows are sent unpadded; the vendor driver needs width % 16 too */
 	if (mode->hdisplay % 16 || mode->vdisplay % 2)
+		return -ERANGE;
+	if (t6->usb2 && mode->hdisplay > T6_HS_MAX_W)
 		return -ERANGE;
 	/* NV12 has to fit a frame buffer; the other formats are used where they fit */
 	if (mode->hdisplay > t6->max_w || mode->vdisplay > t6->max_h ||
@@ -868,7 +884,7 @@ static int t6_send_band(struct mct_t6 *t6, int k, const struct t6_band *b)
 {
 	int bw = (b->x1 - b->x0) * t6->lay.bpp[0];
 	/* each write fits a transfer: 2n rows + n rows of bw bytes */
-	int step = max(T6_FRAG / (3 * bw), 1);
+	int step = max(t6->frag / (3 * bw), 1);
 	int p, n, y, ys, y1, ret = 0;
 
 	if (t6->lay.planes == 1) {
@@ -1208,8 +1224,8 @@ static int t6_cursor_show(struct mct_t6 *t6, bool show)
 }
 
 /*
- * Image in chunks of up to 512 bytes (wIndex = byte offset) into the other
- * slot, then select that slot; leaves the cursor visible.
+ * Image in chunks (wIndex = byte offset) into the other slot, then select
+ * that slot; leaves the cursor visible.
  */
 static int t6_cursor_upload(struct mct_t6 *t6)
 {
@@ -1217,8 +1233,8 @@ static int t6_cursor_upload(struct mct_t6 *t6)
 	int off, n, ret = 0;
 
 	mutex_lock(&t6->io_lock);
-	for (off = 0; off < T6_CUR_BYTES && ret >= 0; off += n) {
-		n = min(T6_CUR_BYTES - off, T6_CTRL_BUF);
+	for (off = 0; off < t6->cur.bytes && ret >= 0; off += n) {
+		n = min(t6->cur.bytes - off, T6_CTRL_BUF);
 		memcpy(t6->ctrl, t6->cur.img + off, n);
 		ret = t6_ctrl_out(t6, T6_REQ_CUR_IMG(t6->output), slot, off, n);
 	}
@@ -1227,19 +1243,22 @@ static int t6_cursor_upload(struct mct_t6 *t6)
 	mutex_unlock(&t6->io_lock);
 	if (ret < 0)
 		return ret;
-	memcpy(t6->cur.shown, t6->cur.img, T6_CUR_BYTES);
+	memcpy(t6->cur.shown, t6->cur.img, t6->cur.bytes);
+	t6->cur.shown_bytes = t6->cur.bytes;
 	t6->cur.slot = next;
 	t6->cur.uploaded = true;
 	t6->cur.visible = true;
 	return 0;
 }
 
+/* top left of the image; negative values are sent as v - 1, as the vendor does */
 static int t6_cursor_move(struct mct_t6 *t6, int x, int y)
 {
 	int ret;
 
 	mutex_lock(&t6->io_lock);
-	ret = t6_ctrl_out(t6, T6_REQ_CUR_POS(t6->output), x, y, 0);
+	ret = t6_ctrl_out(t6, T6_REQ_CUR_POS(t6->output), x < 0 ? (x - 1) & 0xffff : x,
+			  y < 0 ? (y - 1) & 0xffff : y, 0);
 	mutex_unlock(&t6->io_lock);
 	t6->cur.x = x;
 	t6->cur.y = y;
@@ -1258,37 +1277,35 @@ static void t6_cursor_hide(struct mct_device *mdev)
 static void t6_cursor_set(struct mct_device *mdev, const u8 *bgra, int x, int y)
 {
 	struct mct_t6 *t6 = to_t6(mdev);
-	int sx, sy, j;
+	int size = T6_CUR_SMALL, i, j;
 	u8 *dst;
 
-	/*
-	 * Position is the top left of the box and must not be negative: if
-	 * the box hangs off the left/top edge, shift the image instead.
-	 */
-	sx = max(-x, 0);
-	sy = max(-y, 0);
-	x = max(x, 0);
-	y = max(y, 0);
+	/* the small image unless something shows outside its 64 x 64 */
+	for (j = 0; j < T6_CUR && size == T6_CUR_SMALL; j++)
+		for (i = j < T6_CUR_SMALL ? T6_CUR_SMALL : 0; i < T6_CUR; i++)
+			if (bgra[(j * T6_CUR + i) * 4 + 3]) {
+				size = T6_CUR;
+				break;
+			}
+
 	mutex_lock(&t6->cur.lock);
-	if (sx >= T6_CUR || sy >= T6_CUR) {
+	if (x <= -size || y <= -size) {
 		t6_cursor_show(t6, false);
 		goto out;
 	}
-
 	/* header {kind 1 = ARGB with alpha, w, h, pitch}, then B, G, R, A pixels */
 	put_unaligned_le16(1, t6->cur.img);
-	put_unaligned_le16(T6_CUR, t6->cur.img + 2);
-	put_unaligned_le16(T6_CUR, t6->cur.img + 4);
-	put_unaligned_le16(T6_CUR * 4, t6->cur.img + 6);
+	put_unaligned_le16(size, t6->cur.img + 2);
+	put_unaligned_le16(size, t6->cur.img + 4);
+	put_unaligned_le16(size * 4, t6->cur.img + 6);
 	dst = t6->cur.img + 8;
-	for (j = 0; j < T6_CUR; j++, dst += T6_CUR * 4) {
-		memset(dst, 0, T6_CUR * 4);
-		if (j + sy < T6_CUR)
-			memcpy(dst, bgra + (j + sy) * MCT_CUR_PITCH + sx * 4, (T6_CUR - sx) * 4);
-	}
+	for (j = 0; j < size; j++, dst += size * 4)
+		memcpy(dst, bgra + j * T6_CUR * 4, size * 4);
+	t6->cur.bytes = 8 + size * size * 4;
 
 	t6_cursor_move(t6, x, y);
-	if (!t6->cur.uploaded || memcmp(t6->cur.img, t6->cur.shown, T6_CUR_BYTES))
+	if (!t6->cur.uploaded || t6->cur.bytes != t6->cur.shown_bytes ||
+	    memcmp(t6->cur.img, t6->cur.shown, t6->cur.bytes))
 		if (t6_cursor_upload(t6))
 			goto out;
 	t6_cursor_show(t6, true);
@@ -1432,6 +1449,65 @@ static struct drm_display_mode *t6_rb_mode(struct drm_device *dev, int w, int h,
 }
 
 /*
+ * A mode of this size and rate the T6 and the monitor can take: standard
+ * reduced blanking (CVT-RB, 160 px horizontal blanking) if it fits, else
+ * the tighter one above. NULL if neither does.
+ */
+static struct drm_display_mode *t6_timing(struct mct_t6 *t6, struct drm_device *dev,
+					  int w, int h, int hz)
+{
+	struct drm_display_mode *mode;
+	struct t6_mode m;
+	int i;
+
+	for (i = 0; i < 2; i++) {
+		mode = i ? t6_rb_mode(dev, w, h, hz) :
+			   drm_cvt_mode(dev, w, h, hz, true, false, false);
+		if (!mode)
+			continue;
+		if (!t6_mode_entry(t6, mode, &m) &&
+		    (!t6->mon_max_khz || mode->clock <= t6->mon_max_khz) &&
+		    (!t6->mon_max_hfreq || mode->clock <= t6->mon_max_hfreq * mode->htotal)) {
+			mode->type = DRM_MODE_TYPE_DRIVER;
+			return mode;
+		}
+		drm_mode_destroy(dev, mode);
+	}
+	return NULL;
+}
+
+/*
+ * The monitor's limits from the EDID range descriptor: highest pixel clock
+ * and line rate. Like the vendor's macOS driver, raise them to the EDID's
+ * own modes when those exceed them (a wrong descriptor).
+ */
+static void t6_monitor_limits(struct mct_t6 *t6, struct drm_connector *connector,
+			      const struct drm_edid *drm_edid)
+{
+	const u8 *raw = drm_edid ? (const u8 *)drm_edid_raw(drm_edid) : NULL;
+	struct drm_display_mode *mode;
+	int i;
+
+	t6->mon_max_khz = 0;
+	t6->mon_max_hfreq = 0;
+	for (i = 0; raw && i < 4; i++) {
+		const u8 *d = raw + 54 + 18 * i;
+
+		if (d[0] || d[1] || d[2] || d[3] != 0xfd)
+			continue;
+		t6->mon_max_hfreq = d[8] + (d[4] & 0x08 ? 255 : 0);
+		t6->mon_max_khz = d[9] * 10000;
+	}
+	if (!t6->mon_max_khz)
+		return;
+	list_for_each_entry(mode, &connector->probed_modes, head) {
+		t6->mon_max_khz = max(t6->mon_max_khz, mode->clock);
+		t6->mon_max_hfreq = max(t6->mon_max_hfreq,
+					DIV_ROUND_UP(mode->clock, mode->htotal));
+	}
+}
+
+/*
  * Whether the EDID already brings a usable mode of this size and rate. One
  * the T6 can't drive doesn't count (a monitor's own timing may need a
  * higher pixel clock than the reduced blanking one here).
@@ -1460,7 +1536,6 @@ static int t6_add_extra_modes(struct drm_connector *connector, int w, int h)
 	struct mct_t6 *t6 = to_t6(to_mct(connector->dev));
 	int min_hz = range->min_vfreq, max_hz = range->max_vfreq;
 	struct drm_display_mode *mode;
-	struct t6_mode m;
 	int i, count = 0;
 
 	if (!max_hz) {
@@ -1473,13 +1548,9 @@ static int t6_add_extra_modes(struct drm_connector *connector, int w, int h)
 
 		if (hz < min_hz || hz > max_hz || t6_has_mode(connector, w, h, hz))
 			continue;
-		mode = t6_rb_mode(connector->dev, w, h, hz);
+		mode = t6_timing(t6, connector->dev, w, h, hz);
 		if (!mode)
-			break;
-		if (t6_mode_entry(t6, mode, &m)) {
-			drm_mode_destroy(connector->dev, mode);
 			continue;
-		}
 		drm_mode_probed_add(connector, mode);
 		count++;
 	}
@@ -1495,17 +1566,12 @@ static int t6_add_smaller_preferred(struct mct_t6 *t6, struct drm_connector *con
 				    const struct drm_display_mode *pref, bool have_pref)
 {
 	struct drm_display_mode *mode;
-	struct t6_mode m;
 
 	if (have_pref || pref->hdisplay * 9 != pref->vdisplay * 16 || pref->hdisplay <= 2560)
 		return 0;
-	mode = t6_rb_mode(connector->dev, 2560, 1440, 60);
+	mode = t6_timing(t6, connector->dev, 2560, 1440, 60);
 	if (!mode)
 		return 0;
-	if (t6_mode_entry(t6, mode, &m)) {
-		drm_mode_destroy(connector->dev, mode);
-		return 0;
-	}
 	mode->type |= DRM_MODE_TYPE_PREFERRED;
 	drm_mode_probed_add(connector, mode);
 	return 1;
@@ -1550,13 +1616,9 @@ static int t6_add_preferred_fallbacks(struct mct_t6 *t6, struct drm_connector *c
 			continue;
 		if (t6_has_mode(connector, pref->hdisplay, pref->vdisplay, rb_hz))
 			break;
-		mode = t6_rb_mode(connector->dev, pref->hdisplay, pref->vdisplay, rb_hz);
+		mode = t6_timing(t6, connector->dev, pref->hdisplay, pref->vdisplay, rb_hz);
 		if (!mode)
-			break;
-		if (t6_mode_entry(t6, mode, &m)) {
-			drm_mode_destroy(connector->dev, mode);
 			continue;
-		}
 		if (rb_hz == hz) {
 			mode->type |= DRM_MODE_TYPE_PREFERRED;
 			have_pref = true;
@@ -1640,6 +1702,7 @@ static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector
 	edid = drm_edid_read_custom(connector, t6_read_edid_block, t6);
 	drm_edid_connector_update(connector, edid);
 	count = drm_edid_connector_add_modes(connector);
+	t6_monitor_limits(t6, connector, edid);
 	drm_edid_free(edid);
 	if (!count)
 		return t6_add_table_modes(t6, connector);
@@ -1844,6 +1907,8 @@ static void t6_stats(struct mct_device *mdev, struct seq_file *m)
 
 	seq_printf(m, "mode             %dx%d@%d (output %d), %s\n", mdev->width, mdev->height,
 		   mdev->refresh, t6->output, t6->lay.planes ? t6_kind_name[t6->lay.kind] : "-");
+	seq_printf(m, "device           feature level %d, %d MiB, display flags %#x, USB %s\n",
+		   t6->level, t6->vram_mb, t6->disp_func, t6->usb2 ? "2" : "3");
 	seq_printf(m, "updates          %llu (%llu.%llu per second)\n", t6->stats.updates,
 		   div64_u64(t6->stats.updates * 1000, ms),
 		   div64_u64(t6->stats.updates * 10000, ms) % 10);
@@ -1939,15 +2004,47 @@ static void t6_release(struct drm_device *dev, void *res)
 	kvfree(t6->hw[2]);
 }
 
-/* 0xb0 index 0: 0 = "Lite" with a 48 MHz PLL base, 1 = "Super Lite", 40 MHz */
-static void t6_read_platform(struct mct_t6 *t6)
+/*
+ * What the device is, read as the vendor drivers do: the platform (0xb0
+ * index 0: 0 "Lite" with a 48 MHz PLL base, 1 "Super Lite" with 40 MHz),
+ * the feature level (index 4; below 3 the device takes only JPEG or I420
+ * frames, which this driver doesn't send), video memory in MiB (0x88) and
+ * the display function flags of the DISP descriptor (0xb3).
+ */
+static int t6_read_caps(struct mct_t6 *t6)
 {
-	int ret;
+	struct drm_device *dev = &t6->base.dev;
+	struct usb_device *udev = t6_udev(t6);
+	int platform = 1, ret;
 
 	mutex_lock(&t6->io_lock);
-	ret = t6_ctrl_in(t6, 0xb0, 0, 0, 4);
-	t6->pll_base_khz = (ret == 4 && t6->ctrl[0] == 0) ? 48000 : 40000;
+	if (t6_ctrl_in(t6, 0xb0, 0, 0, 4) == 4)
+		platform = t6->ctrl[0];
+	ret = t6_ctrl_in(t6, 0xb0, 0, 4, 4);
+	t6->level = ret == 4 ? get_unaligned_le32(t6->ctrl) : -1;
+	ret = t6_ctrl_in(t6, 0x88, 0, 0, 1);
+	t6->vram_mb = ret == 1 ? t6->ctrl[0] : 0;
+	ret = t6_ctrl_in(t6, 0xb3, 0, 0, 112);
+	t6->disp_func = ret >= 0x58 ? get_unaligned_le32(t6->ctrl + 0x54) : 0;
 	mutex_unlock(&t6->io_lock);
+
+	t6->pll_base_khz = platform == 0 ? 48000 : 40000;
+	t6->usb2 = udev->speed < USB_SPEED_SUPER;
+	t6->frag = t6->usb2 ? T6_FRAG_HS : T6_FRAG;
+	drm_info(dev, "%s, feature level %d, %d MiB, display flags %#x%s\n",
+		 platform ? "Super Lite" : "Lite", t6->level, t6->vram_mb, t6->disp_func,
+		 t6->usb2 ? ", USB 2 link: modes up to 2048 wide" : "");
+
+	if (t6->level >= 0 && t6->level < 3) {
+		drm_err(dev, "feature level %d takes only JPEG frames, not supported\n", t6->level);
+		return -ENODEV;
+	}
+	/* the three frame buffers end at 48 MiB */
+	if (t6->vram_mb && t6->vram_mb < 48) {
+		drm_err(dev, "%d MiB of video memory is too little\n", t6->vram_mb);
+		return -ENODEV;
+	}
+	return 0;
 }
 
 /*
@@ -1975,6 +2072,7 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 		.min_h = 64,
 		.connector_type = DRM_MODE_CONNECTOR_HDMIA,
 		.encoder_type = DRM_MODE_ENCODER_TMDS,
+		.cursor_size = T6_CUR,
 		.poll = true,
 		.gamma = true,
 		.stats_name = "mct_t6_stats",
@@ -2018,7 +2116,9 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 		return ret;
 
 	t6_pick_output(t6);
-	t6_read_platform(t6);
+	ret = t6_read_caps(t6);
+	if (ret)
+		return ret;
 	ret = t6_read_modes(t6);
 	if (ret) {
 		drm_err(dev, "could not read the mode table: %d\n", ret);
