@@ -58,13 +58,13 @@
 
 static bool yuv444 = true;
 module_param(yuv444, bool, 0644);
-MODULE_PARM_DESC(yuv444, "Full colour resolution (YUV 4:4:4, twice the data of 4:2:0 for full-screen changes); 0 = YUV 4:2:0 (NV12) (default: 1)");
+MODULE_PARM_DESC(yuv444, "Full colour resolution (YUV 4:4:4, twice the data of 4:2:0 for full-screen changes) where the device can scan it out; 0 = always YUV 4:2:0 (NV12) (default: 1)");
 
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	13
-#define DRIVER_PATCH	0
+#define DRIVER_PATCH	1
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -186,6 +186,13 @@ struct t6_layout {
 	u32 fmt;
 };
 
+/*
+ * Scanout reads the frame buffer from the T6's own memory once per refresh.
+ * 4:4:4 at 1080p glitched at 144 Hz (~900 MB/s) and was clean at 120 Hz
+ * (~750 MB/s); above this the driver uses NV12 instead.
+ */
+#define T6_SCANOUT_MAX	(760ull * 1000 * 1000)	/* bytes per second */
+
 /* rows of unchanged pixel pairs still merged into one band */
 #define T6_BAND_GAP	8
 #define T6_MAX_BANDS	16
@@ -246,6 +253,7 @@ struct mct_t6 {
 	u8 *hw[3];			/* NV12 image each frame buffer holds */
 	bool hw_valid[3];
 	int width, height;		/* current mode */
+	int refresh;
 	unsigned int buf;		/* next frame buffer to write */
 	u32 seq;
 
@@ -834,6 +842,7 @@ static void t6_update_work(struct work_struct *work)
 {
 	struct mct_t6 *t6 = container_of(work, struct mct_t6, upd.work);
 	ktime_t t0, t1;
+	bool want444;
 	int idx, ret;
 
 	/*
@@ -848,8 +857,10 @@ static void t6_update_work(struct work_struct *work)
 		return;
 	}
 	t6->upd.dirty = false;
-	if (READ_ONCE(yuv444) != t6->lay.is444 || !t6->lay.planes)
-		t6_set_layout(t6, READ_ONCE(yuv444));
+	want444 = READ_ONCE(yuv444) &&
+		  3ull * t6->width * t6->height * t6->refresh <= T6_SCANOUT_MAX;
+	if (want444 != t6->lay.is444 || !t6->lay.planes)
+		t6_set_layout(t6, want444);
 	t0 = ktime_get();
 	t6_convert(t6);
 	/* commits only wait for the conversion above, never for USB */
@@ -1301,6 +1312,7 @@ static void t6_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commi
 	t6->lay.planes = 0;		/* the worker sets it up for the new size */
 	t6->buf = 0;
 	t6->shadow_valid = false;
+	t6->refresh = drm_mode_vrefresh(&crtc_state->mode);
 	t6->width = crtc_state->mode.hdisplay;
 	t6->height = crtc_state->mode.vdisplay;
 	memset(t6->shadow, 0, (size_t)t6->width * t6->height * 4);
@@ -1586,7 +1598,8 @@ static int t6_stats_show(struct seq_file *m, void *data)
 	u64 n = max_t(u64, t6->stats.updates, 1);
 
 	seq_printf(m, "seconds          %llu\n", ms / 1000);
-	seq_printf(m, "mode             %dx%d (output %d)\n", t6->width, t6->height, t6->output);
+	seq_printf(m, "mode             %dx%d@%d (output %d), %s\n", t6->width, t6->height,
+		   t6->refresh, t6->output, t6->lay.is444 ? "YUV 4:4:4" : "NV12");
 	seq_printf(m, "updates          %llu (%llu.%llu per second)\n", t6->stats.updates,
 		   div64_u64(t6->stats.updates * 1000, ms),
 		   div64_u64(t6->stats.updates * 10000, ms) % 10);
