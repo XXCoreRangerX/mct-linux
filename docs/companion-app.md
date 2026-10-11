@@ -1,4 +1,4 @@
-# Companion app: design (2026-10-11, not built yet)
+# Companion app: design (2026-10-11)
 
 A desktop app for mct devices in the spirit of BetterDisplay or the
 DisplayLink Manager: a tray icon, one page per connected device, settings,
@@ -22,11 +22,43 @@ For per-device settings and for information without root:
 - the connector name (HDMI-A-n, USB-n) is linked from there, so the app can
   match a device to what the compositor shows
 
+## The interface (fixed, 2026-10-11)
+
+Per bound device, in `/sys/bus/usb/drivers/mct/<interface>/mct/` (the same
+directory as `/sys/bus/usb/devices/<interface>/mct/`); `<interface>` is
+e.g. `2-2:1.0`. One value per file, newline terminated.
+
+| File | Devices | Access | Content |
+|---|---|---|---|
+| `chip` | all | ro | `t2` or `t6` |
+| `model` | all | ro | the USB product string, e.g. `T6 USB Station` |
+| `connector` | all | ro | DRM connector name, e.g. `card2-HDMI-A-3` (the compositor calls it `HDMI-A-3`) |
+| `mode` | all | ro | current mode `WxH@Hz`, or `off` |
+| `updates` | all | ro | frames sent since probe |
+| `bytes` | all | ro | bytes sent since probe |
+| `errors` | all | ro | transfer errors since probe |
+| `pixel_format` | t6 | ro | format in use: `NV12`, `YUV444`, `RGB24`, `RGB32`, or `-` |
+| `feature_level` | t6 | ro | number, `-1` if unknown |
+| `vram_mb` | t6 | ro | number |
+| `usb_speed` | t6 | ro | `usb2` or `usb3` |
+| `recoveries` | t6 | ro | device restarts after transfer errors |
+| `format` | t6 | rw | `auto`, `rgb24`, `rgb32`, `yuv444`, `nv12` |
+| `all_modes` | t6 | rw | `0` / `1`; a change makes userspace re-probe the monitor |
+| `lossy` | t2 | rw | `0` to `8` |
+| `backlight` | t2 | ro | name of its backlight device in `/sys/class/backlight/` (brightness is set there, 0 = off, 1 to `max_brightness`) |
+
+The module parameters (`format`, `all_modes`, `lossy`) are the values new
+devices start with; after that each device has its own.
+
+Devices appear and disappear with their USB interface: udev `bind` /
+`unbind` events on subsystem `usb` with driver `mct`. Counters change all
+the time; an app polls them (about once a second while visible).
+
 ## Writing without root
 
-Either a udev rule that makes the writable attributes group-writable for
-the seat user (uaccess-style), or a tiny polkit-checked helper that only
-writes those attributes. The NixOS module installs whichever is chosen.
+A udev rule makes the writable files group `video` and group-writable when
+a device binds (chosen 2026-10-11); the NixOS module installs it, other
+distributions copy it from the README.
 
 ## The app
 
