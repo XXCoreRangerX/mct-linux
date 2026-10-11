@@ -26,9 +26,16 @@ in
       type = lib.types.bool;
       default = false;
       description = ''
-        Build niri with nix/niri-device-removed-fix.patch. niri 26.04 fails to
-        clean up a removed DRM device ("error creating DrmNode"), which leaves
-        stale outputs behind after unplugging a USB display.
+        Build niri with two patches for USB displays:
+        nix/niri-device-removed-fix.patch: niri 26.04 fails to clean up a
+        removed DRM device ("error creating DrmNode"), which leaves stale
+        outputs behind after unplugging a USB display.
+        nix/niri-display-only-sysmem.patch: render frames for display-only
+        devices into buffers allocated on the device itself (system memory)
+        instead of the primary GPU's VRAM, so drivers that read frames with
+        the CPU don't read over PCIe (about 10x faster). Falls back to the
+        old behaviour if the GPU can't render into them;
+        NIRI_DISPLAY_ONLY_PRIMARY_ALLOC=1 forces the old behaviour.
       '';
     };
     lossy = lib.mkOption {
@@ -55,7 +62,10 @@ in
   config = lib.mkIf cfg.enable (lib.mkMerge [
     (lib.mkIf cfg.niriFix {
       programs.niri.package = pkgs.niri.overrideAttrs (o: {
-        patches = (o.patches or [ ]) ++ [ ./niri-device-removed-fix.patch ];
+        patches = (o.patches or [ ]) ++ [
+          ./niri-device-removed-fix.patch
+          ./niri-display-only-sysmem.patch
+        ];
       });
     })
 
