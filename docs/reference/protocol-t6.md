@@ -11,8 +11,10 @@ Worked out from 2026-10-10 on a **T6 USB Station** (USB `0711:5600`, board
   `captures/t6-research/capture-analysis.md`);
 - static analysis of MCT's Windows driver 25.01, T6InDisp.dll and t6sta.sys
   (`captures/t6-research/dll-analysis.md`);
-- MCT's own Linux daemon source (EVDI + `T6evdi`, closed licence, read for
-  facts only), cyrozap's notes, y-chan's and ramifriedman's drivers
+- MCT's own Linux daemon (EVDI + `T6evdi`; the Ubuntu package carries no
+  licence, but MCT publishes the same code base under GPL-2.0-or-later as
+  [triggerdm](https://github.com/mcttrigger/triggerdm); read for facts
+  only, no code taken), cyrozap's notes, y-chan's and ramifriedman's drivers
   (`captures/t6-research/web-research.md`, `third_party/t6-sources/`);
 - tests on the 5600 with `tools/t6dev.py` and the `tools/t6_*_test.py`
   scripts, logged in [t6-lab-notebook.md](../history/t6-lab-notebook.md).

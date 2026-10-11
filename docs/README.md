@@ -46,6 +46,7 @@ lab notes. Each file starts with its status:
 | File | Status | What's in it |
 |---|---|---|
 | [t6-vendor-review.md](research/t6-vendor-review.md) | Research, with item status | what MCT's T6 drivers do that mct didn't, and what became of each item |
+| [other-linux-drivers.md](research/other-linux-drivers.md) | Research (2026-10-11) | MCT's triggerdm, ramifriedman's trigger6 and the trigger6 forks, compared with mct |
 | [driver-analysis.md](research/driver-analysis.md) | Research (2026-09) | MCT's official Trigger driver package (T2) |
 | [wacom-display-settings.md](research/wacom-display-settings.md) | Research (2026-10-11) | which display settings Wacom's own driver has for the DTU-1031X (brightness only) |
 | [optimization-ideas.md](research/optimization-ideas.md) | Research (2026-10-10) | T2 speed ideas, tried and not tried |

@@ -277,8 +277,20 @@ ones that failed.
   Linux driver for the Trigger 6, and its Windows capture were the starting
   point for the T6 work.
 - [y-chan](https://github.com/y-chan/trigger6)'s and
-  [ramifriedman](https://github.com/ramifriedman/mct-t6-linux)'s T6 forks
-  and notes helped with partial updates.
+  [ramifriedman](https://github.com/ramifriedman/mct-t6-linux)'s T6 drivers
+  and notes helped with partial updates. ramifriedman's trigger6 drives the
+  four-output StarTech USBC2HD4 (two T6 chips, two outputs each), which mct
+  doesn't yet.
+- MCT's own Linux driver, [triggerdm](https://github.com/mcttrigger/triggerdm)
+  (an EVDI daemon, GPL-2.0-or-later), and its Ubuntu version were read for
+  protocol facts; no code was taken.
+
+How mct compares with these drivers:
+[docs/research/other-linux-drivers.md](docs/research/other-linux-drivers.md).
+
+The DRM side is built like the in-kernel USB display drivers udl and gud
+(GEM shmem buffers, a shadow plane, damage clips, a worker that never blocks
+commits).
 
 Mainline Linux has no driver for MCT's Trigger display chips. MCT's USB
 vendor ID shows up there only for the mct_u232 serial adapter, some
