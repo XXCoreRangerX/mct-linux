@@ -24,6 +24,52 @@ MCT's own drivers are for Windows and macOS, plus a userspace Linux driver
 for the T6. The protocols here were worked out from USB captures, the vendor
 drivers' disassembly and testing on real hardware.
 
+## Status
+
+✅ works &nbsp; ⚠️ works with limits, or untested &nbsp; ❌ not supported
+
+**Trigger 6 (j5create JUA254, `0711:5600`)**
+
+| | Feature | Notes |
+|---|---|---|
+| ✅ | Picture on any HDMI monitor | modes from the monitor's EDID |
+| ✅ | High refresh rates | up to 1080p at 144 Hz |
+| ✅ | Large modes | 2560x1440@60, 3440x1440@60, 3840x2160@30 |
+| ✅ | Lossless picture | RGB or YUV 4:4:4 at rest, NV12 during motion (automatic) |
+| ✅ | Hardware cursor | up to 128 px |
+| ✅ | Monitor and adapter hotplug | |
+| ✅ | DPMS, suspend/resume | |
+| ✅ | Gamma (night light) | |
+| ✅ | Text console | |
+| ⚠️ | USB 2 ports | works, but modes up to 2048 wide and slower motion |
+| ⚠️ | `0711:5601` single-output adapters | should work, untested |
+| ❌ | Second output of dual-head adapters and docks | |
+| ❌ | HDMI audio | |
+| ❌ | JPEG mode | would need an encoder in the kernel ([roadmap](docs/roadmap.md)) |
+| ❌ | Hardware rotation | the compositor rotates instead |
+
+**Trigger II (Wacom DTU-1031X)**
+
+| | Feature | Notes |
+|---|---|---|
+| ✅ | Picture | 1024x600, tear-free, lossless by default |
+| ✅ | Hardware cursor | |
+| ✅ | Brightness | through the standard backlight interface |
+| ✅ | Pen | in-kernel wacom driver |
+| ✅ | DPMS, suspend/resume, hotplug | |
+| ✅ | Lossy mode for heavy motion | optional |
+| ⚠️ | Faint vertical lines on some starts | hardware; a reload or replug fixes it ([known issues](#known-issues)) |
+| ❌ | Other Trigger II devices | see the note above |
+
+**General**
+
+| | Feature | Notes |
+|---|---|---|
+| ✅ | Wayland and X11 compositors | |
+| ✅ | Linux 7.2 and later | |
+| ❌ | Linux older than 7.2 | the driver uses newer DRM helpers |
+| ✅ | Desktop app and command line tool | MCT Display Manager, `mctctl` |
+
 ## Features
 
 **Both chips**
@@ -50,11 +96,6 @@ drivers' disassembly and testing on real hardware.
 - lossless picture by default, optional lossy mode for heavy motion that
   turns lossless again once motion stops
 - backlight brightness, recovery from a device left mid-frame
-
-**Not supported:** the T6's JPEG mode (it would need an encoder in the
-kernel; see [roadmap](docs/roadmap.md)), HDMI audio, models with two
-outputs, hardware rotation (compositors rotate), the T6's YUYV format
-(doesn't scan out properly).
 
 ## Supported devices
 
