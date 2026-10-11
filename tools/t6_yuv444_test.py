@@ -6,9 +6,9 @@ then as YUV 4:4:4, then NV12 again, 5 s each; then, with "motion", a moving
 block in 4:4:4 at full speed to check for tearing.
 Planes per the vendor driver: Y, U, V, full size, stride align32(width).
 """
-import sys, struct, time
+import os, sys, struct, time
 import numpy as np
-sys.path.insert(0, "tools")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import t6dev
 
 W, H = 1920, 1080

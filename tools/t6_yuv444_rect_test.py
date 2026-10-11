@@ -1,5 +1,5 @@
-import sys, struct, time
-sys.path.insert(0, "tools")
+import os, sys, struct, time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import t6dev
 W, H = 1920, 1080
 S = W
