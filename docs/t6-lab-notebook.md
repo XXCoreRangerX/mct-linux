@@ -537,6 +537,14 @@ already runs at the mode's nominal rate, and the PLL rounding (P / 1000
 steps) is ~30 ppm, below a crystal's tolerance; a one-frame drift every
 few minutes at 144 Hz is not visible.
 
+Result (`tools/t6_pacing_test.py`, 1080p60, full NV12 frames with the
+driver's header recipe): 223 frames in 4 s back to back, **0 frame-done
+events**, and none for spaced frames either. With the current recipe the
+chip doesn't report done even for flips with image data (the early lab
+header with the image length counting the header did get them; the
+vendor's JPEG frames do). Either way there is no vblank signal: pacing
+stays on the timer. Item closed.
+
 **Hardware rotation (0.18.0, branch t6-rotation, not usable here).** From
 the vendor's Ubuntu driver (`evdi_t6_1/main.c`, `t6usbdongle.c`): `40 1f`
 with wIndex 0..3 = 0/90/180/270 (xrandr's counter-clockwise rotations), the

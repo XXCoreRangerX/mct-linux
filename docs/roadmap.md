@@ -25,11 +25,11 @@ left to do. Percentages are estimates, not a checklist score.
 
 Order agreed 2026-10-11:
 
-1. **T6 frame-done pacing.** Checked first: frame-done events mean "frame
-   processed", not vblank (vendor capture: phase spread R = 0.11, latency
-   follows decode time), and partial updates send none, so there is nothing
-   to lock to. `tools/t6_pacing_test.py` confirms with raw frames;
-   if it does, this item is closed (see the notebook, 2026-10-11).
+1. ~~T6 frame-done pacing~~: closed. Frame-done events mean "frame
+   processed", not vblank (vendor capture: phase spread R = 0.11), and with
+   the driver's frame recipe the chip sends none at all
+   (`tools/t6_pacing_test.py`: 0 events for 223 frames). Pacing stays on
+   the timer.
 2. ~~T6 hardware rotation~~ (`40 1f`): the 5600 stalls on the request, like
    on gamma (feature level 6), and the Windows driver never sends it. The
    driver code is kept on branch `t6-rotation` for a chip that has it.
