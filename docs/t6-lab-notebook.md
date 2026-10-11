@@ -491,3 +491,6 @@ either). Monitor change events are unaffected.
 patch, damaged rows are compared with the shadow and only rows that really
 changed are copied and converted. Imported GPU buffers keep the plain copy
 (reading them twice would be slow).
+0.17.1 stats (46 s light use, 1080p120 auto): **65 rows changed per
+commit** (was 1037), convert + diff **0.26 ms** per update (was 2.45), USB
+1.49 ms and ~0.64 MB per update, framebuffer copy 0.29 ms. No stale areas.
