@@ -1,5 +1,7 @@
 # debugfs files
 
+> **Reference**, kept current with the code.
+
 Under `/sys/kernel/debug/dri/<device>/` (root only), one directory per
 display:
 

@@ -5,7 +5,7 @@
  * DRM driver for MCT Trigger 6 (T6) USB display adapters, e.g. the
  * "T6 USB Station" (USB 0711:5600 / 0711:5601).
  *
- * Protocol (see docs/protocol-t6.md; first worked out by the trigger6
+ * Protocol (see docs/reference/protocol-t6.md; first worked out by the trigger6
  * driver at https://github.com/JingYenLoh/trigger6):
  *  - vendor control requests: 0x87 output status, 0x80 EDID, 0x89 mode
  *    table, 0x12 set mode, 0x03 output on/off
@@ -142,7 +142,7 @@ struct t6_mode {
 
 /*
  * Pixel clock limit, well above what the device's mode table offers; it
- * starts to show artifacts around 350 MHz. Limits are in docs/t6-limits.md.
+ * starts to show artifacts around 350 MHz. Limits are in docs/reference/t6-limits.md.
  */
 #define T6_MAX_CLOCK_KHZ	340000
 /* frame buffers are 0xfffec0 apart; a frame is a 0x30 byte header + planes */
@@ -2100,7 +2100,7 @@ static void t6_stats(struct mct_device *mdev, struct seq_file *m)
 }
 
 /* ------------------------------------------------------------------ */
-/* sysfs (docs/companion-app.md)				      */
+/* sysfs (docs/driver/companion-app.md)				      */
 
 /* NULL once the interface is unbound, see mct_from_dev() */
 static struct mct_t6 *t6_from_dev(struct device *dev)

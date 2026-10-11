@@ -1,5 +1,7 @@
 # Shared core (2026-10-11)
 
+> **Reference**: the core as built (top) and the plan it started from (below, kept for the record).
+
 **Done** (main, `kernel/mct_drv.c` / `mct_drv.h`), tested live on both
 devices at once: T6 at 1080p144, tablet with all updates under 16 ms. The
 API ended up close to the plan below; differences: chips get the shadow's

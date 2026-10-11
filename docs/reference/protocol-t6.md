@@ -1,5 +1,7 @@
 # MCT Trigger 6 (T6) protocol
 
+> **Reference**, kept current with the code. **V** / **C** mark what was verified on hardware and what was only seen in captures or vendor code.
+
 Worked out from 2026-10-10 on a **T6 USB Station** (USB `0711:5600`, board
 "JUA254H") driving an LG 27GN750 over HDMI. Sources, in the lab directory
 (not published):
@@ -13,7 +15,7 @@ Worked out from 2026-10-10 on a **T6 USB Station** (USB `0711:5600`, board
   facts only), cyrozap's notes, y-chan's and ramifriedman's drivers
   (`captures/t6-research/web-research.md`, `third_party/t6-sources/`);
 - tests on the 5600 with `tools/t6dev.py` and the `tools/t6_*_test.py`
-  scripts, logged in [t6-lab-notebook.md](t6-lab-notebook.md).
+  scripts, logged in [t6-lab-notebook.md](../history/t6-lab-notebook.md).
 
 **V** = verified on the 5600, **C** = seen in the capture or vendor code only.
 Nothing here shares code or framing with the T2.

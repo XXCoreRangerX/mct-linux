@@ -34,7 +34,7 @@ def port_cycle(off_s=3.0):
 
 
 def pace_for(ep, data):
-    """Selective pacing for the 8051 firmware (validated cold, see docs/init-sequence.md)."""
+    """Selective pacing for the 8051 firmware (validated cold, see docs/reference/init-sequence.md)."""
     if ep == 2:
         return 0.0
     if ep == 3 and data[0] == 0x02:                      # single register write

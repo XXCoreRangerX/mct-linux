@@ -1,10 +1,12 @@
 # mct_t6 compared
 
+> **Status**: the feature table at the end is current; the sections before it were written at mct_t6 0.17.1.
+
 How the Trigger 6 driver relates to the T2 driver, to MCT's own drivers and
 to other USB display stacks. The sections before the feature table were
 written at mct_t6 0.17.1; the feature table at the end is current. Details
-and measurements are in [t6-lab-notebook.md](t6-lab-notebook.md) and
-[protocol-t6.md](protocol-t6.md).
+and measurements are in [t6-lab-notebook.md](history/t6-lab-notebook.md) and
+[protocol-t6.md](reference/protocol-t6.md).
 
 ## mct_t2 and mct_t6
 

@@ -1,23 +1,27 @@
 # Kernel driver, Trigger 6 backend (`mct_t6.c`)
 
-How the T6 backend works, as of mct_t6 0.21. The protocol is in
-[protocol-t6.md](protocol-t6.md), the limits and their measurements in
-[t6-limits.md](t6-limits.md), the shared DRM side in
+> **Reference**, kept current with the code. Describes mct_t6 0.26.0.
+
+How the T6 backend works. The protocol is in
+[protocol-t6.md](../reference/protocol-t6.md), the limits and their measurements in
+[t6-limits.md](../reference/t6-limits.md), the shared DRM side in
 [shared-core.md](shared-core.md), the history of every decision in
-[t6-lab-notebook.md](t6-lab-notebook.md).
+[t6-lab-notebook.md](../history/t6-lab-notebook.md).
 
 ## Probe
 
 Interface 0 of the device. Reads which output has a monitor (`0x87`), the
-capabilities (`t6_read_caps`: platform and PLL base clock, feature level,
-video memory, DISP flags; refuses JPEG-only devices and less than 48 MiB),
+capabilities (`t6_read_caps`: platform and PLL base clock, board name,
+firmware versions, chip serial, feature level, video memory, DISP flags;
+refuses JPEG-only devices and less than 48 MiB),
 the device's mode table (`0x89`), allocates a pool of 16 bulk URBs and the
 interrupt URB, registers with the core, starts the event endpoint. USB 2
 links get smaller writes and modes up to 2048 wide.
 
 ## Modes
 
-`t6_get_modes` reads the EDID (`0x80`) and adds:
+`t6_get_modes` reads the EDID (`0x80`; up to 5 tries, and if all fail while
+a monitor is connected, the last EDID read is used again) and adds:
 
 - extra refresh rates for the preferred size (up to 1080p), within the
   monitor's range, pixel clock and line rate: CVT reduced blanking where it
@@ -76,3 +80,12 @@ uploads the smallest of 64, 96 or 128 px that holds everything visible, in
 4096-byte chunks, into the cursor slot not on screen, then selects it.
 Negative positions are sent as v - 1. A 128 px image is sent up to 0x10000
 bytes (16-bit offset).
+
+## Settings and information
+
+Per device in sysfs (`/sys/bus/usb/devices/<interface>/mct/`, see
+[ABI-sysfs-mct.txt](ABI-sysfs-mct.txt)): `format` and `all_modes` to set,
+the module parameters of the same names as defaults for new devices;
+counters, mode, pixel format, USB link, and what the device reported at
+probe (platform, board, firmware, serial, feature level, video memory,
+display flags) to read.

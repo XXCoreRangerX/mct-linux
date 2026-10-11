@@ -1,5 +1,7 @@
 # Wacom DTU-1031X: display settings in Wacom's driver (2026-10-11)
 
+> **Research snapshot** (2026-10-11): static analysis, not updated afterwards.
+
 What Wacom's Windows driver 6.4.9-2 offers for the DTU-1031X's display, and
 how each setting reaches the device. Static research only: the installer
 (`WacomTablet_6.4.9-2.exe`, unpacked with 7z), the earlier VM captures and

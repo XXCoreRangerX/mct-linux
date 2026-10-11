@@ -1,5 +1,7 @@
 # Companion app: design (2026-10-11)
 
+> **Design and interface**: the sysfs table and the identification section are current; the design part records the plan (2026-10-11).
+
 A desktop app for mct devices in the spirit of BetterDisplay or the
 DisplayLink Manager: a tray icon, one page per connected device, settings,
 live status, an About page. Several devices at once (two T6 adapters and the

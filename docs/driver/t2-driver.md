@@ -1,9 +1,11 @@
 # Kernel driver, Trigger II backend (`mct_t2.c`, 2026-09-24)
 
+> **Reference with dated measurements**: the design and known issues are current (mct_t2 0.3.21); measurement sections carry the date they were taken.
+
 Since the Trigger 6 work the driver is one module, `mct`, with a backend
 per chip; this file covers the Trigger II backend (DRM driver name `mct_t2`).
-For the Trigger 6 see [protocol-t6.md](protocol-t6.md),
-[t6-limits.md](t6-limits.md) and [t6-lab-notebook.md](t6-lab-notebook.md).
+For the Trigger 6 see [protocol-t6.md](../reference/protocol-t6.md),
+[t6-limits.md](../reference/t6-limits.md) and [t6-lab-notebook.md](../history/t6-lab-notebook.md).
 
 > **Current state (2026-10-11, mct_t2 0.3.19):** the planes, CRTC, damage
 > handling and workers now come from the shared core ([shared-core.md](shared-core.md),
@@ -13,7 +15,7 @@ For the Trigger 6 see [protocol-t6.md](protocol-t6.md),
 > ("Update strategy (driver 0.3.6)"). The counters (0.3.18) and adaptive
 > lossy tolerance (0.3.19) are merged. The sections below keep the history
 > in order; parts marked superseded describe earlier versions. Open work is
-> in [roadmap.md](roadmap.md).
+> in [roadmap.md](../roadmap.md).
 
 `kernel/mct_t2.c` is a DRM/KMS driver for the T2. It replaces EVDI + `wacom-t2d`, and
 because it's a normal DRM device with fbdev emulation, the **text console
@@ -179,7 +181,7 @@ tearing, and measured diff time is negligible compared with USB transfer time.
 
 ## Features added 2026-09-24 (driver 0.2)
 
-- **Trimmed init**: 78 transfers, ~1 s from cold (see `docs/init-sequence.md`), black
+- **Trimmed init**: 78 transfers, ~1 s from cold (see `docs/reference/init-sequence.md`), black
   frame into buffer A right before `0x14`.
 - **Hardware cursor plane** (`DRM_PLANE_TYPE_CURSOR`, ARGB8888, 64x64): converts
   to the T2's A,B,G,R format rotated 180 degrees and uploads with `0x12` only when the image
@@ -263,7 +265,7 @@ after the display, so the backlight looks the pen up on each access.
 
 ## Development roadmap
 
-(As of 2026-09-25; the current list is in [roadmap.md](roadmap.md).)
+(As of 2026-09-25; the current list is in [roadmap.md](../roadmap.md).)
 
 Only the Wacom DTU-1031X is presently available for live testing. Make its
 driver reliable and keep unverified family support out of the USB ID table;

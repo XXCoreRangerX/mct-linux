@@ -1,5 +1,7 @@
 # DTU-1031X hardware facts
 
+> **Reference**: hardware facts about the DTU-1031X.
+
 ## USB topology
 
 One physical Mini-USB cable -> internal SMSC USB2413 2-port hub:

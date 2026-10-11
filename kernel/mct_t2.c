@@ -5,7 +5,7 @@
  * DRM driver for MCT Trigger II (T2) USB displays, e.g. the Wacom DTU-1031X
  * pen display (USB 0711:520d, 1024x600).
  *
- * Protocol (reverse engineered, see docs/protocol-t2.md):
+ * Protocol (reverse engineered, see docs/reference/protocol-t2.md):
  *  - bulk EP 0x03 / 0x04 carry register programming, replies on EP 0x81
  *  - bulk EP 0x02 carries framebuffer commands; the firmware parses it per
  *    USB transfer, so every command header is its own transfer
@@ -190,7 +190,7 @@ static int t2_cmd(struct mct_t2 *t2, const u8 *hdr, int hlen, const u8 *pay, int
 }
 
 /* ------------------------------------------------------------------ */
-/* RLE encoder (see docs/protocol-t2.md)			      */
+/* RLE encoder (see docs/reference/protocol-t2.md)			      */
 
 static inline u8 t2_rle_val(u8 v)
 {
@@ -508,7 +508,7 @@ static void t2_set_power(struct mct_t2 *t2, bool *flag, bool v)
 /* ------------------------------------------------------------------ */
 /* device init							      */
 
-/* 8051 pacing, validated from a cold chip (docs/init-sequence.md) */
+/* 8051 pacing, validated from a cold chip (docs/reference/init-sequence.md) */
 static unsigned int t2_pace_us(u8 ep, const u8 *data)
 {
 	if (ep == T2_EP_FB)
@@ -940,7 +940,7 @@ static void t2_update(struct mct_device *mdev)
 }
 
 /* ------------------------------------------------------------------ */
-/* cursor plane (hardware cursor, see docs/protocol-t2.md)	      */
+/* cursor plane (hardware cursor, see docs/reference/protocol-t2.md)	      */
 
 /* EP4 register list: position (device top-left of the 64x64 box) + show/hide */
 static int t2_cursor_regs(struct mct_t2 *t2, int x, int y, bool show)
@@ -1173,7 +1173,7 @@ static const struct drm_driver t2_drm_driver = {
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
 };
 
-/* sysfs (docs/companion-app.md) */
+/* sysfs (docs/driver/companion-app.md) */
 
 /* NULL once the interface is unbound, see mct_from_dev() */
 static struct mct_t2 *t2_from_dev(struct device *dev)

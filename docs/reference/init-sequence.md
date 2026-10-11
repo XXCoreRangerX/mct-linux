@@ -1,5 +1,7 @@
 # Captured Windows init sequence (DTU-1031X, Trigger2_Install, Win11 25H2)
 
+> **Reference**: a capture from Windows (2026-09); it does not change.
+
 Source: usbmon text capture (bus 6, dev 011, not published), first bulk at
 line ~2629162. Order below = wire order. EP `0x03` unless noted.
 The exact bytes (no truncation) are in `captures/redir2.bin` (development repository only); `tools/replay.py` replays them and `wacom-t2d/init-full.bin` is extracted from them (`wacom-t2d/init.bin` is the trimmed version).

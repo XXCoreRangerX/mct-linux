@@ -1,4 +1,6 @@
-# Roadmap and status (2026-10-11, mct_t6 0.21.1)
+# Roadmap and status (2026-10-11, mct_t6 0.26.0)
+
+> **Status**: updated as work goes on.
 
 Where the driver stands against the vendor drivers and the chips, and what is
 left to do. Percentages are estimates, not a checklist score.
@@ -34,11 +36,11 @@ Order agreed 2026-10-11:
 2. ~~T6 hardware rotation~~ (`40 1f`): the 5600 stalls on the request, like
    on gamma (feature level 6), and the Windows driver never sends it. The
    driver code is kept on branch `t6-rotation` for a chip that has it.
-3. ~~Shared core refactor~~: done, see [shared-core.md](shared-core.md).
+3. ~~Shared core refactor~~: done, see [shared-core.md](driver/shared-core.md).
    Left: the DTU-1031X profile struct in `mct_t2.c`.
 4. **T2 rainbow lines** (analog sampling phase, ~10-25% of inits): look for an
    auto-adjust/phase command for the RTD2280 scaler, reachable through the pen
-   HID side. Wacom's driver has none ([wacom-display-settings.md](wacom-display-settings.md));
+   HID side. Wacom's driver has none ([wacom-display-settings.md](research/wacom-display-settings.md));
    next is reading the unknown pen feature reports (read-only, needs an OK).
 
 Later:
@@ -50,7 +52,7 @@ Later:
   tolerance).
 - **T2 soak test** (reloads, interrupted frames, replug, suspend, DPMS,
   brightness, console, lossy video) and the **`0x0a` gamma table test**
-  (`tools/gamma_test.py`, not run yet); see kernel-driver.md.
+  (`tools/gamma_test.py`, not run yet); see t2-driver.md.
 - **T6 above 1080p:** done (0.18.0): 2560x1440@60 in 4:4:4, 3440x1440@60
   with reduced blanking in NV12, 3440x1440 up to 51 Hz in 4:4:4 (the 4:4:4
   limit is 760 MB/s). The monitor's own 3440x1440@60 timing (319.75 MHz)
@@ -58,11 +60,12 @@ Later:
   (~41 MB at 1080p, ~99 MB at 3440x1440). 4K30 (3840x2160, NV12) works too.
 - ~~Modes above the monitor's native size~~: hidden since mct_t6 0.22.0,
   `all_modes=1` (NixOS `hardware.mct.allModes`) shows them; tested.
-- **Userspace companion app** (design: [companion-app.md](companion-app.md);
-  needs per-device sysfs settings in the driver first) (like DisplayLink Manager or the vendors'
-  tray apps): settings in one place (format/auto mode, T2 lossy, brightness,
-  "show all modes" = all_modes plus a re-probe, modes), and optional extras
-  the kernel driver can't carry:
+- ~~Userspace companion app~~: built (`app/`: MCT Display Manager window
+  and tray, `mctctl`; [companion-app.md](driver/companion-app.md)), on
+  per-device sysfs settings (mct_t6 0.23.0). It shows every identifier
+  (board name, firmware, USB, monitor EDID) since mct_t6 0.26.0. Left:
+  reapplying settings on replug, and optional extras the kernel driver
+  can't carry:
   - **T6 JPEG** for full-screen motion above the USB limit. The chip only
     decodes; the host has to encode, which can't live in the kernel driver
     (no in-kernel JPEG encoder, CPU heavy, wouldn't be accepted upstream).
@@ -130,6 +133,11 @@ switches the output off first. Left:
   the preferred mode and use consoleblank=0.
 
 `tools/mct_edge_test.sh` is the interactive test for these scenarios.
+
+Fixed in mct_t6 0.26.0: a monitor that stops answering EDID reads while
+still connected (seen once with the LG: the mode list fell back to the
+adapter's 60 Hz table) keeps the modes of the last EDID read; the read is
+tried 5 times, 200 ms apart, and a failure is logged.
 
 ## Rules that stay
 

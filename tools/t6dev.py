@@ -8,7 +8,7 @@ device node must be accessible.
     t.send_raw(test_card(1920, 1080, "A"))
 
 Header field values are arguments, so experiments can vary them; the defaults
-are the layout that works on the 0711:5600 (see docs/protocol-t6.md).
+are the layout that works on the 0711:5600 (see docs/reference/protocol-t6.md).
 """
 import struct, time
 import usb.core, usb.util

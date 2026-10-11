@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com>
 
 //! Access to mct devices through the driver's sysfs interface
-//! (docs/companion-app.md), shared by mctctl, the window and the tray.
+//! (docs/driver/companion-app.md), shared by mctctl, the window and the tray.
 
 pub mod device;
 pub mod ident;

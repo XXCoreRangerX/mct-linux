@@ -1,6 +1,8 @@
 # Optimization ideas not tried yet (2026-10-10)
 
-Measured so far (see kernel-driver.md): the T2 takes RLE data at about
+> **Research list** (2026-10-10, Trigger II): ideas and what came of those tried; current measurements are in t2-driver.md.
+
+Measured so far (see t2-driver.md): the T2 takes RLE data at about
 37-40 MB/s no matter how the host queues it, a lossless full-screen update
 costs ~26 ms, desktop use sends ~16% of the damaged pixels, encoding is ~9%
 of the time. Already tried without a gain: async URBs with striped encoding,

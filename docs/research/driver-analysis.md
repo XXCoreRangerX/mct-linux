@@ -1,5 +1,7 @@
 # Driver analysis (Trigger Family v25.01.1223, MCT official)
 
+> **Research snapshot** (2026-09, Trigger II era): not updated afterwards.
+
 Download: `https://www.mct.com.tw/include/download.php?dl=<token>` with
 `window.open('include/download.php?dl='+path)` from `go_download()` on the
 download page. Row 01 (USB Display Adapters/Win) = id `150`

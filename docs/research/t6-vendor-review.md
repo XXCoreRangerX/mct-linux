@@ -1,10 +1,12 @@
 # Vendor drivers vs mct: open differences (review of 2026-10-11)
 
+> **Research review** (2026-10-11) with a status per item: what became of each difference.
+
 A second pass over MCT's Ubuntu source (`third_party/t6-sources/linux/evdi_t6_1`),
 the decompiled Windows T6InDisp.dll (`captures/t6-research/dll-analysis-files/drv2.c`;
 both in the local lab directory, not published),
 the Windows capture and the macOS driver binaries, looking for what they do that
-mct doesn't. Things already covered in [t6-comparison.md](t6-comparison.md)
+mct doesn't. Things already covered in [t6-comparison.md](../t6-comparison.md)
 (JPEG, audio, dual output, rotation, idle refresh, full-range YUV) are left out.
 Ranked by expected value.
 

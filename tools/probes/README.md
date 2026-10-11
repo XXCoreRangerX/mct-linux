@@ -15,5 +15,5 @@ established the endpoint pairing rules and produced the files in `data/`.
 
 Run with the tablet's video function accessible (`chmod 666` on its
 `/dev/bus/usb` node or the NixOS module's udev rule). Probes 7 and 9 were
-early `0x11` fill attempts that didn't display (see `docs/first-light.md` for why),
+early `0x11` fill attempts that didn't display (see `docs/history/first-light.md` for why),
 so they aren't included.

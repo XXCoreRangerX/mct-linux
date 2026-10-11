@@ -1,5 +1,7 @@
 # First light (2026-09-24)
 
+> **History**: a chronological record. Entries are not rewritten; later findings are added after them. For the current state see the reference docs ([docs/README.md](../README.md)).
+
 The DTU-1031X panel shows solid colours sent from Linux: red, green, blue,
 white, full screen (`tools/replay.py`).
 

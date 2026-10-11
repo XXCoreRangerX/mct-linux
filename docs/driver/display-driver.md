@@ -1,5 +1,7 @@
 # Linux display driver: EVDI + wacom-t2d (2026-09-24)
 
+> **Legacy**: the EVDI + wacom-t2d route for the DTU-1031X, still available (NixOS `hardware.mct.driver = "evdi"`, or the companion app's driver switch). The kernel driver is the recommended route.
+
 (The daemon was called `t2d` until 2026-10-11 and renamed `wacom-t2d`: it is
 written for the Wacom DTU-1031X, not for Trigger II devices in general.)
 

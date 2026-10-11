@@ -1,8 +1,10 @@
 # Trigger 6 limits
 
+> **Reference**, kept current with the code. The measurements behind each limit are in the lab notebook.
+
 What the limits in `kernel/mct_t6.c` are based on. Measured on a T6 USB
 Station (0711:5600, "Super Lite", feature level 6). The details of each test
-are in [t6-lab-notebook.md](t6-lab-notebook.md).
+are in [t6-lab-notebook.md](../history/t6-lab-notebook.md).
 
 ## Pixel clock (`T6_MAX_CLOCK_KHZ`, 340 MHz)
 

@@ -1,5 +1,7 @@
 # USB capture setup (what worked)
 
+> **Lab how-to**: the USB capture setup used for the research. Not needed to use the driver.
+
 ## VM
 
 - Host: NixOS, QEMU/KVM (`/dev/kvm` world-writable), 6 GB RAM / 4 vCPU / q35 /

@@ -44,5 +44,5 @@ Earlier
 
 The T2 driver's history (0.1 to 0.3.19: first light, trimmed init, partial
 updates, cursor, backlight, lossy mode, recovery, counters) is in
-docs/kernel-driver.md and docs/project-history.md; the T6's (0.1 to 0.17)
-in docs/t6-lab-notebook.md.
+docs/driver/t2-driver.md and docs/history/project-history.md; the T6's (0.1 to 0.17)
+in docs/history/t6-lab-notebook.md.

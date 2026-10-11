@@ -8,7 +8,7 @@
  * daemon grabs damaged pixels from it and streams them to the tablet:
  *   - big damage   -> full 0x13 frame into the back buffer + 0x15 flip
  *   - small damage -> partial 0x13 rects straight into the front buffer
- * Protocol: docs/protocol-t2.md. The panel scans out rotated 180 degrees.
+ * Protocol: docs/reference/protocol-t2.md. The panel scans out rotated 180 degrees.
  *
  * Usage: wacom-t2d [-i init.bin] [-e edid.bin] [-n] [-t test] [-v]
  *   -n        skip device init (tablet already initialised)
@@ -116,7 +116,7 @@ static int send_cmd(const unsigned char *hdr, int hlen, const unsigned char *pay
 
 static int send_rect(uint32_t base, const unsigned char *src, int stride, int dx, int dy, int w, int h);
 
-/* 8051 pacing rule, validated from cold (docs/init-sequence.md) */
+/* 8051 pacing rule, validated from cold (docs/reference/init-sequence.md) */
 static unsigned pace_us(unsigned ep, const unsigned char *p)
 {
 	if (ep == EP_FB)

@@ -1,5 +1,7 @@
 # Trigger II (T2) bulk protocol
 
+> **Reference**, kept current with the code.
+
 Source: cyrozap's [Protocol-T2.md](https://github.com/cyrozap/mct-usb-display-adapter-re/blob/master/doc/Protocol-T2.md)
 (CC BY-SA 4.0) + live probing + `T2Indisp.dll` disassembly
 + Win11 VM usbmon capture. All multi-byte fields little-endian unless noted.
@@ -147,7 +149,7 @@ re-encoding it **byte-identically** (`tools/t2rle.py`).
   1-2 px are written as literals.
 - Windows' encoder is slightly lossy: it merges pixels within +/-4 of the run
   value into a run. Our encoder is exact (apart from `0x30`->`0x31`) unless the
-  driver's optional lossy mode is on (see kernel-driver.md).
+  driver's optional lossy mode is on (see t2-driver.md).
 - **Orientation: the panel scans out rotated 180 degrees.** The first pixel in the
   stream is the bottom-right of the visible image. Windows pre-rotates, and we
   reverse the pixel order (`tools/show_image.py::rot180`).
@@ -183,7 +185,7 @@ A lossy variant like the vendor's (merge values within +-4 into runs) halves a
 photo's payload (+-2: -36%, +-4: -46%) but leaves visible banding in smooth
 gradients, so the drivers stay lossless by default. mct_t2 has an optional
 lossy mode (`lossy=N`) only for updates too big for one frame, refined to
-lossless afterwards (see kernel-driver.md). `tools/t2rle.py encode(..., tol=N)`
+lossless afterwards (see t2-driver.md). `tools/t2rle.py encode(..., tol=N)`
 keeps it for experiments.
 
 ## Panel power (verified live 2026-09-24)
@@ -219,7 +221,7 @@ Other Wacom driver traffic seen at startup: feature `0x83` (`83 02 00`) x3,
 `0x02` (`02 02`, mode), GET `0x0c` (serial), GET `0x10` (status), and a series of
 `0x40` exchanges, some carrying random-looking 64-byte blocks: the pen data
 encryption handshake (RSA-wrapped AES key, see
-[wacom-display-settings.md](wacom-display-settings.md)). None of it is needed
+[wacom-display-settings.md](../research/wacom-display-settings.md)). None of it is needed
 for brightness.
 
 ## I2C masters (verified live 2026-09-24, `tools/t2i2c.py`)

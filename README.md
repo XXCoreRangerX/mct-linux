@@ -134,7 +134,7 @@ Options
 
 Every device has its own settings, in
 /sys/bus/usb/devices/<interface>/mct/ (with read-only information next to
-them; docs/companion-app.md lists all files):
+them; docs/driver/companion-app.md lists all files):
 
   format    T6 pixel format: auto (default), rgb24, rgb32, yuv444, nv12.
             auto uses exact RGB or YUV 4:4:4 while the screen is still and
@@ -188,7 +188,7 @@ in app/, see app/README.md):
   scripts.
 
 Writing settings without root needs the udev rule that gives group video
-write access (installed by the NixOS module; see docs/companion-app.md).
+write access (installed by the NixOS module; see docs/driver/companion-app.md).
 
 Debugging
 ---------
@@ -197,7 +197,7 @@ Debugging
     sudo cat /sys/kernel/debug/dri/*/mct_t2_stats
 
 show the mode, the format in use, update rates, bytes sent, timings and
-error counters (docs/debugfs.md explains the fields). The same basics,
+error counters (docs/driver/debugfs.md explains the fields). The same basics,
 without root, are in each device's mct/ directory in sysfs. The T6 logs its
 feature level and video memory at probe.
 
@@ -225,9 +225,12 @@ Known issues
 Documentation
 -------------
 
-docs/README.md lists everything: protocol references (protocol-t6.md,
-protocol-t2.md), the T6 limits and the measurements behind them, the
-comparison with the vendor drivers, the roadmap and the lab notebooks.
+docs/README.md lists everything, with the status of each file:
+docs/reference/ (the T6 and T2 protocols, the T6 limits and the
+measurements behind them, the DTU-1031X's hardware), docs/driver/ (how the
+driver works, its sysfs and debugfs files, the companion app),
+docs/research/ (the vendor drivers), docs/history/ (the lab notebooks),
+and docs/roadmap.md for where things stand.
 
 Credits
 -------

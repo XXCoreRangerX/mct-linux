@@ -1,5 +1,7 @@
 # Project history
 
+> **History**: a chronological record. Entries are not rewritten; later findings are added after them. For the current state see the reference docs ([docs/README.md](../README.md)).
+
 This file preserves the chronological development record and the major
 successful and unsuccessful findings. It was created when the old, untracked
 workspace `HANDOFF.md` was replaced with a current handoff on 2026-09-25. The
@@ -68,7 +70,7 @@ The decisive first-light findings on 2026-09-24 were:
 `captures/redir2.bin` became the principal initialization capture, while
 `captures/redir4.bin` recorded real partial updates and hardware cursor
 traffic. The obsolete blank-screen hypotheses were retained as research
-history in `docs/first-light.md`, not as current instructions.
+history in `docs/history/first-light.md`, not as current instructions.
 
 ## First usable display paths
 
@@ -316,17 +318,17 @@ Git records the exact diffs and parent relationships.
 
 ## Detailed source records
 
-- `docs/first-light.md`: early failures, resolved hypotheses and first image
-- `docs/protocol-t2.md`: command framing, RLE, buffers, status experiments,
+- `docs/history/first-light.md`: early failures, resolved hypotheses and first image
+- `docs/reference/protocol-t2.md`: command framing, RLE, buffers, status experiments,
   cursor, power, brightness and throughput
-- `docs/init-sequence.md`: initialization phases and exact packet roles
-- `docs/driver-analysis.md`: Windows stack and DLL reverse engineering
-- `docs/device-dtu1031x.md`: hardware topology, EDID and register facts
-- `docs/display-driver.md`: the earlier EVDI implementation
-- `docs/kernel-driver.md`: the T2 backend's design, tests and roadmap (the
-  shared core: `docs/shared-core.md`; the T6: `docs/t6-limits.md`,
-  `docs/t6-lab-notebook.md`)
-- `docs/capture.md`: Windows VM and usbredir capture procedure
+- `docs/reference/init-sequence.md`: initialization phases and exact packet roles
+- `docs/research/driver-analysis.md`: Windows stack and DLL reverse engineering
+- `docs/reference/device-dtu1031x.md`: hardware topology, EDID and register facts
+- `docs/driver/display-driver.md`: the earlier EVDI implementation
+- `docs/driver/t2-driver.md`: the T2 backend's design, tests and roadmap (the
+  shared core: `docs/driver/shared-core.md`; the T6: `docs/reference/t6-limits.md`,
+  `docs/history/t6-lab-notebook.md`)
+- `docs/research/capture.md`: Windows VM and usbredir capture procedure
 
 Together with Git, these are the durable historical record. `HANDOFF.md` (in
 the lab directory, not in this repository) is a current operational summary

@@ -1,55 +1,63 @@
 # Documentation
 
 Everything learned about the MCT Trigger chips and the driver, including the
-lab notes. Dated files and sections record what was true and tried at the
-time; later findings are added, earlier ones are kept.
+lab notes. Each file starts with its status:
+
+- **Reference**: describes the code and the hardware as they are now, and
+  is updated with them.
+- **Status**: where things stand and what is left, updated as work goes on.
+- **Research**: a dated snapshot of an investigation, not updated
+  afterwards; what came of it is in the roadmap or the reference docs.
+- **History**: chronological records. Entries are not rewritten; later
+  findings are added after them, so earlier ones may have been superseded.
+- **Legacy**: a route that still works but is no longer the recommended one.
 
 ## Start here
 
-| File | What's in it |
-|---|---|
-| [roadmap.md](roadmap.md) | where the driver stands against the vendor drivers and the chips, what's left |
-| [t6-comparison.md](t6-comparison.md) | the T2 and T6 backends side by side, and mct against MCT's Windows, macOS and Ubuntu drivers (feature table) |
-| [shared-core.md](shared-core.md) | how the driver is split: DRM core and chip backends |
-| [companion-app.md](companion-app.md) | design of the planned desktop app (per-device settings, tray, About) |
+| File | Status | What's in it |
+|---|---|---|
+| [roadmap.md](roadmap.md) | Status | where the driver stands against the vendor drivers and the chips, what's left |
+| [t6-comparison.md](t6-comparison.md) | Status | the T2 and T6 backends side by side, and mct against MCT's Windows, macOS and Ubuntu drivers (feature table) |
 
-## Protocol references
+## reference/: the chips and devices
 
-| File | What's in it |
-|---|---|
-| [protocol-t6.md](protocol-t6.md) | Trigger 6: control requests, bulk sessions, frame and rectangle headers, formats, cursor, events |
-| [t6-limits.md](t6-limits.md) | Trigger 6 limits the driver uses (pixel clock, scanout bandwidth, buffer room), and the measurements behind them |
-| [protocol-t2.md](protocol-t2.md) | Trigger II: bulk commands, RLE frames, flips, cursor, registers, I2C, the pen's brightness report |
-| [init-sequence.md](init-sequence.md) | the DTU-1031X init sequence captured from Wacom's Windows driver |
-| [device-dtu1031x.md](device-dtu1031x.md) | the Wacom DTU-1031X's hardware: USB functions, endpoints, panel |
+| File | Status | What's in it |
+|---|---|---|
+| [protocol-t6.md](reference/protocol-t6.md) | Reference | Trigger 6: control requests, bulk sessions, frame and rectangle headers, formats, cursor, events |
+| [t6-limits.md](reference/t6-limits.md) | Reference | Trigger 6 limits the driver uses (pixel clock, scanout bandwidth, buffer room) and the measurements behind them |
+| [protocol-t2.md](reference/protocol-t2.md) | Reference | Trigger II: bulk commands, RLE frames, flips, cursor, registers, I2C, the pen's brightness report |
+| [init-sequence.md](reference/init-sequence.md) | Reference | the DTU-1031X init sequence captured from Wacom's Windows driver |
+| [device-dtu1031x.md](reference/device-dtu1031x.md) | Reference | the Wacom DTU-1031X's hardware: USB functions, endpoints, panel, internals |
 
-## Driver notes
+## driver/: the driver and its interfaces
 
-| File | What's in it |
-|---|---|
-| [t6-driver.md](t6-driver.md) | the Trigger 6 backend: probe, modes, frames, errors and events, cursor |
-| [debugfs.md](debugfs.md) | the statistics files and the T6 test hook |
-| [ABI-sysfs-mct.txt](ABI-sysfs-mct.txt) | the per-device sysfs files, in the kernel's ABI format |
-| [kernel-driver.md](kernel-driver.md) | the Trigger II backend: design, measurements, lossy mode, recovery, known issues |
-| [display-driver.md](display-driver.md) | the older EVDI + wacom-t2d userspace route for the T2 |
-| [optimization-ideas.md](optimization-ideas.md) | T2 speed ideas, tried and not tried |
-| [wacom-display-settings.md](wacom-display-settings.md) | which display settings Wacom's own driver has for the DTU-1031X (brightness only) |
+| File | Status | What's in it |
+|---|---|---|
+| [shared-core.md](driver/shared-core.md) | Reference | how the driver is split: DRM core and chip backends |
+| [t6-driver.md](driver/t6-driver.md) | Reference | the Trigger 6 backend: probe, modes, frames, errors and events, cursor, settings |
+| [t2-driver.md](driver/t2-driver.md) | Reference, dated measurements | the Trigger II backend: design, measurements, lossy mode, recovery, known issues |
+| [ABI-sysfs-mct.txt](driver/ABI-sysfs-mct.txt) | Reference | the per-device sysfs files, in the kernel's ABI format |
+| [debugfs.md](driver/debugfs.md) | Reference | the statistics files and the T6 test hook |
+| [companion-app.md](driver/companion-app.md) | Design and interface | MCT Display Manager and mctctl: the sysfs interface they use, identification, design |
+| [display-driver.md](driver/display-driver.md) | Legacy | the EVDI + wacom-t2d userspace route for the DTU-1031X |
 
-## Research on the vendor drivers
+## research/: investigations
 
-| File | What's in it |
-|---|---|
-| [driver-analysis.md](driver-analysis.md) | MCT's official Trigger driver package (T2) |
-| [t6-vendor-review.md](t6-vendor-review.md) | what MCT's T6 drivers do that mct didn't, and what became of each item |
-| [capture.md](capture.md) | the USB capture setup (Windows VM, usb-redir tee) |
+| File | Status | What's in it |
+|---|---|---|
+| [t6-vendor-review.md](research/t6-vendor-review.md) | Research, with item status | what MCT's T6 drivers do that mct didn't, and what became of each item |
+| [driver-analysis.md](research/driver-analysis.md) | Research (2026-09) | MCT's official Trigger driver package (T2) |
+| [wacom-display-settings.md](research/wacom-display-settings.md) | Research (2026-10-11) | which display settings Wacom's own driver has for the DTU-1031X (brightness only) |
+| [optimization-ideas.md](research/optimization-ideas.md) | Research (2026-10-10) | T2 speed ideas, tried and not tried |
+| [capture.md](research/capture.md) | Lab how-to | the USB capture setup (Windows VM, usb-redir tee) |
 
-## Lab notes and history
+## history/: lab notes
 
-| File | What's in it |
-|---|---|
-| [t6-lab-notebook.md](t6-lab-notebook.md) | the running log of the Trigger 6 work: every experiment and result |
-| [first-light.md](first-light.md) | the first picture on the DTU-1031X |
-| [project-history.md](project-history.md) | how the project went, from first probes to the kernel driver |
+| File | Status | What's in it |
+|---|---|---|
+| [t6-lab-notebook.md](history/t6-lab-notebook.md) | History | the running log of the Trigger 6 work: every experiment and result |
+| [project-history.md](history/project-history.md) | History | how the project went, from the first probes to the kernel driver (mostly Trigger II) |
+| [first-light.md](history/first-light.md) | History | the first picture on the DTU-1031X |
 
 Licence: [LICENSE.md](LICENSE.md) (CC BY-SA 4.0). Changes per version:
 [../CHANGELOG.md](../CHANGELOG.md).

@@ -553,7 +553,7 @@ static int mct_stats_show(struct seq_file *m, void *data)
 }
 
 /* ------------------------------------------------------------------ */
-/* sysfs: /sys/bus/usb/devices/<interface>/mct/ (docs/companion-app.md) */
+/* sysfs: /sys/bus/usb/devices/<interface>/mct/ (docs/driver/companion-app.md) */
 
 /*
  * NULL once the interface is unbound (the files go away a little later

@@ -1,7 +1,9 @@
 # Trigger 6 lab notebook
 
+> **History**: a chronological record. Entries are not rewritten; later findings are added after them. For the current state see the reference docs ([docs/README.md](../README.md)).
+
 Running log of the T6 work, newest at the bottom. Protocol facts that hold up
-go into [protocol-t6.md](protocol-t6.md); this file keeps what was tried, how,
+go into [protocol-t6.md](../reference/protocol-t6.md); this file keeps what was tried, how,
 and what came out, including the dead ends. Raw material lives in the lab
 directory (`captures/t6-device/`, `captures/t6-analysis/`,
 `third_party/trigger6/`).
