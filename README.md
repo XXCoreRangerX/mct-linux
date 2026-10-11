@@ -134,11 +134,15 @@ Module parameters, also writable at runtime in /sys/module/mct/parameters/:
             NV12 during large changes. A fixed format stays fixed (no NV12
             for motion) where the adapter can scan it out at the current
             mode, NV12 elsewhere. Unknown values mean auto.
+  all_modes T6: also offer modes larger than the monitor's native
+            resolution (off by default; monitors often list 4K and scale it
+            down). Applies at the next monitor probe: replug, or
+            `echo detect | sudo tee /sys/class/drm/card*-HDMI-A-*/status`.
   lossy     T2: maximum lossy tolerance (1-8) for updates too big for one
             60 Hz frame, refined to lossless once motion stops. 0 = off
             (default).
 
-NixOS options (hardware.mct.*): `enable`, `format` and `lossy` as above,
+NixOS options (hardware.mct.*): `enable`, `format`, `allModes` and `lossy` as above,
 `driver = "evdi"` for the EVDI + wacom-t2d route instead of the kernel driver,
 `consoleMap` to put text consoles on the tablet (adds fbcon=map:..., e.g.
 "01" for every second VT), `niriFix` to build niri with the two patches in

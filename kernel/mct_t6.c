@@ -49,11 +49,15 @@ static char *format = "auto";
 module_param(format, charp, 0644);
 MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at rest, NV12 during large changes; default), rgb24, rgb32, yuv444, nv12. The full colour formats are only used where the device can scan them out at the current mode.");
 
+static bool all_modes;
+module_param(all_modes, bool, 0644);
+MODULE_PARM_DESC(all_modes, "Also offer modes larger than the monitor's native resolution (4K on a 1080p monitor that scales it down); default off. Takes effect at the next monitor probe.");
+
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	21
-#define DRIVER_PATCH	1
+#define DRIVER_MINOR	22
+#define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -1716,6 +1720,29 @@ static int t6_add_table_modes(struct mct_t6 *t6, struct drm_connector *connector
 	return count;
 }
 
+/*
+ * Monitors often list larger modes than their panel (4K on a 1080p
+ * monitor) and scale them down; over the T6 those only cost bandwidth.
+ * Drop modes larger than the native size (the EDID's preferred mode)
+ * unless all_modes is set.
+ */
+static int t6_drop_above_native(struct drm_connector *connector, int w, int h)
+{
+	struct drm_display_mode *mode, *tmp;
+	int n = 0;
+
+	if (READ_ONCE(all_modes) || !w || !h)
+		return 0;
+	list_for_each_entry_safe(mode, tmp, &connector->probed_modes, head) {
+		if (mode->hdisplay <= w && mode->vdisplay <= h)
+			continue;
+		list_del(&mode->head);
+		drm_mode_destroy(connector->dev, mode);
+		n++;
+	}
+	return n;
+}
+
 static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector)
 {
 	struct mct_t6 *t6 = to_t6(mdev);
@@ -1745,7 +1772,7 @@ static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector
 	if (has_720p && (w != 1280 || h != 720))
 		count += t6_add_extra_modes(connector, 1280, 720);
 	count += t6_add_preferred_fallbacks(t6, connector);
-	return count;
+	return count - t6_drop_above_native(connector, w, h);
 }
 
 static enum drm_mode_status t6_mode_valid(struct mct_device *mdev,

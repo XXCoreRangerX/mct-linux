@@ -64,6 +64,17 @@ in
         /sys/module/mct/parameters/format.
       '';
     };
+    allModes = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Trigger 6: also offer modes larger than the monitor's native
+        resolution (monitors often accept 4K and scale it down, which over
+        the adapter only costs bandwidth). Can be changed at runtime through
+        /sys/module/mct/parameters/all_modes; it applies at the next monitor
+        probe (replug, or writing "detect" to the connector's status file).
+      '';
+    };
     driver = lib.mkOption {
       type = lib.types.enum [ "kernel" "evdi" ];
       default = "kernel";
@@ -86,7 +97,8 @@ in
 
     (lib.mkIf (cfg.driver == "kernel") {
       boot.extraModulePackages = [ kmod ];
-      boot.extraModprobeConfig = "options mct lossy=${toString cfg.lossy} format=${cfg.format}";
+      boot.extraModprobeConfig =
+        "options mct lossy=${toString cfg.lossy} format=${cfg.format} all_modes=${if cfg.allModes then "1" else "0"}";
       # swap in the module of the current generation without rebooting
       environment.systemPackages = [
         (pkgs.writeShellScriptBin "mct-reload" ''

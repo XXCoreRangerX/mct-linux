@@ -81,6 +81,8 @@ What else decides whether a mode is offered (`t6_mode_entry`,
   16:9 monitors too tall for the adapter
 - no usable EDID: the device table's modes up to 1920x1080, 1080p60
   preferred
+- modes larger than the monitor's native resolution (its preferred mode)
+  are dropped unless `all_modes=1`
 - probe refuses feature level below 3 (JPEG only) and less than 48 MiB of
   video memory (the three frame buffers end there)
 - cursor images 64, 96 or 128 px; a 128 px image is sent only up to
