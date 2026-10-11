@@ -746,3 +746,7 @@ raise it again.
 the driver logs `USB 2 link: modes up to 2048 wide`, sysfs `usb_speed`
 says `usb2`, the LG ran at 1920x1080@122, picture correct, moving windows
 works (slower, as expected at ~35 MB/s).
+
+**Text console on the T6.** `con2fbmap 3 2` (fb2 = mct_t6drmfb, from the
+fbset package) and Ctrl+Alt+F3: tty3 shows on the T6's monitor, login
+prompt fine; back to niri with its VT.
