@@ -57,6 +57,7 @@
 #include <drm/drm_vblank_helper.h>
 
 #include "mct.h"
+#include "mct_drv.h"
 
 static char *format = "auto";
 module_param(format, charp, 0644);
@@ -86,7 +87,7 @@ MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at re
 #define T6_REQ_CUR_SHOW(o)	((o) ? 0x07 : 0x05)
 #define T6_REQ_CUR_IMG(o)	((o) ? 0x11 : 0x10)
 
-#define T6_CUR		64		/* cursor size used here (device: up to 128) */
+#define T6_CUR		MCT_CUR		/* cursor size used here (device: up to 128) */
 #define T6_CUR_BYTES	(8 + T6_CUR * T6_CUR * 4)	/* header + ARGB */
 
 #define T6_MAX_MODES	30		/* 0x89 table: 512 + 448 bytes */
@@ -244,12 +245,7 @@ struct t6_urb {
 };
 
 struct mct_t6 {
-	struct drm_device dev;
-	struct drm_plane primary;
-	struct drm_plane cursor;
-	struct drm_crtc crtc;
-	struct drm_encoder encoder;
-	struct drm_connector conn;
+	struct mct_device base;		/* DRM side, see mct_drv.h */
 
 	struct t6_mode modes[T6_MAX_MODES];
 	int nmodes;
@@ -267,28 +263,15 @@ struct mct_t6 {
 	wait_queue_head_t urb_wait;	/* for a URB to become free */
 	struct usb_anchor anchor;	/* URBs in flight */
 	atomic_t urb_err;		/* last error of a completed URB */
-	u8 *shadow;			/* XRGB8888 image as committed by userspace */
-	bool shadow_valid;		/* holds a whole committed image */
-	u8 *rowmask;			/* rows to copy from the framebuffer */
-	u8 *cvt;			/* shadow rows changed since the last conversion */
 	u8 *stale[3];			/* rows where img may differ from frame buffer k */
 	u8 *img;			/* the shadow in NV12 */
 	u8 lut[3][256];			/* gamma, R G B, applied in software */
 	struct t6_layout lay;		/* of img and hw, set by the worker */
 	u8 *hw[3];			/* NV12 image each frame buffer holds */
 	bool hw_valid[3];
-	int width, height;		/* current mode */
-	int refresh;
 	unsigned int buf;		/* next frame buffer to write */
 	u32 seq;
 
-	struct {
-		struct work_struct work;
-		struct mutex lock;	/* protects shadow + dirty */
-		bool dirty;
-	} upd;
-
-	struct delayed_work settle_work;	/* back to 4:4:4 after motion */
 	ktime_t last_large;		/* last large update */
 
 	struct urb *ev_urb;		/* interrupt IN, always queued */
@@ -302,22 +285,18 @@ struct mct_t6 {
 	} cur;
 
 	struct {			/* debugfs statistics */
-		u64 updates, skipped, px_damage, bytes, ns_conv, ns_usb;
+		u64 updates, bytes, ns_conv, ns_usb;
 		u64 rows, bands;		/* image rows and bands sent */
 		u64 to_420;			/* switches to 4:2:0 for motion */
 		u64 ev_done, ev_change, ev_other;	/* interrupt events */
-		u64 no_clips, clips, clip_px, rows_copied;	/* damage clips per commit */
-		u64 copies, ns_copy, ns_copy_max;	/* framebuffer -> shadow, in the commit */
-		u64 ns_commit, ns_commit_max;		/* the same incl. CPU access setup */
-		ktime_t since;
 	} stats;
 };
 
-#define to_t6(__dev) container_of(__dev, struct mct_t6, dev)
+#define to_t6(m) container_of(m, struct mct_t6, base)
 
 static struct usb_device *t6_udev(struct mct_t6 *t6)
 {
-	return interface_to_usbdev(to_usb_interface(t6->dev.dev));
+	return interface_to_usbdev(to_usb_interface(t6->base.dev.dev));
 }
 
 /* ------------------------------------------------------------------ */
@@ -585,7 +564,7 @@ static int t6_set_mode(struct mct_t6 *t6, const struct t6_mode *m)
 static void t6_set_layout(struct mct_t6 *t6, enum t6_kind kind)
 {
 	struct t6_layout *l = &t6->lay;
-	int w = t6->width, h = t6->height, i;
+	int w = t6->base.width, h = t6->base.height, i;
 	size_t px = (size_t)w * h;
 
 	memset(l, 0, sizeof(*l));
@@ -630,7 +609,7 @@ static void t6_set_layout(struct mct_t6 *t6, enum t6_kind kind)
 	}
 	/* nothing in the frame buffers is in the new layout, convert it all */
 	memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
-	memset(t6->cvt, 1, h);
+	memset(t6->base.changed, 1, h);
 }
 
 /*
@@ -659,9 +638,9 @@ static inline u8 t6_v(int r, int g, int b, int shift)
 static void t6_convert_row(struct mct_t6 *t6, int y)
 {
 	const u8 *lr = t6->lut[0], *lg = t6->lut[1], *lb = t6->lut[2];
-	int w = t6->width, x;
-	size_t px = (size_t)w * t6->height;
-	const u8 *s = t6->shadow + (size_t)y * w * 4;	/* B, G, R, X */
+	int w = t6->base.width, x;
+	size_t px = (size_t)w * t6->base.height;
+	const u8 *s = t6->base.shadow + (size_t)y * w * 4;	/* B, G, R, X */
 	u8 *py = t6->img + (size_t)y * w * t6->lay.bpp[0];
 
 	switch (t6->lay.kind) {
@@ -698,11 +677,11 @@ static void t6_convert_row(struct mct_t6 *t6, int y)
 static void t6_convert_pair(struct mct_t6 *t6, int y)
 {
 	const u8 *lr = t6->lut[0], *lg = t6->lut[1], *lb = t6->lut[2];
-	int w = t6->width, x, i;
-	const u8 *s0 = t6->shadow + (size_t)y * w * 4;	/* B, G, R, X */
+	int w = t6->base.width, x, i;
+	const u8 *s0 = t6->base.shadow + (size_t)y * w * 4;	/* B, G, R, X */
 	const u8 *s1 = s0 + w * 4;
 	u8 *y0 = t6->img + (size_t)y * w, *y1 = y0 + w;
-	u8 *uv = t6->img + (size_t)w * t6->height + (size_t)(y / 2) * w;
+	u8 *uv = t6->img + (size_t)w * t6->base.height + (size_t)(y / 2) * w;
 
 	for (x = 0; x < w; x += 2, s0 += 8, s1 += 8, y0 += 2, y1 += 2, uv += 2) {
 		/* the 2x2 block: top left, top right, bottom left, bottom right */
@@ -725,15 +704,15 @@ static void t6_convert_pair(struct mct_t6 *t6, int y)
 }
 
 /*
- * Convert the rows changed since the last conversion (t6->cvt) and mark
+ * Convert the rows changed since the last conversion (t6->base.changed) and mark
  * them stale in every frame buffer. upd.lock held.
  */
 static void t6_convert(struct mct_t6 *t6)
 {
-	int h = t6->height, y, k;
+	int h = t6->base.height, y, k;
 
 	for (y = 0; y < h; y += 2) {
-		if (!t6->cvt[y] && !t6->cvt[y + 1])
+		if (!t6->base.changed[y] && !t6->base.changed[y + 1])
 			continue;
 		if (t6->lay.kind == T6_NV12) {
 			t6_convert_pair(t6, y);
@@ -741,13 +720,13 @@ static void t6_convert(struct mct_t6 *t6)
 			t6_convert_row(t6, y);
 			t6_convert_row(t6, y + 1);
 		}
-		t6->cvt[y] = 1;
-		t6->cvt[y + 1] = 1;
+		t6->base.changed[y] = 1;
+		t6->base.changed[y + 1] = 1;
 	}
 	for (k = 0; k < ARRAY_SIZE(t6->stale); k++)
 		for (y = 0; y < h; y++)
-			t6->stale[k][y] |= t6->cvt[y];
-	memset(t6->cvt, 0, h);
+			t6->stale[k][y] |= t6->base.changed[y];
+	memset(t6->base.changed, 0, h);
 }
 
 struct t6_band {
@@ -774,7 +753,7 @@ static bool t6_row_diff(const u8 *a, const u8 *b, int n, int *lo, int *hi)
 /* host offset of row r of row pair p in plane i */
 static size_t t6_row(const struct mct_t6 *t6, int i, int p, int r)
 {
-	return t6->lay.host[i] + ((size_t)p * t6->lay.rows[i] + r) * t6->width * t6->lay.bpp[i];
+	return t6->lay.host[i] + ((size_t)p * t6->lay.rows[i] + r) * t6->base.width * t6->lay.bpp[i];
 }
 
 /*
@@ -783,7 +762,7 @@ static size_t t6_row(const struct mct_t6 *t6, int i, int p, int r)
  */
 static int t6_diff_bands(struct mct_t6 *t6, int k, struct t6_band *bands)
 {
-	int w = t6->width, pairs = t6->height / 2, n = 0, p, i, r;
+	int w = t6->base.width, pairs = t6->base.height / 2, n = 0, p, i, r;
 
 	if (!t6->hw_valid[k]) {
 		bands[0] = (struct t6_band){ 0, pairs, 0, w };
@@ -834,7 +813,7 @@ static int t6_write_rect(struct mct_t6 *t6, int k, const struct t6_band *b,
 			 int ia, int ya, int ib, int yb, int n)
 {
 	int bpp = t6->lay.bpp[ia], pitch = t6->lay.pitch, i;
-	int rb = t6->width * bpp, bw = (b->x1 - b->x0) * bpp, xo = b->x0 * bpp;
+	int rb = t6->base.width * bpp, bw = (b->x1 - b->x0) * bpp, xo = b->x0 * bpp;
 	u32 base = t6_bufs[k] + 0x30;
 	struct t6_rect_header r = { };
 	struct t6_urb *u;
@@ -885,7 +864,7 @@ static int t6_send_band(struct mct_t6 *t6, int k, const struct t6_band *b)
 		y1 = 2 * b->p1;
 		for (y = 2 * b->p0; y < y1 && !ret; y += 3 * n) {
 			n = min(step, DIV_ROUND_UP(y1 - y, 3));
-			ys = min(y, t6->height - 3 * n);
+			ys = min(y, t6->base.height - 3 * n);
 			ret = t6_write_rect(t6, k, b, 0, ys, 0, ys + 2 * n, n);
 			t6->stats.rows += 3 * n;
 		}
@@ -967,26 +946,15 @@ static int t6_present(struct mct_t6 *t6, const struct t6_band *bands, int n)
 			}
 	}
 	t6->hw_valid[k] = true;
-	memset(t6->stale[k], 0, t6->height);
+	memset(t6->stale[k], 0, t6->base.height);
 	t6->stats.bands += n;
 	t6->buf = (k + 1) % ARRAY_SIZE(t6_bufs);
 	return 0;
 }
 
-/* motion stopped: send the image again, now in the full colour format */
-static void t6_settle_work(struct work_struct *work)
-{
-	struct mct_t6 *t6 = container_of(to_delayed_work(work), struct mct_t6, settle_work);
-
-	mutex_lock(&t6->upd.lock);
-	t6->upd.dirty = true;
-	mutex_unlock(&t6->upd.lock);
-	queue_work(system_long_wq, &t6->upd.work);
-}
-
 static bool t6_fits(const struct mct_t6 *t6, enum t6_kind kind)
 {
-	return (u64)t6_scan_x2[kind] * t6->width * t6->height * t6->refresh / 2 <=
+	return (u64)t6_scan_x2[kind] * t6->base.width * t6->base.height * t6->base.refresh / 2 <=
 	       t6_scan_max[kind];
 }
 
@@ -1024,12 +992,12 @@ static bool t6_large(const struct mct_t6 *t6, const struct t6_band *bands, int n
 
 	for (i = 0; i < n; i++)
 		px += (u64)(bands[i].p1 - bands[i].p0) * 2 * (bands[i].x1 - bands[i].x0);
-	return px * 4 > (u64)t6->width * t6->height;
+	return px * 4 > (u64)t6->base.width * t6->base.height;
 }
 
-static void t6_update_work(struct work_struct *work)
+static void t6_update(struct mct_device *mdev)
 {
-	struct mct_t6 *t6 = container_of(work, struct mct_t6, upd.work);
+	struct mct_t6 *t6 = to_t6(mdev);
 	struct t6_band bands[T6_MAX_BANDS];
 	enum t6_kind full, want;
 	bool fits, adaptive, known;
@@ -1041,19 +1009,19 @@ static void t6_update_work(struct work_struct *work)
 	 * up waiting behind a cursor upload or connector poll on io_lock.
 	 */
 	mutex_lock(&t6->io_lock);
-	mutex_lock(&t6->upd.lock);
-	if (!t6->upd.dirty || !t6->width) {
-		mutex_unlock(&t6->upd.lock);
+	mutex_lock(&t6->base.lock);
+	if (!t6->base.dirty || !t6->base.width) {
+		mutex_unlock(&t6->base.lock);
 		mutex_unlock(&t6->io_lock);
 		return;
 	}
-	t6->upd.dirty = false;
+	t6->base.dirty = false;
 	t0 = ktime_get();
 
 	/* a failed transfer may have left any buffer half written */
 	ret = atomic_xchg(&t6->urb_err, 0);
 	if (ret) {
-		drm_err_ratelimited(&t6->dev, "frame transfer error: %d\n", ret);
+		drm_err_ratelimited(&t6->base.dev, "frame transfer error: %d\n", ret);
 		memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
 	}
 
@@ -1079,17 +1047,16 @@ static void t6_update_work(struct work_struct *work)
 			t6_convert(t6);
 			n = t6_diff_bands(t6, t6->buf, bands);
 		}
-		mod_delayed_work(system_long_wq, &t6->settle_work,
-				 msecs_to_jiffies(T6_SETTLE_MS));
+		mct_settle(&t6->base, T6_SETTLE_MS);
 	}
 	/* commits only wait for the conversion above, never for USB */
-	mutex_unlock(&t6->upd.lock);
+	mutex_unlock(&t6->base.lock);
 	t1 = ktime_get();
 
-	if (drm_dev_enter(&t6->dev, &idx)) {
+	if (drm_dev_enter(&t6->base.dev, &idx)) {
 		ret = t6_present(t6, bands, n);
 		if (ret && ret != -ENODEV && ret != -ESHUTDOWN)	/* unplugged */
-			drm_err_ratelimited(&t6->dev, "frame update error: %d\n", ret);
+			drm_err_ratelimited(&t6->base.dev, "frame update error: %d\n", ret);
 		else
 			t6->stats.updates++;
 		drm_dev_exit(idx);
@@ -1099,237 +1066,17 @@ static void t6_update_work(struct work_struct *work)
 	mutex_unlock(&t6->io_lock);
 }
 
-/* copy the rows set in t6->rowmask from the (mapped) framebuffer, kick the worker */
-static void t6_mark_dirty(struct mct_t6 *t6, struct drm_framebuffer *fb,
-			  const struct iosys_map *map)
+/* updates stopped: let the queued transfers finish */
+static void t6_stop(struct mct_device *mdev)
 {
-	struct drm_gem_object *obj = drm_gem_fb_get_obj(fb, 0);
-	int w = t6->width, y;
-	ktime_t t0;
-	u64 ns;
+	struct mct_t6 *t6 = to_t6(mdev);
 
-	mutex_lock(&t6->upd.lock);
-	t0 = ktime_get();
-	if (t6->upd.dirty)
-		t6->stats.skipped++;	/* the previous image never went out */
-	/*
-	 * Our own (shmem) buffers are cached system memory, cheap to read:
-	 * compare each damaged row with the shadow and only take the ones that
-	 * really changed. Compositors' damage is coarse (whole windows, or all
-	 * rows on a rotated output with the clip workaround below).
-	 */
-	if (obj && !drm_gem_is_imported(obj) && !map->is_iomem) {
-		for (y = 0; y < t6->height; y++) {
-			u8 *dst = t6->shadow + (size_t)y * w * 4;
-			const u8 *src = (const u8 *)map->vaddr + (size_t)y * fb->pitches[0];
-
-			if (!t6->rowmask[y] || (t6->shadow_valid && !memcmp(dst, src, w * 4)))
-				continue;
-			memcpy(dst, src, w * 4);
-			t6->cvt[y] = 1;
-			t6->stats.px_damage += w;
-			t6->stats.rows_copied++;
-		}
-		goto done;
-	}
-	/*
-	 * Buffers shared by a GPU are usually mapped write-combined, where plain
-	 * reads crawl (~90 MB/s measured with amdgpu); the streaming-load copy
-	 * is many times faster.
-	 */
-	for (y = 0; y < t6->height; ) {
-		int n = 0;
-
-		while (y + n < t6->height && t6->rowmask[y + n])
-			n++;
-		if (!n) {
-			y++;
-			continue;
-		}
-		/*
-		 * One call per run of rows: each call saves and restores FPU state.
-		 * The mapping may be I/O memory (a plain-mapped VRAM import), so
-		 * offset it as an iosys_map.
-		 */
-		if (fb->pitches[0] == w * 4) {
-			struct iosys_map d = IOSYS_MAP_INIT_VADDR(t6->shadow + (size_t)y * w * 4);
-			struct iosys_map sm = *map;
-
-			iosys_map_incr(&sm, (size_t)y * fb->pitches[0]);
-			drm_memcpy_from_wc(&d, &sm, (size_t)n * w * 4);
-		} else {
-			int i;
-
-			for (i = y; i < y + n; i++) {
-				u8 *row = t6->shadow + (size_t)i * w * 4;
-				struct iosys_map d = IOSYS_MAP_INIT_VADDR(row);
-				struct iosys_map sm = *map;
-
-				iosys_map_incr(&sm, (size_t)i * fb->pitches[0]);
-				drm_memcpy_from_wc(&d, &sm, w * 4);
-			}
-		}
-		memset(t6->cvt + y, 1, n);
-		t6->stats.px_damage += (u64)n * w;
-		t6->stats.rows_copied += n;
-		y += n;
-	}
-done:
-	t6->shadow_valid = true;
-	ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
-	t6->stats.copies++;
-	t6->stats.ns_copy += ns;
-	t6->stats.ns_copy_max = max(t6->stats.ns_copy_max, ns);
-	t6->upd.dirty = true;
-	mutex_unlock(&t6->upd.lock);
-
-	queue_work(system_long_wq, &t6->upd.work);
-}
-
-/*
- * Rows to copy for this commit, in t6->rowmask; false if nothing changed.
- *
- * smithay (niri 26.04) computes FB_DAMAGE_CLIPS for a rotated output in the
- * output's rotated coordinates without mapping them to the framebuffer, and
- * the kernel then clips away what lies outside it. So take the raw clips and
- * mark the rows each one would cover under any rotation or flip: correct
- * clips give a few extra rows, unrotated ones still cover the change.
- */
-static bool t6_damage_rows(struct mct_t6 *t6, const struct drm_plane_state *state)
-{
-	unsigned int n = drm_plane_get_damage_clips_count(state), i;
-	const struct drm_mode_rect *clips = drm_plane_get_damage_clips(state);
-	int h = t6->height, j, k;
-	bool any = false;
-
-	if (!n)
-		t6->stats.no_clips++;
-	t6->stats.clips += n;
-	for (i = 0; i < n; i++)
-		t6->stats.clip_px += (u64)max(clips[i].x2 - clips[i].x1, 0) *
-				     max(clips[i].y2 - clips[i].y1, 0);
-	if (!n || !t6->shadow_valid) {
-		memset(t6->rowmask, 1, h);
-		return true;
-	}
-	memset(t6->rowmask, 0, h);
-	for (i = 0; i < n; i++) {
-		const struct drm_mode_rect *c = &clips[i];
-		int r[4][2] = {
-			{ c->y1, c->y2 },		/* as given, or flipped horizontally */
-			{ h - c->y2, h - c->y1 },	/* upside down */
-			{ c->x1, c->x2 },		/* rotated by 90 or 270 */
-			{ h - c->x2, h - c->x1 },
-		};
-
-		for (j = 0; j < 4; j++) {
-			for (k = max(r[j][0], 0); k < min(r[j][1], h); k++) {
-				t6->rowmask[k] = 1;
-				any = true;
-			}
-		}
-	}
-	return any;
-}
-
-static void t6_stop_updates(struct mct_t6 *t6)
-{
-	/* the worker re-arms the settle timer and the timer queues the worker */
-	do {
-		cancel_work_sync(&t6->upd.work);
-	} while (cancel_delayed_work_sync(&t6->settle_work));
-	cancel_work_sync(&t6->upd.work);
 	if (!usb_wait_anchor_empty_timeout(&t6->anchor, T6_TIMEOUT))
 		usb_kill_anchored_urbs(&t6->anchor);
-	mutex_lock(&t6->upd.lock);
-	t6->upd.dirty = false;
-	mutex_unlock(&t6->upd.lock);
 }
-
-/* ------------------------------------------------------------------ */
-/* primary plane						      */
-
-static const u32 t6_formats[] = {
-	DRM_FORMAT_XRGB8888,
-};
-
-static const u64 t6_modifiers[] = {
-	DRM_FORMAT_MOD_LINEAR,
-	DRM_FORMAT_MOD_INVALID
-};
-
-static int t6_primary_atomic_check(struct drm_plane *plane, struct drm_atomic_commit *state)
-{
-	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
-	struct drm_framebuffer *fb = new_state->fb;
-	struct drm_crtc_state *crtc_state = NULL;
-	int ret;
-
-	if (new_state->crtc)
-		crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
-	ret = drm_atomic_helper_check_plane_state(new_state, crtc_state,
-						  DRM_PLANE_NO_SCALING, DRM_PLANE_NO_SCALING,
-						  false, false);
-	if (ret || !fb || !new_state->visible)
-		return ret;
-	/* the whole framebuffer is the image: no panning, no larger buffers */
-	if (fb->width != crtc_state->mode.hdisplay || fb->height != crtc_state->mode.vdisplay ||
-	    new_state->src_x || new_state->src_y || fb->offsets[0])
-		return -EINVAL;
-	return 0;
-}
-
-static void t6_primary_atomic_update(struct drm_plane *plane, struct drm_atomic_commit *state)
-{
-	struct mct_t6 *t6 = to_t6(plane->dev);
-	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
-	struct drm_shadow_plane_state *shadow = to_drm_shadow_plane_state(new_state);
-	struct drm_framebuffer *fb = new_state->fb;
-	ktime_t t0;
-	u64 ns;
-
-	if (!fb || !new_state->visible || !t6->width)
-		return;
-	if (fb->width != t6->width || fb->height != t6->height)
-		goto invalid;
-	if (!t6_damage_rows(t6, new_state))
-		return;
-	t0 = ktime_get();
-	if (drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
-		goto invalid;
-	t6_mark_dirty(t6, fb, &shadow->data[0]);
-	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
-	ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
-	t6->stats.ns_commit += ns;
-	t6->stats.ns_commit_max = max(t6->stats.ns_commit_max, ns);
-	return;
-
-invalid:
-	/* this commit's changes never reached the shadow: copy all next time */
-	mutex_lock(&t6->upd.lock);
-	t6->shadow_valid = false;
-	mutex_unlock(&t6->upd.lock);
-}
-
-static const struct drm_plane_helper_funcs t6_primary_helper_funcs = {
-	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
-	.atomic_check = t6_primary_atomic_check,
-	.atomic_update = t6_primary_atomic_update,
-};
-
-static const struct drm_plane_funcs t6_primary_funcs = {
-	.update_plane = drm_atomic_helper_update_plane,
-	.disable_plane = drm_atomic_helper_disable_plane,
-	.destroy = drm_plane_cleanup,
-	DRM_GEM_SHADOW_PLANE_FUNCS,
-};
 
 /* ------------------------------------------------------------------ */
 /* cursor plane							      */
-
-static const u32 t6_cursor_formats[] = {
-	DRM_FORMAT_ARGB8888,
-};
 
 /*
  * The device has 5 cursor slots per output (output 1 from slot 5 on). A new
@@ -1395,51 +1142,28 @@ static int t6_cursor_move(struct mct_t6 *t6, int x, int y)
 	return ret < 0 ? ret : 0;
 }
 
-static int t6_cursor_atomic_check(struct drm_plane *plane, struct drm_atomic_commit *state)
+static void t6_cursor_hide(struct mct_device *mdev)
 {
-	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
-	struct drm_framebuffer *fb = new_state->fb;
-	struct drm_crtc_state *crtc_state = NULL;
-
-	if (new_state->crtc)
-		crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
-	if (fb && (fb->width > T6_CUR || fb->height > T6_CUR))
-		return -EINVAL;
-	return drm_atomic_helper_check_plane_state(new_state, crtc_state,
-						   DRM_PLANE_NO_SCALING, DRM_PLANE_NO_SCALING,
-						   true, true);
+	t6_cursor_show(to_t6(mdev), false);
 }
 
-static void t6_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_commit *state)
+static void t6_cursor_set(struct mct_device *mdev, const u8 *bgra, int x, int y)
 {
-	struct mct_t6 *t6 = to_t6(plane->dev);
-	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
-	struct drm_shadow_plane_state *shadow = to_drm_shadow_plane_state(new_state);
-	struct drm_framebuffer *fb = new_state->fb;
-	int x, y, sx, sy, i, j, idx;
+	struct mct_t6 *t6 = to_t6(mdev);
+	int sx, sy, j;
 	u8 *dst;
-
-	if (!drm_dev_enter(plane->dev, &idx))
-		return;
-
-	if (!fb || !new_state->visible) {
-		t6_cursor_show(t6, false);
-		goto out;
-	}
 
 	/*
 	 * Position is the top left of the box and must not be negative: if
 	 * the box hangs off the left/top edge, shift the image instead.
 	 */
-	x = new_state->crtc_x;
-	y = new_state->crtc_y;
 	sx = max(-x, 0);
 	sy = max(-y, 0);
 	x = max(x, 0);
 	y = max(y, 0);
 	if (sx >= T6_CUR || sy >= T6_CUR) {
 		t6_cursor_show(t6, false);
-		goto out;
+		return;
 	}
 
 	/* header {kind 1 = ARGB with alpha, w, h, pitch}, then B, G, R, A pixels */
@@ -1447,169 +1171,81 @@ static void t6_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_c
 	put_unaligned_le16(T6_CUR, t6->cur.img + 2);
 	put_unaligned_le16(T6_CUR, t6->cur.img + 4);
 	put_unaligned_le16(T6_CUR * 4, t6->cur.img + 6);
-	if (drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
-		goto out;
 	dst = t6->cur.img + 8;
-	for (j = 0; j < T6_CUR; j++) {
-		for (i = 0; i < T6_CUR; i++, dst += 4) {
-			int vx = i + sx, vy = j + sy;
-
-			if (vx >= fb->width || vy >= fb->height)
-				memset(dst, 0, 4);
-			else
-				iosys_map_memcpy_from(dst, &shadow->data[0],
-						      vy * fb->pitches[0] + vx * 4, 4);
-		}
+	for (j = 0; j < T6_CUR; j++, dst += T6_CUR * 4) {
+		memset(dst, 0, T6_CUR * 4);
+		if (j + sy < T6_CUR)
+			memcpy(dst, bgra + (j + sy) * MCT_CUR_PITCH + sx * 4, (T6_CUR - sx) * 4);
 	}
-	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
 
 	t6_cursor_move(t6, x, y);
 	if (!t6->cur.uploaded || memcmp(t6->cur.img, t6->cur.shown, T6_CUR_BYTES))
 		if (t6_cursor_upload(t6))
-			goto out;
+			return;
 	t6_cursor_show(t6, true);
-out:
-	drm_dev_exit(idx);
 }
-
-static const struct drm_plane_helper_funcs t6_cursor_helper_funcs = {
-	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
-	.atomic_check = t6_cursor_atomic_check,
-	.atomic_update = t6_cursor_atomic_update,
-};
-
-static const struct drm_plane_funcs t6_cursor_funcs = {
-	.update_plane = drm_atomic_helper_update_plane,
-	.disable_plane = drm_atomic_helper_disable_plane,
-	.destroy = drm_plane_cleanup,
-	DRM_GEM_SHADOW_PLANE_FUNCS,
-};
 
 /* ------------------------------------------------------------------ */
-/* CRTC / encoder / connector					      */
-
-static int t6_crtc_atomic_check(struct drm_crtc *crtc, struct drm_atomic_commit *state)
-{
-	struct mct_t6 *t6 = to_t6(crtc->dev);
-	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
-	struct t6_mode m;
-
-	if (crtc_state->enable && t6_mode_entry(t6, &crtc_state->mode, &m))
-		return -EINVAL;
-	if (crtc_state->gamma_lut && drm_color_lut_size(crtc_state->gamma_lut) != 256)
-		return -EINVAL;
-	return drm_crtc_helper_atomic_check(crtc, state);
-}
+/* display on/off, gamma, monitor				      */
 
 /*
  * The T6 in hand has no gamma tables (feature level 6; the request stalls),
- * so the DRM gamma LUT is applied during the NV12 conversion. A change
+ * so the DRM gamma LUT is applied during the conversion. A change
  * reconverts the whole image; the diff then sends what changed.
  */
-static void t6_set_gamma(struct mct_t6 *t6, const struct drm_property_blob *blob)
+static void t6_gamma(struct mct_device *mdev, const struct drm_color_lut *lut)
 {
-	const struct drm_color_lut *lut = blob ? blob->data : NULL;
+	struct mct_t6 *t6 = to_t6(mdev);
 	bool kick;
 	int i;
 
-	mutex_lock(&t6->upd.lock);
+	mutex_lock(&mdev->lock);
 	for (i = 0; i < 256; i++) {
 		t6->lut[0][i] = lut ? drm_color_lut_extract(lut[i].red, 8) : i;
 		t6->lut[1][i] = lut ? drm_color_lut_extract(lut[i].green, 8) : i;
 		t6->lut[2][i] = lut ? drm_color_lut_extract(lut[i].blue, 8) : i;
 	}
-	kick = t6->width && t6->shadow_valid;
+	kick = mdev->width && mdev->shadow_valid;
 	if (kick) {
-		memset(t6->cvt, 1, t6->height);
-		t6->upd.dirty = true;
+		memset(mdev->changed, 1, mdev->height);
+		mdev->dirty = true;
 	}
-	mutex_unlock(&t6->upd.lock);
+	mutex_unlock(&mdev->lock);
 	if (kick)
-		queue_work(system_long_wq, &t6->upd.work);
+		mct_kick(mdev);
 }
 
-static void t6_crtc_atomic_flush(struct drm_crtc *crtc, struct drm_atomic_commit *state)
+static void t6_enable(struct mct_device *mdev, const struct drm_display_mode *mode)
 {
-	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
-
-	if (crtc_state->color_mgmt_changed)
-		t6_set_gamma(to_t6(crtc->dev), crtc_state->gamma_lut);
-	drm_crtc_vblank_atomic_flush(crtc, state);
-}
-
-static void t6_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commit *state)
-{
-	struct mct_t6 *t6 = to_t6(crtc->dev);
-	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
+	struct mct_t6 *t6 = to_t6(mdev);
 	struct t6_mode m;
 	int idx;
 
-	if (t6_mode_entry(t6, &crtc_state->mode, &m))
+	if (t6_mode_entry(t6, mode, &m))
 		return;
-	if (drm_dev_enter(crtc->dev, &idx)) {
+	if (drm_dev_enter(&mdev->dev, &idx)) {
 		if (t6_set_mode(t6, &m) || t6_ready(t6) || t6_set_output(t6, true))
-			drm_err(&t6->dev, "could not set mode %dx%d\n",
-				crtc_state->mode.hdisplay, crtc_state->mode.vdisplay);
+			drm_err(&mdev->dev, "could not set mode %dx%d\n",
+				mode->hdisplay, mode->vdisplay);
 		drm_dev_exit(idx);
 	}
 	t6->cur.uploaded = false;	/* upload the image again after a mode set */
 	t6->cur.visible = false;
-	mutex_lock(&t6->upd.lock);
+	mutex_lock(&mdev->lock);
 	/* nothing is known about the frame buffers after a mode set */
 	memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
 	t6->lay.planes = 0;		/* the worker sets it up for the new size */
 	t6->buf = 0;
-	t6->shadow_valid = false;
-	t6->refresh = drm_mode_vrefresh(&crtc_state->mode);
-	t6->width = crtc_state->mode.hdisplay;
-	t6->height = crtc_state->mode.vdisplay;
-	memset(t6->shadow, 0, (size_t)t6->width * t6->height * 4);
-	mutex_unlock(&t6->upd.lock);
-	drm_crtc_vblank_on(crtc);
+	mutex_unlock(&mdev->lock);
 }
 
-static void t6_crtc_atomic_disable(struct drm_crtc *crtc, struct drm_atomic_commit *state)
+static void t6_disable(struct mct_device *mdev)
 {
-	struct mct_t6 *t6 = to_t6(crtc->dev);
-	int idx;
+	struct mct_t6 *t6 = to_t6(mdev);
 
-	drm_crtc_vblank_off(crtc);
-	t6_stop_updates(t6);
-	mutex_lock(&t6->upd.lock);
-	t6->width = 0;
-	t6->height = 0;
-	mutex_unlock(&t6->upd.lock);
-	if (drm_dev_enter(crtc->dev, &idx)) {
-		t6_cursor_show(t6, false);
-		t6_set_output(t6, false);
-		drm_dev_exit(idx);
-	}
+	t6_cursor_show(t6, false);
+	t6_set_output(t6, false);
 }
-
-/*
- * No vblank interrupt is used; a hrtimer at the mode's refresh rate (DRM
- * vblank timer helpers) paces page-flip events.
- */
-static const struct drm_crtc_helper_funcs t6_crtc_helper_funcs = {
-	.atomic_check = t6_crtc_atomic_check,
-	.atomic_flush = t6_crtc_atomic_flush,
-	.atomic_enable = t6_crtc_atomic_enable,
-	.atomic_disable = t6_crtc_atomic_disable,
-};
-
-static const struct drm_crtc_funcs t6_crtc_funcs = {
-	.reset = drm_atomic_helper_crtc_reset,
-	.destroy = drm_crtc_cleanup,
-	.set_config = drm_atomic_helper_set_config,
-	.page_flip = drm_atomic_helper_page_flip,
-	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
-	DRM_CRTC_VBLANK_TIMER_FUNCS,
-};
-
-static const struct drm_encoder_funcs t6_encoder_funcs = {
-	.destroy = drm_encoder_cleanup,
-};
 
 static int t6_read_edid_block(void *data, u8 *buf, unsigned int block, size_t len)
 {
@@ -1660,7 +1296,7 @@ static struct drm_display_mode *t6_rb_mode(struct drm_device *dev, int w, int h,
  */
 static bool t6_has_mode(struct drm_connector *connector, int w, int h, int hz)
 {
-	struct mct_t6 *t6 = to_t6(connector->dev);
+	struct mct_t6 *t6 = to_t6(to_mct(connector->dev));
 	struct drm_display_mode *mode;
 	struct t6_mode m;
 
@@ -1679,7 +1315,7 @@ static bool t6_has_mode(struct drm_connector *connector, int w, int h, int hz)
 static int t6_add_extra_modes(struct drm_connector *connector, int w, int h)
 {
 	const struct drm_monitor_range_info *range = &connector->display_info.monitor_range;
-	struct mct_t6 *t6 = to_t6(connector->dev);
+	struct mct_t6 *t6 = to_t6(to_mct(connector->dev));
 	int min_hz = range->min_vfreq, max_hz = range->max_vfreq;
 	struct drm_display_mode *mode;
 	struct t6_mode m;
@@ -1708,9 +1344,9 @@ static int t6_add_extra_modes(struct drm_connector *connector, int w, int h)
 	return count;
 }
 
-static int t6_conn_get_modes(struct drm_connector *connector)
+static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector)
 {
-	struct mct_t6 *t6 = to_t6(connector->dev);
+	struct mct_t6 *t6 = to_t6(mdev);
 	struct drm_display_mode *mode;
 	const struct drm_edid *edid;
 	int count, w = 0, h = 0;
@@ -1736,42 +1372,23 @@ static int t6_conn_get_modes(struct drm_connector *connector)
 	return count;
 }
 
-static enum drm_mode_status t6_conn_mode_valid(struct drm_connector *connector,
-					       const struct drm_display_mode *mode)
+static enum drm_mode_status t6_mode_valid(struct mct_device *mdev,
+					  const struct drm_display_mode *mode)
 {
 	struct t6_mode m;
 
-	return t6_mode_entry(to_t6(connector->dev), mode, &m) ? MODE_CLOCK_RANGE : MODE_OK;
+	return t6_mode_entry(to_t6(mdev), mode, &m) ? MODE_CLOCK_RANGE : MODE_OK;
 }
 
-static int t6_conn_detect(struct drm_connector *connector, struct drm_modeset_acquire_ctx *ctx,
-			  bool force)
+static int t6_detect(struct mct_device *mdev)
 {
-	struct mct_t6 *t6 = to_t6(connector->dev);
-	int idx, ret = connector_status_unknown;
+	struct mct_t6 *t6 = to_t6(mdev);
+	int ret = t6_output_status(t6, t6->output);
 
-	if (!drm_dev_enter(connector->dev, &idx))
-		return connector_status_disconnected;
-	ret = t6_output_status(t6, t6->output);
-	drm_dev_exit(idx);
 	if (ret < 0)
 		return connector_status_unknown;
 	return ret == 1 ? connector_status_connected : connector_status_disconnected;
 }
-
-static const struct drm_connector_helper_funcs t6_conn_helper_funcs = {
-	.get_modes = t6_conn_get_modes,
-	.mode_valid = t6_conn_mode_valid,
-	.detect_ctx = t6_conn_detect,
-};
-
-static const struct drm_connector_funcs t6_conn_funcs = {
-	.fill_modes = drm_helper_probe_single_connector_modes,
-	.destroy = drm_connector_cleanup,
-	.reset = drm_atomic_helper_connector_reset,
-	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
-};
 
 /* ------------------------------------------------------------------ */
 /* interrupt events						      */
@@ -1780,7 +1397,7 @@ static void t6_hpd_work(struct work_struct *work)
 {
 	struct mct_t6 *t6 = container_of(work, struct mct_t6, hpd_work);
 
-	drm_helper_hpd_irq_event(&t6->dev);
+	drm_helper_hpd_irq_event(&t6->base.dev);
 }
 
 static void t6_event_complete(struct urb *urb)
@@ -1827,7 +1444,7 @@ static int t6_events_init(struct mct_t6 *t6, struct usb_interface *intf)
 	if (ret)
 		return ret;
 	t6->ev_urb = usb_alloc_urb(0, GFP_KERNEL);
-	buf = drmm_kmalloc(&t6->dev, T6_EVENT_LEN, GFP_KERNEL);
+	buf = drmm_kmalloc(&t6->base.dev, T6_EVENT_LEN, GFP_KERNEL);
 	if (!t6->ev_urb || !buf)
 		return -ENOMEM;
 	usb_fill_int_urb(t6->ev_urb, udev, usb_rcvintpipe(udev, ep->bEndpointAddress), buf,
@@ -1838,25 +1455,17 @@ static int t6_events_init(struct mct_t6 *t6, struct usb_interface *intf)
 /* ------------------------------------------------------------------ */
 /* debugfs							      */
 
-static int t6_stats_show(struct seq_file *m, void *data)
+static void t6_stats(struct mct_device *mdev, struct seq_file *m)
 {
-	struct drm_debugfs_entry *entry = m->private;
-	struct mct_t6 *t6 = to_t6(entry->dev);
-	u64 ms = max_t(u64, ktime_ms_delta(ktime_get(), t6->stats.since), 1);
+	struct mct_t6 *t6 = to_t6(mdev);
+	u64 ms = max_t(u64, ktime_ms_delta(ktime_get(), mdev->stats.since), 1);
 	u64 n = max_t(u64, t6->stats.updates, 1);
 
-	seq_printf(m, "seconds          %llu\n", ms / 1000);
-	seq_printf(m, "mode             %dx%d@%d (output %d), %s\n", t6->width, t6->height,
-		   t6->refresh, t6->output, t6->lay.planes ? t6_kind_name[t6->lay.kind] : "-");
+	seq_printf(m, "mode             %dx%d@%d (output %d), %s\n", mdev->width, mdev->height,
+		   mdev->refresh, t6->output, t6->lay.planes ? t6_kind_name[t6->lay.kind] : "-");
 	seq_printf(m, "updates          %llu (%llu.%llu per second)\n", t6->stats.updates,
 		   div64_u64(t6->stats.updates * 1000, ms),
 		   div64_u64(t6->stats.updates * 10000, ms) % 10);
-	seq_printf(m, "skipped images   %llu\n", t6->stats.skipped);
-	seq_printf(m, "pixels damaged   %llu\n", t6->stats.px_damage);
-	seq_printf(m, "damage clips     %llu commits without, %llu clips, %llu px in clips\n",
-		   t6->stats.no_clips, t6->stats.clips, t6->stats.clip_px);
-	seq_printf(m, "rows changed     %llu per commit\n",
-		   div64_u64(t6->stats.rows_copied, max_t(u64, t6->stats.copies, 1)));
 	seq_printf(m, "rows sent        %llu in %llu bands (%llu per update)\n",
 		   t6->stats.rows, t6->stats.bands, div64_u64(t6->stats.rows, n));
 	seq_printf(m, "usb bytes        %llu (avg %llu KB/s)\n",
@@ -1866,22 +1475,11 @@ static int t6_stats_show(struct seq_file *m, void *data)
 		   div64_u64(t6->stats.ns_conv, n * 10000) % 100,
 		   div64_u64(t6->stats.ns_usb, n * 1000000),
 		   div64_u64(t6->stats.ns_usb, n * 10000) % 100);
-	seq_printf(m, "ms per fb copy   %llu.%02llu (max %llu.%02llu) over %llu copies\n",
-		   div64_u64(t6->stats.ns_copy, max_t(u64, t6->stats.copies, 1) * 1000000),
-		   div64_u64(t6->stats.ns_copy, max_t(u64, t6->stats.copies, 1) * 10000) % 100,
-		   div64_u64(t6->stats.ns_copy_max, 1000000),
-		   div64_u64(t6->stats.ns_copy_max, 10000) % 100, t6->stats.copies);
-	seq_printf(m, "ms per commit    %llu.%02llu (max %llu.%02llu) incl. cpu access setup\n",
-		   div64_u64(t6->stats.ns_commit, max_t(u64, t6->stats.copies, 1) * 1000000),
-		   div64_u64(t6->stats.ns_commit, max_t(u64, t6->stats.copies, 1) * 10000) % 100,
-		   div64_u64(t6->stats.ns_commit_max, 1000000),
-		   div64_u64(t6->stats.ns_commit_max, 10000) % 100);
 	seq_printf(m, "motion -> NV12   %llu times\n", t6->stats.to_420);
 	seq_printf(m, "events           %llu frame done, %llu monitor change, %llu other\n",
 		   t6->stats.ev_done, t6->stats.ev_change, t6->stats.ev_other);
 	seq_printf(m, "usb MB/s while busy %llu\n",
 		   div64_u64(t6->stats.bytes * 1000, max_t(u64, t6->stats.ns_usb, 1)));
-	return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1908,107 +1506,25 @@ static const struct drm_driver t6_drm_driver = {
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
 };
 
-/*
- * Enable the CRTC before updating the planes: the mode set clears what the
- * driver knows about the device's frame buffers and cursor, so the planes
- * of the same commit must come after it, or the first frame and the cursor
- * after a mode set or resume would be dropped.
- */
-static void t6_commit_tail(struct drm_atomic_commit *state)
-{
-	struct drm_device *dev = state->dev;
-
-	drm_atomic_helper_commit_modeset_disables(dev, state);
-	drm_atomic_helper_commit_modeset_enables(dev, state);
-	drm_atomic_helper_commit_planes(dev, state, 0);
-	drm_atomic_helper_fake_vblank(state);
-	drm_atomic_helper_commit_hw_done(state);
-	drm_atomic_helper_wait_for_vblanks(dev, state);
-	drm_atomic_helper_cleanup_planes(dev, state);
-}
-
-static const struct drm_mode_config_helper_funcs t6_mode_config_helpers = {
-	.atomic_commit_tail = t6_commit_tail,
+static const struct mct_funcs t6_funcs = {
+	.get_modes = t6_get_modes,
+	.mode_valid = t6_mode_valid,
+	.detect = t6_detect,
+	.enable = t6_enable,
+	.disable = t6_disable,
+	.stop = t6_stop,
+	.update = t6_update,
+	.gamma = t6_gamma,
+	.cursor_set = t6_cursor_set,
+	.cursor_hide = t6_cursor_hide,
+	.stats = t6_stats,
 };
-
-static const struct drm_mode_config_funcs t6_mode_config_funcs = {
-	.fb_create = drm_gem_fb_create_with_dirty,
-	.atomic_check = drm_atomic_helper_check,
-	.atomic_commit = drm_atomic_helper_commit,
-};
-
-static int t6_modeset_init(struct mct_t6 *t6)
-{
-	struct drm_device *dev = &t6->dev;
-	int ret;
-
-	ret = drmm_mode_config_init(dev);
-	if (ret)
-		return ret;
-	dev->mode_config.min_width = 64;
-	dev->mode_config.max_width = t6->max_w;
-	dev->mode_config.min_height = 64;
-	dev->mode_config.max_height = t6->max_h;
-	dev->mode_config.cursor_width = T6_CUR;
-	dev->mode_config.cursor_height = T6_CUR;
-	dev->mode_config.funcs = &t6_mode_config_funcs;
-	dev->mode_config.helper_private = &t6_mode_config_helpers;
-
-	ret = drm_universal_plane_init(dev, &t6->primary, 0, &t6_primary_funcs,
-				       t6_formats, ARRAY_SIZE(t6_formats),
-				       t6_modifiers, DRM_PLANE_TYPE_PRIMARY, NULL);
-	if (ret)
-		return ret;
-	drm_plane_helper_add(&t6->primary, &t6_primary_helper_funcs);
-	drm_plane_enable_fb_damage_clips(&t6->primary);
-
-	ret = drm_universal_plane_init(dev, &t6->cursor, 0, &t6_cursor_funcs,
-				       t6_cursor_formats, ARRAY_SIZE(t6_cursor_formats),
-				       t6_modifiers, DRM_PLANE_TYPE_CURSOR, NULL);
-	if (ret)
-		return ret;
-	drm_plane_helper_add(&t6->cursor, &t6_cursor_helper_funcs);
-
-	ret = drm_crtc_init_with_planes(dev, &t6->crtc, &t6->primary, &t6->cursor,
-					&t6_crtc_funcs, NULL);
-	if (ret)
-		return ret;
-	drm_crtc_helper_add(&t6->crtc, &t6_crtc_helper_funcs);
-	drm_crtc_enable_color_mgmt(&t6->crtc, 0, false, 256);
-	ret = drm_mode_crtc_set_gamma_size(&t6->crtc, 256);
-	if (ret)
-		return ret;
-
-	ret = drm_encoder_init(dev, &t6->encoder, &t6_encoder_funcs, DRM_MODE_ENCODER_TMDS, NULL);
-	if (ret)
-		return ret;
-	t6->encoder.possible_crtcs = drm_crtc_mask(&t6->crtc);
-
-	drm_connector_helper_add(&t6->conn, &t6_conn_helper_funcs);
-	ret = drm_connector_init(dev, &t6->conn, &t6_conn_funcs, DRM_MODE_CONNECTOR_HDMIA);
-	if (ret)
-		return ret;
-	/* events for changes, polling as well in case a model doesn't send them */
-	t6->conn.polled = DRM_CONNECTOR_POLL_HPD | DRM_CONNECTOR_POLL_CONNECT |
-			  DRM_CONNECTOR_POLL_DISCONNECT;
-	ret = drm_connector_attach_encoder(&t6->conn, &t6->encoder);
-	if (ret)
-		return ret;
-
-	ret = drm_vblank_init(dev, 1);
-	if (ret)
-		return ret;
-
-	drm_mode_config_reset(dev);
-	return 0;
-}
 
 static void t6_release(struct drm_device *dev, void *res)
 {
-	struct mct_t6 *t6 = to_t6(dev);
+	struct mct_t6 *t6 = to_t6(to_mct(dev));
 
 	usb_free_urb(t6->ev_urb);
-	kvfree(t6->shadow);
 	kvfree(t6->img);
 	kvfree(t6->hw[0]);
 	kvfree(t6->hw[1]);
@@ -2045,6 +1561,16 @@ static void t6_pick_output(struct mct_t6 *t6)
 
 static int t6_usb_probe(struct usb_interface *interface, const struct usb_device_id *id)
 {
+	struct mct_config cfg = {
+		.funcs = &t6_funcs,
+		.min_w = 64,
+		.min_h = 64,
+		.connector_type = DRM_MODE_CONNECTOR_HDMIA,
+		.encoder_type = DRM_MODE_ENCODER_TMDS,
+		.poll = true,
+		.gamma = true,
+		.stats_name = "mct_t6_stats",
+	};
 	struct mct_t6 *t6;
 	struct drm_device *dev;
 	size_t px;
@@ -2057,20 +1583,17 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	if (interface->cur_altsetting->desc.bInterfaceNumber != 0)
 		return -ENODEV;
 
-	t6 = devm_drm_dev_alloc(&interface->dev, &t6_drm_driver, struct mct_t6, dev);
+	t6 = devm_drm_dev_alloc(&interface->dev, &t6_drm_driver, struct mct_t6, base.dev);
 	if (IS_ERR(t6))
 		return PTR_ERR(t6);
-	dev = &t6->dev;
+	dev = &t6->base.dev;
 
-	INIT_WORK(&t6->upd.work, t6_update_work);
 	INIT_WORK(&t6->hpd_work, t6_hpd_work);
-	INIT_DELAYED_WORK(&t6->settle_work, t6_settle_work);
 	for (i = 0; i < 256; i++) {
 		t6->lut[0][i] = i;
 		t6->lut[1][i] = i;
 		t6->lut[2][i] = i;
 	}
-	mutex_init(&t6->upd.lock);
 	mutex_init(&t6->io_lock);
 
 	t6->ctrl = drmm_kmalloc(dev, T6_CTRL_BUF, GFP_KERNEL);
@@ -2095,69 +1618,59 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	t6->hw[0] = kvmalloc(px * 4, GFP_KERNEL);
 	t6->hw[1] = kvmalloc(px * 4, GFP_KERNEL);
 	t6->hw[2] = kvmalloc(px * 4, GFP_KERNEL);
-	t6->shadow = kvzalloc(px * 4, GFP_KERNEL);
-	t6->rowmask = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
-	t6->cvt = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
 	t6->stale[0] = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
 	t6->stale[1] = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
 	t6->stale[2] = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
 	ret = drmm_add_action_or_reset(dev, t6_release, NULL);
 	if (ret)
 		return ret;
-	if (!t6->shadow || !t6->rowmask || !t6->cvt || !t6->stale[0] || !t6->stale[1] ||
-	    !t6->stale[2] || !t6->img || !t6->hw[0] || !t6->hw[1] || !t6->hw[2])
+	if (!t6->stale[0] || !t6->stale[1] || !t6->stale[2] || !t6->img ||
+	    !t6->hw[0] || !t6->hw[1] || !t6->hw[2])
 		return -ENOMEM;
 
-	ret = t6_modeset_init(t6);
+	cfg.max_w = t6->max_w;
+	cfg.max_h = t6->max_h;
+	ret = mct_init(&t6->base, &cfg);
 	if (ret)
 		return ret;
 	ret = t6_events_init(t6, interface);
 	if (ret)
 		return ret;
 
-	t6->stats.since = ktime_get();
-	drm_debugfs_add_file(dev, "mct_t6_stats", t6_stats_show, NULL);
-
-	usb_set_intfdata(interface, dev);
-	drmm_kms_helper_poll_init(dev);
-	ret = drm_dev_register(dev, 0);
+	ret = mct_register(&t6->base, interface);
 	if (ret)
 		return ret;
 	if (usb_submit_urb(t6->ev_urb, GFP_KERNEL))
 		drm_warn(dev, "no monitor change events, polling only\n");
-
-	drm_client_setup(dev, NULL);
 	return 0;
 }
 
 static void t6_usb_disconnect(struct usb_interface *interface)
 {
-	struct drm_device *dev = usb_get_intfdata(interface);
-	struct mct_t6 *t6 = to_t6(dev);
+	struct mct_t6 *t6 = to_t6(to_mct(usb_get_intfdata(interface)));
 
 	usb_kill_urb(t6->ev_urb);
 	cancel_work_sync(&t6->hpd_work);
-	drm_dev_unplug(dev);
-	drm_atomic_helper_shutdown(dev);
+	mct_unplug(&t6->base);
 }
 
 static int t6_suspend(struct usb_interface *interface, pm_message_t message)
 {
-	struct drm_device *dev = usb_get_intfdata(interface);
+	struct mct_t6 *t6 = to_t6(to_mct(usb_get_intfdata(interface)));
 	int ret;
 
-	ret = drm_mode_config_helper_suspend(dev);
-	usb_kill_urb(to_t6(dev)->ev_urb);
-	cancel_work_sync(&to_t6(dev)->hpd_work);
+	ret = mct_suspend(&t6->base);
+	usb_kill_urb(t6->ev_urb);
+	cancel_work_sync(&t6->hpd_work);
 	return ret;
 }
 
 static int t6_resume(struct usb_interface *interface)
 {
-	struct drm_device *dev = usb_get_intfdata(interface);
+	struct mct_t6 *t6 = to_t6(to_mct(usb_get_intfdata(interface)));
 
-	usb_submit_urb(to_t6(dev)->ev_urb, GFP_KERNEL);
-	return drm_mode_config_helper_resume(dev);
+	usb_submit_urb(t6->ev_urb, GFP_KERNEL);
+	return mct_resume(&t6->base);
 }
 
 const struct mct_backend mct_t6_backend = {

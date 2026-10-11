@@ -4,7 +4,7 @@ MCT_T2 ?= y
 MCT_T6 ?= y
 
 obj-m += mct.o
-mct-y := mct_main.o
+mct-y := mct_main.o mct_drv.o
 mct-$(MCT_T2) += mct_t2.o
 mct-$(MCT_T6) += mct_t6.o
 ccflags-$(MCT_T2) += -DMCT_HAVE_T2
