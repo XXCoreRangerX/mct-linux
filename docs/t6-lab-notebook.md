@@ -750,3 +750,12 @@ works (slower, as expected at ~35 MB/s).
 **Text console on the T6.** `con2fbmap 3 2` (fb2 = mct_t6drmfb, from the
 fbset package) and Ctrl+Alt+F3: tty3 shows on the T6's monitor, login
 prompt fine; back to niri with its VT.
+
+**Edge-case test (mct_t6 0.25.0, mct_t2 0.3.21, `tools/mct_edge_test.sh`):**
+all 13 steps ok, no BUG/Oops/WARNING/hangs: sysfs vs. niri modes, cursor
+at every edge and after leaving/returning, format and lossy switching
+under motion, all_modes toggle, text consoles on the tablet and the T6
+with VT switches, USB unplug/replug of the tablet (back after 8 s) and
+the T6 (3 s) during motion with sysfs readers running (reads failed
+cleanly, none slow), niri DPMS off/on, the monitor's power button,
+suspend/resume. Log kept in the lab directory (captures/edge-tests/).

@@ -192,7 +192,7 @@ sysfs_reader() {
 	while :; do
 		for f in "$dir"/*; do
 			t0=${EPOCHREALTIME//[!0-9]/}
-			if read -r v < "$f" 2>/dev/null; then ok=$((ok + 1)); else err=$((err + 1)); fi
+			if read -r v 2>/dev/null < "$f"; then ok=$((ok + 1)); else err=$((err + 1)); fi
 			t1=${EPOCHREALTIME//[!0-9]/}
 			ms=$(((t1 - t0) / 1000))
 			((ms > max)) && max=$ms
