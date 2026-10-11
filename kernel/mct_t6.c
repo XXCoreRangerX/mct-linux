@@ -57,7 +57,7 @@ MODULE_PARM_DESC(all_modes, "Default for new devices: also offer modes larger th
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	24
+#define DRIVER_MINOR	25
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -539,7 +539,8 @@ static int t6_mode_entry(struct mct_t6 *t6, const struct drm_display_mode *mode,
 	if (mode->hdisplay >= T6_WIDE_W && mode->clock > T6_WIDE_MAX_CLOCK_KHZ)
 		return -ERANGE;
 	/* the NV12 rows are sent unpadded; the vendor driver needs width % 16 too */
-	if (mode->hdisplay % 16 || mode->vdisplay % 2)
+	if (mode->hdisplay % 16 || mode->vdisplay % 2 || mode->hdisplay < 64 ||
+	    mode->vdisplay < 64)
 		return -ERANGE;
 	if (t6->usb2 && mode->hdisplay > T6_HS_MAX_W)
 		return -ERANGE;
@@ -979,6 +980,8 @@ static void t6_recover(struct mct_t6 *t6, int err)
 {
 	struct usb_device *udev = t6_udev(t6);
 
+	if (udev->state == USB_STATE_NOTATTACHED)
+		return;		/* unplugged: nothing to recover */
 	t6->stats.xfer_errors++;
 	usb_kill_anchored_urbs(&t6->anchor);
 	if (err == -EPIPE)
@@ -1770,16 +1773,60 @@ static int t6_drop_above_native(struct mct_t6 *t6, struct drm_connector *connect
 	return n;
 }
 
+/*
+ * Nothing the T6 drives is marked preferred (a monitor too wide for a USB 2
+ * link, odd panel sizes): prefer the largest mode with the monitor's aspect
+ * ratio, at the refresh rate closest to 60 Hz, so userspace doesn't take
+ * an arbitrary one.
+ */
+static void t6_ensure_preferred(struct mct_t6 *t6, struct drm_connector *connector,
+				int w, int h)
+{
+	struct drm_display_mode *mode, *best = NULL;
+	struct t6_mode m;
+
+	list_for_each_entry(mode, &connector->probed_modes, head)
+		if (mode->type & DRM_MODE_TYPE_PREFERRED && !t6_mode_entry(t6, mode, &m))
+			return;
+	list_for_each_entry(mode, &connector->probed_modes, head) {
+		u64 area = (u64)mode->hdisplay * mode->vdisplay;
+		bool aspect = !w || abs(mode->hdisplay * h - w * mode->vdisplay) * 100 <=
+			      3 * w * mode->vdisplay;
+
+		if (t6_mode_entry(t6, mode, &m) || !aspect)
+			continue;
+		if (best) {
+			u64 best_area = (u64)best->hdisplay * best->vdisplay;
+
+			if (area < best_area)
+				continue;
+			if (area == best_area && abs(drm_mode_vrefresh(mode) - 60) >=
+						 abs(drm_mode_vrefresh(best) - 60))
+				continue;
+		}
+		best = mode;
+	}
+	if (best)
+		best->type |= DRM_MODE_TYPE_PREFERRED;
+	else if (w)
+		t6_ensure_preferred(t6, connector, 0, 0);	/* any aspect ratio */
+}
+
 static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector)
 {
 	struct mct_t6 *t6 = to_t6(mdev);
 	struct drm_display_mode *mode;
 	const struct drm_edid *edid;
-	int count, w = 0, h = 0, idx;
+	int count, w = 0, h = 0, idx, i;
 	bool has_720p = false;
 
+	/* some monitors answer DDC late after waking up: try a few times */
 	edid = NULL;
-	if (drm_dev_enter(connector->dev, &idx)) {
+	for (i = 0; i < 3 && !edid; i++) {
+		if (i)
+			msleep(100);
+		if (!drm_dev_enter(connector->dev, &idx))
+			break;
 		edid = drm_edid_read_custom(connector, t6_read_edid_block, t6);
 		drm_dev_exit(idx);
 	}
@@ -1803,7 +1850,9 @@ static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector
 	if (has_720p && (w != 1280 || h != 720))
 		count += t6_add_extra_modes(connector, 1280, 720);
 	count += t6_add_preferred_fallbacks(t6, connector);
-	return count - t6_drop_above_native(t6, connector, w, h);
+	count -= t6_drop_above_native(t6, connector, w, h);
+	t6_ensure_preferred(t6, connector, w, h);
+	return count;
 }
 
 static enum drm_mode_status t6_mode_valid(struct mct_device *mdev,
@@ -1842,7 +1891,7 @@ static int t6_detect(struct mct_device *mdev)
 static void t6_hpd_work(struct work_struct *work)
 {
 	struct mct_t6 *t6 = container_of(to_delayed_work(work), struct mct_t6, hpd_work);
-	int idx, st;
+	int idx, st, prev;
 
 	if (!drm_dev_enter(&t6->base.dev, &idx))
 		return;
@@ -1857,9 +1906,11 @@ static void t6_hpd_work(struct work_struct *work)
 		schedule_delayed_work(&t6->hpd_work, msecs_to_jiffies(T6_HPD_MS));
 		goto out;
 	}
+	prev = t6->hpd_state;
 	t6->hpd_state = st;
 	mutex_lock(&t6->mode_lock);
-	if (st == 1 && t6->enabled) {
+	/* a monitor (back) on: mode and picture again; not on mere HPD blips */
+	if (st == 1 && prev != 1 && t6->enabled) {
 		mutex_lock(&t6->io_lock);
 		memcpy(t6->ctrl, &t6->mode_entry, sizeof(t6->mode_entry));
 		if (t6_ctrl_out(t6, T6_REQ_SETMODE, t6->output, 0, sizeof(t6->mode_entry)) >= 0)
@@ -1888,6 +1939,8 @@ static void t6_redraw_work(struct work_struct *work)
 	mutex_unlock(&t6->base.lock);
 	mct_kick(&t6->base);
 	mutex_lock(&t6->cur.lock);
+	/* the slots may be lost too: upload again, now or when it shows next */
+	t6->cur.uploaded = false;
 	if (t6->cur.visible && !t6_cursor_upload(t6))
 		t6_cursor_move(t6, t6->cur.x, t6->cur.y);
 	mutex_unlock(&t6->cur.lock);
@@ -2431,12 +2484,18 @@ static int t6_resume(struct usb_interface *interface)
 {
 	struct mct_t6 *t6 = to_t6(to_mct(usb_get_intfdata(interface)));
 
+	int ret;
+
 	t6->hpd_state = -1;	/* the monitor may have changed meanwhile */
 	atomic_set(&t6->ev_fails, 0);
 	usb_unpoison_urb(t6->ev_urb);
 	if (t6->hpd_events)
 		usb_submit_urb(t6->ev_urb, GFP_KERNEL);
-	return mct_resume(&t6->base);
+	ret = mct_resume(&t6->base);
+	/* re-read the monitor in a moment, so a swapped one is noticed */
+	atomic_set(&t6->hpd_same, 0);
+	mod_delayed_work(system_percpu_wq, &t6->hpd_work, msecs_to_jiffies(T6_HPD_MS));
+	return ret;
 }
 
 const struct mct_backend mct_t6_backend = {

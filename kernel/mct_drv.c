@@ -309,7 +309,9 @@ static int mct_cursor_atomic_check(struct drm_plane *plane, struct drm_atomic_co
 
 	if (new_state->crtc)
 		crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
-	if (fb && (fb->width > mdev->cur_size || fb->height > mdev->cur_size))
+	/* the image is taken from the framebuffer's top left */
+	if (fb && (fb->width > mdev->cur_size || fb->height > mdev->cur_size ||
+		   new_state->src_x || new_state->src_y))
 		return -EINVAL;
 	return drm_atomic_helper_check_plane_state(new_state, crtc_state,
 						   DRM_PLANE_NO_SCALING, DRM_PLANE_NO_SCALING,
@@ -672,7 +674,12 @@ static const struct drm_mode_config_funcs mct_mode_config_funcs = {
 
 static void mct_release(struct drm_device *dev, void *res)
 {
-	kvfree(to_mct(dev)->shadow);
+	struct mct_device *mdev = to_mct(dev);
+
+	/* a late sysfs write may have queued work after the unplug stopped it */
+	cancel_delayed_work_sync(&mdev->settle_work);
+	cancel_work_sync(&mdev->work);
+	kvfree(mdev->shadow);
 }
 
 int mct_init(struct mct_device *mdev, const struct mct_config *cfg)
@@ -792,8 +799,19 @@ int mct_register(struct mct_device *mdev, struct usb_interface *intf)
  */
 void mct_unplug(struct mct_device *mdev)
 {
-	drm_dev_unplug(&mdev->dev);
-	drm_atomic_helper_shutdown(&mdev->dev);
+	struct usb_device *udev = interface_to_usbdev(to_usb_interface(mdev->dev.dev));
+
+	/*
+	 * A software unbind (rmmod, sysfs) leaves the device attached: switch
+	 * it off first, while it can still be reached.
+	 */
+	if (udev->state != USB_STATE_NOTATTACHED) {
+		drm_atomic_helper_shutdown(&mdev->dev);
+		drm_dev_unplug(&mdev->dev);
+	} else {
+		drm_dev_unplug(&mdev->dev);
+		drm_atomic_helper_shutdown(&mdev->dev);
+	}
 	mct_stop_updates(mdev);
 }
 

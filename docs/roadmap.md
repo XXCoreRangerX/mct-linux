@@ -103,6 +103,34 @@ endpoint checks, managed mutexes, DBLSCAN and >255 Hz modes. Left:
 - Mode filtering removes entries from probed_modes in get_modes; mode_valid
   with a stored native size would be more usual.
 
+## From the edge-case review of 2026-10-11 (not done yet)
+
+Fixed in mct_t6 0.25.0: cursor re-upload after a monitor reconnect or
+redraw, EDID read retried after wake-up, mode re-set only when a monitor
+really came back (not on HPD blips), monitor re-read after resume, a
+preferred mode when none the T6 drives is left (USB 2 + wide monitor, odd
+panel sizes), minimum mode size, no recovery on an unplugged device, work
+cancelled at release, cursor source offsets refused, software unbind
+switches the output off first. Left:
+
+- Per-device settings (format, all_modes, lossy) and console mappings
+  start over on every replug, and on every T6 restart after a transfer
+  error. The companion app (or a udev rule) could reapply them on bind.
+- Connector names (HDMI-A-n) can change on replug while the compositor
+  still holds the old device; compositor output settings are better
+  matched by make/model/serial.
+- T2 resync after a failed frame holds io_lock for up to 45 s, so cursor
+  updates in commits and DPMS/suspend wait (same fix as the probe/resume
+  item above: a work item).
+- The T6 cursor update in a commit waits for io_lock while a frame is
+  sent (~16 ms at 1080p on USB 3, longer on USB 2): cursor stutter during
+  large updates.
+- VT switches to a T6 console are mode sets (fbdev uses the preferred
+  mode); with monitors that dislike signal changes, run the compositor at
+  the preferred mode and use consoleblank=0.
+
+`tools/mct_edge_test.sh` is the interactive test for these scenarios.
+
 ## Rules that stay
 
 - Quality, the colour modes and the auto mode are not to get worse for speed.

@@ -34,6 +34,7 @@ docstring first; the interactive ones wait for a y/n answer per step.**
 | `t6_cancel_test.sh` | what the cancel request (0x14) and a cut transfer do |
 | `t6_robust_test.sh` | interactive: injected transfer errors, monitor off/on |
 | `t6_modes.sh` | switch a niri output through modes, y/n per mode |
+| `mct_edge_test.sh` | interactive edge cases on real hardware: cursor at edges, settings under motion, consoles and VT switches, unplug with sysfs readers, DPMS, monitor power, suspend |
 | `t6_edid_sim.sh`, `edid_gen.py` | which modes the driver offers typical monitors, via fake EDIDs (`edid_override`); run without a monitor that hangs on signal changes |
 | `nv12_eval.py` | offline: NV12 chroma subsampling methods compared |
 | `gbm_read_bench.c` | how fast the CPU reads GBM buffers of a display-only device |
