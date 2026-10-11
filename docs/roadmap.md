@@ -25,7 +25,8 @@ left to do. Percentages are estimates, not a checklist score.
 
 Order agreed 2026-10-11:
 
-1. ~~T6 frame-done pacing~~: closed. Frame-done events mean "frame
+1. ~~T6 frame-done pacing~~: closed (confirmed with raw frames: done events
+   0.1 to 10 ms after the data, phase R = 0.03 against the refresh). Frame-done events mean "frame
    processed", not vblank (vendor capture: phase spread R = 0.11), and with
    the driver's frame recipe the chip sends none at all
    (`tools/t6_pacing_test.py`: 0 events for 223 frames). Pacing stays on

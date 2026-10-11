@@ -273,6 +273,7 @@ struct mct_t6 {
 	struct urb *ev_urb;		/* interrupt IN, always queued */
 	struct delayed_work ev_retry;	/* resubmit it after an error */
 	int ev_fails;			/* errors in a row */
+	int ev_err;			/* the last one */
 	struct delayed_work hpd_work;	/* monitor status, debounced */
 	int hpd_last, hpd_same;		/* last reading and how often in a row */
 	int hpd_state;			/* reported status: 1 connected, 0 not, -1 unknown */
@@ -1745,7 +1746,19 @@ static void t6_redraw_work(struct work_struct *work)
 	drm_dev_exit(idx);
 }
 
-/* after an error on the event endpoint: clear a stall, queue the transfer again */
+/* events stopped for good: poll the monitor status instead */
+static void t6_ev_give_up(struct mct_t6 *t6)
+{
+	drm_warn(&t6->base.dev, "monitor change events stopped (error %d), polling\n",
+		 t6->ev_err);
+	t6->hpd_events = false;
+	t6->hpd_state = -1;
+}
+
+/*
+ * After an error on the event endpoint: reset it (clears a stall and the
+ * data toggle, like the vendor's pipe reset) and queue the transfer again.
+ */
 static void t6_ev_retry(struct work_struct *work)
 {
 	struct mct_t6 *t6 = container_of(to_delayed_work(work), struct mct_t6, ev_retry);
@@ -1753,10 +1766,9 @@ static void t6_ev_retry(struct work_struct *work)
 
 	if (!drm_dev_enter(&t6->base.dev, &idx))
 		return;
-	if (t6->ev_urb->status == -EPIPE)
-		usb_clear_halt(t6_udev(t6), t6->ev_urb->pipe);
-	if (usb_submit_urb(t6->ev_urb, GFP_KERNEL))
-		drm_warn(&t6->base.dev, "monitor change events stopped\n");
+	usb_clear_halt(t6_udev(t6), t6->ev_urb->pipe);
+	if (t6->ev_fails >= 10 || usb_submit_urb(t6->ev_urb, GFP_KERNEL))
+		t6_ev_give_up(t6);
 	drm_dev_exit(idx);
 }
 
@@ -1777,9 +1789,9 @@ static void t6_event_complete(struct urb *urb)
 	default:
 		/* stall or line errors: try again later, slower each time */
 		t6->stats.ev_errors++;
-		if (t6->ev_fails < 10)
-			schedule_delayed_work(&t6->ev_retry,
-					      msecs_to_jiffies(100 << min(t6->ev_fails++, 5)));
+		t6->ev_err = urb->status;
+		schedule_delayed_work(&t6->ev_retry,
+				      msecs_to_jiffies(100 << min(t6->ev_fails++, 5)));
 		return;
 	}
 	if (urb->actual_length > 0x13) {
@@ -1845,9 +1857,10 @@ static void t6_stats(struct mct_device *mdev, struct seq_file *m)
 		   div64_u64(t6->stats.ns_usb, n * 1000000),
 		   div64_u64(t6->stats.ns_usb, n * 10000) % 100);
 	seq_printf(m, "motion -> NV12   %llu times\n", t6->stats.to_420);
-	seq_printf(m, "events           %llu frame done, %llu monitor change, %llu redraw, %llu other, %llu errors\n",
+	seq_printf(m, "events           %llu frame done, %llu monitor change, %llu redraw, %llu other, %llu errors (last %d)%s\n",
 		   t6->stats.ev_done, t6->stats.ev_change, t6->stats.ev_redraw,
-		   t6->stats.ev_other, t6->stats.ev_errors);
+		   t6->stats.ev_other, t6->stats.ev_errors, t6->ev_err,
+		   t6->hpd_events ? "" : ", polling");
 	seq_printf(m, "recoveries       %llu\n", t6->stats.recoveries);
 	seq_printf(m, "usb MB/s while busy %llu\n",
 		   div64_u64(t6->stats.bytes * 1000, max_t(u64, t6->stats.ns_usb, 1)));

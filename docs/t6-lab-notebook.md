@@ -684,3 +684,16 @@ change; reduced blanking stays the way to 60 Hz there.
 Pacing test again after the 0x14 restarts: still 0 frame-done events from
 userspace (pyusb reads with 1 ms timeouts may drop them), while the driver
 counted 1712.
+
+**Event endpoint after userspace tests.** pyusb reads with timeouts on EP
+0x83 can leave the endpoint out of step: the driver then saw 11 errors and
+gave up after 10 retries, still trusting the last monitor state. Now every
+error resets the endpoint (clear halt, i.e. data toggle, like the vendor's
+pipe reset), and if it gives up the connector falls back to polling. Test:
+1 error (-71) after the pacing test, events flowing again (142 frame done).
+
+**Frame done, measured with raw frames** (pacing test, this time the events
+came): back to back 396 frames, 134 done events in 4 s; spaced frames: done
+0.09 to 10.0 ms after the last write (median 1.9), phase against 60 Hz
+R = 0.03. Not tied to the refresh, as the vendor capture said; whether the
+chip sends them at all varies between runs. Pacing stays on the timer.
