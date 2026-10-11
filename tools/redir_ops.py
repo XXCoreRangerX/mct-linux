@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Load a tee capture -> ordered list of (usec, ep, data) OUT ops (EP2/3/4)."""
 import struct
 

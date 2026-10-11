@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 { lib, stdenv, pkg-config, libusb1, evdi }:
 stdenv.mkDerivation {
   pname = "t2d";

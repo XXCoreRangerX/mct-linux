@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Throughput of full-frame 0x13 updates for different payload transfer sizes.
 Each variant shows the same photo with a different tint so the result can be
 checked on the panel. Usage: bench.py photo.png [frames]"""

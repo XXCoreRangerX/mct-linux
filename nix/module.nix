@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # NixOS module: USB displays with MCT Trigger chips (Trigger II, Trigger 6) as real monitors.
 { self }:
 { config, lib, pkgs, ... }:

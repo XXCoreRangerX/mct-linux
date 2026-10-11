@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Partial updates on the T6: full frames into two buffers, an empty flip, then
 a session 7 band written into the hidden buffer and flipped to. 1080p60, NV12."""
 import os

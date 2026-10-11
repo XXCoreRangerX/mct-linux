@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Print EP3/EP4 commands + EP2 0x11/0x13/0x15 headers of a tee capture. Usage: timeline.py [capture]"""
 import os, struct, sys
 

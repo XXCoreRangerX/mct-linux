@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """List HID class control requests (GET/SET_REPORT etc.) from a tee.py usbredir log.
 Usage: redir_hid.py capture.bin [--all]"""
 import struct, sys

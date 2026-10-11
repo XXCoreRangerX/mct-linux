@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Which layout does surface format 0 (4:2:2) expect? Shows 8 variants,
 4 s each; variant N has N white squares at the top left."""
 import os, sys, struct, time

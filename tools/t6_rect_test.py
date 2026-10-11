@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Session 7 rectangle write into a hidden NV12 frame buffer, then an empty
 flip to it: a green box should appear on blue. 1080p60."""
 import os

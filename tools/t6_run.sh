@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
 # Run a T6 userspace test: unbind the T6 from mct, run the script as root,
 # bind it back (also on ctrl-c). Usage: tools/t6_run.sh tools/t6_rotate_test.py
 set -eu

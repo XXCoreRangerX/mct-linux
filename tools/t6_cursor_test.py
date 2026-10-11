@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Hardware cursor details on the T6, at 2560x1440@60 on a grey screen.
 Each step changes the cursor and waits for y/n; summary at the end.
 

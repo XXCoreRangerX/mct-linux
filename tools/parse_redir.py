@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Offline parser for tee.py logs (usbredir protocol).
 Reassembles both directions, decodes packets, dumps per-endpoint bulk streams
 and a human-readable command timeline.

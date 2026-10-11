@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 import usb.core, usb.util
 
 dev = usb.core.find(idVendor=0x0711, idProduct=0x520d)

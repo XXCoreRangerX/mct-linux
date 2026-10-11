@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
 # Which modes would mct_t6 offer other monitors? Feeds each profile of
 # edid_gen.py to the T6's connector through DRM's edid_override, re-probes,
 # saves modetest's mode list to ../../captures/t6-edid-sim/, then restores

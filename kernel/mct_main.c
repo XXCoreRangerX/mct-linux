@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com>
+ *
  * DRM driver for USB displays built on MCT (Magic Control Technology)
  * Trigger chips. One USB driver matches all supported devices and hands
  * each to the backend for its chip generation:
@@ -87,5 +89,6 @@ static struct usb_driver mct_usb_driver = {
 };
 
 module_usb_driver(mct_usb_driver);
+MODULE_AUTHOR("Filip Piękoś <mail@filippiekos.com>");
 MODULE_DESCRIPTION("DRM driver for MCT Trigger USB displays (Trigger II, Trigger 6)");
 MODULE_LICENSE("GPL");

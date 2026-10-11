@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # EVDI built for kernels >= 7.2, which renamed struct drm_atomic_state -> drm_atomic_commit
 # (and drm_atomic_state_{alloc,clear,put} -> drm_atomic_commit_*). EVDI 1.15.1
 # already builds; the rename is a no-op there and only matters for 1.14.x

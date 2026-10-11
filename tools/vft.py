@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Map vftables -> class names -> methods for T2Indisp.dll via RTTI scan."""
 import struct, re
 

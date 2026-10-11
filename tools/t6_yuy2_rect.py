@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """YUYV frames sent as session 7 rectangle writes instead of the flip's
 payload, to see if the row limit depends on the write path."""
 import os

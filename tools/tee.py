@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """TCP tee: qemu (usb-redir) <-> usbredirserver, logging everything.
 Listens on 127.0.0.1:32001, forwards to 127.0.0.1:32002.
 Log format per record: u64 usec | u8 dir (0=qemu->srv, 1=srv->qemu) | u32 len | bytes.

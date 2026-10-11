@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """YUYV byte order: Y0 U Y1 V against Y0 V Y1 U on the same picture."""
 import os
 import sys, time

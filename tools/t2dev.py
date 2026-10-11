@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Small pyusb toolkit for live T2 experiments (init trimming, cursor).
 Needs the video function accessible (udev MODE=0666 / NixOS module rule)."""
 import os, struct, time

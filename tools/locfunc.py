@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Locate T2Indisp.dll functions via debug-string xrefs + .pdata bounds."""
 import subprocess, re, struct, sys
 

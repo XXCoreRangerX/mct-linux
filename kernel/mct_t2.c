@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com>
+ *
  * DRM driver for MCT Trigger II (T2) USB displays, e.g. the Wacom DTU-1031X
  * pen display (USB 0711:520d, 1024x600).
  *

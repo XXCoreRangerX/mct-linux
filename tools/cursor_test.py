@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Hardware cursor experiments (T2). Pixel format: bytes A,B,G,R (DRM RGBA8888), 64x64."""
 import sys, t2dev
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """T2 (MCT Trigger II) planar RLE codec, per T2Indisp.dll EncodeRle @0x180013278.
 
 Payload: for each row, three channel-lines R, G, B, each covering `w` px:

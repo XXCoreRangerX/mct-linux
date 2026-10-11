@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # Standalone:  nix-shell -p gcc gnumake pkg-config libusb1 --run \
 #                "make EVDI_INC=/path/to/evdi/library EVDI_LIB=/path/to/libevdi/dir"
 # Nix:         nix build .#t2d

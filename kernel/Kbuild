@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # One module for all MCT Trigger chips; leave out a backend with MCT_T2=n or
 # MCT_T6=n on the make command line.
 MCT_T2 ?= y

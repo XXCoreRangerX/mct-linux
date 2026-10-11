@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Extract the Windows init (redir2.bin) up to and incl. the 0x14 display-enable
 into t2d/init-full.bin (verbatim vendor sequence; t2d/init.bin is the trimmed
 version made by gen_init_min.py). Record format (little-endian):

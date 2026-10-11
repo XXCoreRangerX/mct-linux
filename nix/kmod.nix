@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # mct DRM kernel module (Trigger II and Trigger 6), built against the given kernelPackages.
 { lib, stdenv, kernel }:
 stdenv.mkDerivation {

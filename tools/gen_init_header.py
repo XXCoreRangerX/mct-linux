@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """t2d/init.bin -> kernel/mct_t2_init.h (same record format, see gen_init_blob.py)."""
 import os
 root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")

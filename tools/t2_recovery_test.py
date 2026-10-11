@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Regression test for mct_t2's recovery from an interrupted frame payload.
 
 Each cycle unbinds the display interface from mct_t2, optionally leaves the

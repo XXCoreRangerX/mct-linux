@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """YUYV at 1080p: colour bands with tick marks, to see how far along a row
 the scanout stays correct (about 1150 px)."""
 import os

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """YUYV (surface format 0) at 1024x768: rows fit the line buffer here; a
 moving block shows whether its flips are synchronised (they are not)."""
 import os

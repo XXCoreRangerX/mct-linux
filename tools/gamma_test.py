@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Check whether command 0x0a (0a + 768 bytes) is a hardware gamma table.
 
 The init sends 0x0a with 768 zeros, which would black out the panel if it were

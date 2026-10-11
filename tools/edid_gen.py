@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Minimal EDID 1.4 blocks for typical monitors, to see which modes the
 driver offers them (through DRM's edid_override, see t6_edid_sim.py).
 

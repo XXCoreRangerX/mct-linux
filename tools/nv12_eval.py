@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Offline: chroma subsampling methods for NV12 on coloured text, Lab dE
 against the original, with nearest and bilinear chroma upsampling."""
 import numpy as np

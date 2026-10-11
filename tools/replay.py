@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Verbatim replay of redir2.bin (EP3/EP4/EP2 incl. 0x13 RLE + 0x15 flips),
 then test: 0x11 fill into back buffer + 0x15 flip to it.
 Usage: replay.py [ops_limit]   (default: through first frame cycle, op idx of 2nd 0x11 clear)

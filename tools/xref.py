@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Build xref map of T2Indisp.dll .text with capstone; locate functions by string refs."""
 import struct, sys
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
 # Win11 capture VM for the vendor driver (only needed to re-capture USB traffic).
 # The tablet is attached through usb-redir on 127.0.0.1:32001; start
 #   usbredirserver -p 32002 0711:520d  and  tools/tee.py captures/redirN.bin

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
 # Which part makes the T6 drop off USB after a cut off transfer: the cancel
 # request (0x14) or the cut transfer itself? Each step injects through
 # debugfs mct_t6_inject, waits, reports from the kernel log and asks y/n.

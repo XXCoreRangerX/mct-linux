@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """The driver's partial update scheme, from userspace: diff against the copy of
 the target buffer, session-7 band writes, then an empty flip. Max speed."""
 import os

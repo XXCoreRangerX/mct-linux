@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
+ * Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com>
+ *
  * One USB driver for MCT Trigger display adapters; each chip generation is
  * a backend with its own DRM driver.
  */

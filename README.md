@@ -198,6 +198,10 @@ Trigger 5.
 License
 -------
 
-Code is GPL-2.0 (see LICENSE). The documentation in docs/ is CC BY-SA 4.0
-(docs/LICENSE.md), as it builds on cyrozap's notes. No vendor code or
+Code (kernel/, tools/, t2d/, nix/) is GPL-2.0-only, see LICENSE and the
+SPDX line in each file; Copyright (C) 2026 Filip Piękoś
+<mail@filippiekos.com>. The patches in nix/ follow the licence of the
+project they change (niri: GPL-3.0-or-later, EVDI: GPL-2.0). The
+documentation in docs/ is CC BY-SA 4.0 (docs/LICENSE.md), as it builds on
+cyrozap's notes. No vendor code or
 binaries are included. CHANGELOG.md lists the changes per version.

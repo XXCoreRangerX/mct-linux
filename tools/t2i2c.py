@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """I2C through the T2's two I2C masters (OpenCores-style, see docs/protocol-t2.md).
 
 bus 0: data fce3, command/status fce4    bus 1: data fceb, command/status fcec

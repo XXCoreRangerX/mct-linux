@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
 # Ask y/n questions one at a time, print a summary: tools/ask.sh "question" ...
 res=()
 for q in "$@"; do

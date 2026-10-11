@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """YUYV at 1080p: a moving block, for tearing and the stale right part."""
 import os
 import sys, time

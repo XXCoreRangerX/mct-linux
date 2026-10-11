@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Mode sweeps on the T6 with a Gigabyte MO34WQC2 (3440x1440). Each step
 sets a mode and keeps sending a picture (dark blue, coloured columns from
 red at the left to magenta at the right edge, a strip of 1 px red/blue

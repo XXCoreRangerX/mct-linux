@@ -1,4 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
+ * Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com>
+ *
  * t2d: Wacom DTU-1031X (MCT Trigger II, USB 0711:5209 or 0711:520d) display daemon.
  *
  * EVDI gives the compositor a real 1024x600@60 connector (panel EDID); this

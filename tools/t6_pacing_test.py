@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Are the T6's frame-done events tied to the monitor's refresh? About 10 s,
 nothing to watch, prints numbers. Run through tools/t6_run.sh.
 """

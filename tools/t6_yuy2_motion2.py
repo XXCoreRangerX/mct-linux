@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """YUYV at 1080p: moving block with plane 1 offsets varied, to rule out a
 second plane setting behind the row limit."""
 import os

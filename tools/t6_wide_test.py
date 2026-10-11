@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Large modes on the T6, with the Gigabyte MO34WQC2's own timings:
   2560   2560x1440@60, 241.5 MHz (default)
   3440   3440x1440@60, 319.75 MHz: this one froze the monitor, don't

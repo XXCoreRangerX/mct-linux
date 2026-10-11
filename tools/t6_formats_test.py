@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Packed surface formats on the T6: RGB32 (8), BGR24 (9), YUYV 4:2:2 (0).
 For each: the colour detail image for 4 s, then a moving block for 4 s.
 1080p60; full frames into three buffers with the vendor recipe."""

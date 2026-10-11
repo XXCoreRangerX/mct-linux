@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 {
   description = "Linux support for MCT Trigger USB displays (Trigger II, Trigger 6)";
 

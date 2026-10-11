@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
 # Switch a niri output through modes one at a time, waiting for y/n after
 # each (some monitors take seconds to show a picture); summary at the end.
 #   tools/t6_modes.sh HDMI-A-3 2560x1440@59.951 3440x1440@55.000 3440x1440@60.000

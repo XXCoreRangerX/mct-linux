@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Show an RGB image on an already-initialised DTU-1031X (after replay.py).
 Usage: show_image.py testpattern|<file.ppm|png via PIL> [--raw (no 180 rot)] [--flipv] [--buf A|B]"""
 import sys, time

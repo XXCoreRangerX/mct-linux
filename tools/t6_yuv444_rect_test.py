@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Partial updates in YUV 4:4:4 (surface format 11): rectangle writes into
 the three planes of a hidden buffer, then a flip. 1080p60."""
 import os, sys, struct, time

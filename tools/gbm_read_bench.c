@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 // CPU read speed of GBM buffers on the primary GPU, allocated like niri does
 // for a display-only device (RENDERING | SCANOUT, LINEAR), plus variants.
 #include <fcntl.h>

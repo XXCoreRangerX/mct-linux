@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com>
+ *
  * DRM driver for MCT Trigger 6 (T6) USB display adapters, e.g. the
  * "T6 USB Station" (USB 0711:5600 / 0711:5601).
  *

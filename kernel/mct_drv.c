@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
+ * Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com>
+ *
  * DRM core shared by the MCT chip backends (see mct_drv.h).
  *
  * Commits copy the damaged rows of the framebuffer into a shadow image and

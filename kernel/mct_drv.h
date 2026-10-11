@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
+ * Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com>
+ *
  * DRM side shared by the chip backends: one primary plane fed from a shadow
  * copy of the committed image, a cursor plane (size per chip), one CRTC
  * paced by a vblank timer, one connector. The chip code gets the shadow's changed rows

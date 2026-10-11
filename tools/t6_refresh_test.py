@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 """Custom refresh test: build a mode entry with the PLL fields MCT's formula gives."""
 import os
 import sys, struct, time, math

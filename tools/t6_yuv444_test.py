@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """YUV 4:4:4 (surface format 11) vs NV12 on the T6.
 
 Shows a detail image (1-pixel coloured lines, red strokes on blue) as NV12,

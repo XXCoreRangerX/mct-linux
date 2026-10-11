@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """t2d/init-full.bin (359 vendor transfers) -> t2d/init.bin (78, validated cold 2026-09-24).
 
 Dropped (see docs/init-sequence.md, "Trimmed init"):

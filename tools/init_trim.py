@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0-only
 """Init-trimming experiments. Record indices refer to t2d/init.bin (359 records)."""
 import os, sys, time, t2dev
 

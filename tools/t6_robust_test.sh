@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
 # Interactive checks for the T6 error recovery and hotplug handling. Each
 # step waits for y/n; summary at the end. Needs the T6 bound to mct.
 set -u
