@@ -466,3 +466,13 @@ the mode (1080p: RGB up to 75 Hz, 4:4:4 at 100-120 Hz, NV12 at 144 Hz) and
 uses NV12 during large changes.
 0.16 live at 1080p120 (auto: YUV 4:4:4 at rest, NV12 in motion): "works
 great", smooth, no grey flash on switches, colours look richer.
+
+**Robustness (0.16)**: niri monitor off/on, suspend/resume (deep; xHCI
+reinit, USB reset of the T6, picture back) and unplugging/replugging the
+adapter all worked; the log shows only two "frame update error: -19" at the
+unplug (now not logged).
+
+**mct_t6 0.17, less CPU per update**: only shadow rows changed since the
+last conversion are converted (the commit's copy marks them), and each frame
+buffer keeps a mask of rows that may differ from the image, so the diff only
+looks at those.

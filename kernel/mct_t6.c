@@ -63,7 +63,7 @@ MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at re
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	16
+#define DRIVER_MINOR	17
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -268,6 +268,8 @@ struct mct_t6 {
 	u8 *shadow;			/* XRGB8888 image as committed by userspace */
 	bool shadow_valid;		/* holds a whole committed image */
 	u8 *rowmask;			/* rows to copy from the framebuffer */
+	u8 *cvt;			/* shadow rows changed since the last conversion */
+	u8 *stale[3];			/* rows where img may differ from frame buffer k */
 	u8 *img;			/* the shadow in NV12 */
 	u8 lut[3][256];			/* gamma, R G B, applied in software */
 	struct t6_layout lay;		/* of img and hw, set by the worker */
@@ -624,8 +626,9 @@ static void t6_set_layout(struct mct_t6 *t6, enum t6_kind kind)
 		l->bpp[0] = 4;
 		break;
 	}
-	/* nothing in the frame buffers is in the new layout */
+	/* nothing in the frame buffers is in the new layout, convert it all */
 	memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
+	memset(t6->cvt, 1, h);
 }
 
 /*
@@ -650,71 +653,99 @@ static inline u8 t6_v(int r, int g, int b, int shift)
 	return clamp(((128 * r - 107 * g - 21 * b + (128 << shift)) >> (8 + shift)) + 128, 0, 255);
 }
 
-static void t6_convert(struct mct_t6 *t6)
+/* one row of packed or 4:4:4 output */
+static void t6_convert_row(struct mct_t6 *t6, int y)
 {
 	const u8 *lr = t6->lut[0], *lg = t6->lut[1], *lb = t6->lut[2];
-	int w = t6->width, h = t6->height, x, y, i;
-	size_t px = (size_t)w * h;
-	const u8 *s = t6->shadow;	/* B, G, R, X */
-	u8 *py = t6->img;
+	int w = t6->width, x;
+	size_t px = (size_t)w * t6->height;
+	const u8 *s = t6->shadow + (size_t)y * w * 4;	/* B, G, R, X */
+	u8 *py = t6->img + (size_t)y * w * t6->lay.bpp[0];
 
 	switch (t6->lay.kind) {
 	case T6_RGB24:
-		for (i = 0; i < px; i++, s += 4, py += 3) {
+		for (x = 0; x < w; x++, s += 4, py += 3) {
 			py[0] = lb[s[0]];
 			py[1] = lg[s[1]];
 			py[2] = lr[s[2]];
 		}
-		return;
+		break;
 	case T6_RGB32:
-		for (i = 0; i < px; i++, s += 4, py += 4) {
+		for (x = 0; x < w; x++, s += 4, py += 4) {
 			py[0] = lb[s[0]];
 			py[1] = lg[s[1]];
 			py[2] = lr[s[2]];
 			py[3] = 0;
 		}
-		return;
-	case T6_YUV444: {
-		u8 *pu = py + px, *pv = pu + px;
-
-		for (i = 0; i < px; i++, s += 4) {
+		break;
+	case T6_YUV444:
+		for (x = 0; x < w; x++, s += 4) {
 			int r = lr[s[2]], g = lg[s[1]], b = lb[s[0]];
 
-			py[i] = t6_y(r, g, b);
-			pu[i] = t6_u(r, g, b, 0);
-			pv[i] = t6_v(r, g, b, 0);
+			py[x] = t6_y(r, g, b);
+			py[px + x] = t6_u(r, g, b, 0);
+			py[2 * px + x] = t6_v(r, g, b, 0);
 		}
-		return;
-	}
+		break;
 	case T6_NV12:
 		break;
 	}
+}
+
+/* one row pair of NV12: two Y rows and the UV row */
+static void t6_convert_pair(struct mct_t6 *t6, int y)
+{
+	const u8 *lr = t6->lut[0], *lg = t6->lut[1], *lb = t6->lut[2];
+	int w = t6->width, x, i;
+	const u8 *s0 = t6->shadow + (size_t)y * w * 4;	/* B, G, R, X */
+	const u8 *s1 = s0 + w * 4;
+	u8 *y0 = t6->img + (size_t)y * w, *y1 = y0 + w;
+	u8 *uv = t6->img + (size_t)w * t6->height + (size_t)(y / 2) * w;
+
+	for (x = 0; x < w; x += 2, s0 += 8, s1 += 8, y0 += 2, y1 += 2, uv += 2) {
+		/* the 2x2 block: top left, top right, bottom left, bottom right */
+		const u8 *p4[4] = { s0, s0 + 4, s1, s1 + 4 };
+		u8 *out[4] = { y0, y0 + 1, y1, y1 + 1 };
+		int r = 0, g = 0, b = 0;
+
+		for (i = 0; i < 4; i++) {
+			int pr = lr[p4[i][2]], pg = lg[p4[i][1]], pb = lb[p4[i][0]];
+
+			*out[i] = t6_y(pr, pg, pb);
+			r += pr;
+			g += pg;
+			b += pb;
+		}
+		/* chroma of the 2x2 block: sums of 4, so shift 2 more */
+		uv[0] = t6_u(r, g, b, 2);
+		uv[1] = t6_v(r, g, b, 2);
+	}
+}
+
+/*
+ * Convert the rows changed since the last conversion (t6->cvt) and mark
+ * them stale in every frame buffer. upd.lock held.
+ */
+static void t6_convert(struct mct_t6 *t6)
+{
+	int h = t6->height, y, k;
 
 	for (y = 0; y < h; y += 2) {
-		const u8 *s0 = t6->shadow + (size_t)y * w * 4;
-		const u8 *s1 = s0 + w * 4;
-		u8 *y0 = py + (size_t)y * w, *y1 = y0 + w;
-		u8 *uv = py + px + (size_t)(y / 2) * w;
-
-		for (x = 0; x < w; x += 2, s0 += 8, s1 += 8, y0 += 2, y1 += 2, uv += 2) {
-			/* the 2x2 block: top left, top right, bottom left, bottom right */
-			const u8 *p4[4] = { s0, s0 + 4, s1, s1 + 4 };
-			u8 *out[4] = { y0, y0 + 1, y1, y1 + 1 };
-			int r = 0, g = 0, b = 0;
-
-			for (i = 0; i < 4; i++) {
-				int pr = lr[p4[i][2]], pg = lg[p4[i][1]], pb = lb[p4[i][0]];
-
-				*out[i] = t6_y(pr, pg, pb);
-				r += pr;
-				g += pg;
-				b += pb;
-			}
-			/* chroma of the 2x2 block: sums of 4, so shift 2 more */
-			uv[0] = t6_u(r, g, b, 2);
-			uv[1] = t6_v(r, g, b, 2);
+		if (!t6->cvt[y] && !t6->cvt[y + 1])
+			continue;
+		if (t6->lay.kind == T6_NV12) {
+			t6_convert_pair(t6, y);
+		} else {
+			t6_convert_row(t6, y);
+			t6_convert_row(t6, y + 1);
 		}
+		t6->cvt[y] = 1;
+		t6->cvt[y + 1] = 1;
 	}
+	for (k = 0; k < ARRAY_SIZE(t6->stale); k++)
+		for (y = 0; y < h; y++)
+			t6->stale[k][y] |= t6->cvt[y];
+	memset(t6->cvt, 0, h);
 }
 
 struct t6_band {
@@ -759,6 +790,9 @@ static int t6_diff_bands(struct mct_t6 *t6, int k, struct t6_band *bands)
 	for (p = 0; p < pairs; p++) {
 		int lo = w, hi = 0;
 		bool d = false;
+
+		if (!t6->stale[k][2 * p] && !t6->stale[k][2 * p + 1])
+			continue;
 
 		for (i = 0; i < t6->lay.planes; i++) {
 			int bpp = t6->lay.bpp[i], l = w * bpp, hb = 0;
@@ -931,6 +965,7 @@ static int t6_present(struct mct_t6 *t6, const struct t6_band *bands, int n)
 			}
 	}
 	t6->hw_valid[k] = true;
+	memset(t6->stale[k], 0, t6->height);
 	t6->stats.bands += n;
 	t6->buf = (k + 1) % ARRAY_SIZE(t6_bufs);
 	return 0;
@@ -1051,7 +1086,7 @@ static void t6_update_work(struct work_struct *work)
 
 	if (drm_dev_enter(&t6->dev, &idx)) {
 		ret = t6_present(t6, bands, n);
-		if (ret)
+		if (ret && ret != -ENODEV && ret != -ESHUTDOWN)	/* unplugged */
 			drm_err_ratelimited(&t6->dev, "frame update error: %d\n", ret);
 		else
 			t6->stats.updates++;
@@ -1111,6 +1146,7 @@ static void t6_mark_dirty(struct mct_t6 *t6, struct drm_framebuffer *fb,
 				drm_memcpy_from_wc(&d, &sm, w * 4);
 			}
 		}
+		memset(t6->cvt + y, 1, n);
 		t6->stats.px_damage += (u64)n * w;
 		t6->stats.rows_copied += n;
 		y += n;
@@ -1459,8 +1495,10 @@ static void t6_set_gamma(struct mct_t6 *t6, const struct drm_property_blob *blob
 		t6->lut[2][i] = lut ? drm_color_lut_extract(lut[i].blue, 8) : i;
 	}
 	kick = t6->width && t6->shadow_valid;
-	if (kick)
+	if (kick) {
+		memset(t6->cvt, 1, t6->height);
 		t6->upd.dirty = true;
+	}
 	mutex_unlock(&t6->upd.lock);
 	if (kick)
 		queue_work(system_long_wq, &t6->upd.work);
@@ -2035,10 +2073,15 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	t6->hw[2] = kvmalloc(px * 4, GFP_KERNEL);
 	t6->shadow = kvzalloc(px * 4, GFP_KERNEL);
 	t6->rowmask = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
+	t6->cvt = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
+	t6->stale[0] = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
+	t6->stale[1] = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
+	t6->stale[2] = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
 	ret = drmm_add_action_or_reset(dev, t6_release, NULL);
 	if (ret)
 		return ret;
-	if (!t6->shadow || !t6->rowmask || !t6->img || !t6->hw[0] || !t6->hw[1] || !t6->hw[2])
+	if (!t6->shadow || !t6->rowmask || !t6->cvt || !t6->stale[0] || !t6->stale[1] ||
+	    !t6->stale[2] || !t6->img || !t6->hw[0] || !t6->hw[1] || !t6->hw[2])
 		return -ENOMEM;
 
 	ret = t6_modeset_init(t6);
