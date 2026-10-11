@@ -1,0 +1,96 @@
+--- a/src/backend/tty.rs
++++ b/src/backend/tty.rs
+@@ -17,10 +17,10 @@
+ use niri_config::output::Modeline;
+ use niri_config::{Config, OutputName};
+ use niri_ipc::{HSyncPolarity, VSyncPolarity};
+-use smithay::backend::allocator::dmabuf::Dmabuf;
++use smithay::backend::allocator::dmabuf::{AsDmabuf, Dmabuf};
+ use smithay::backend::allocator::format::FormatSet;
+ use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
+-use smithay::backend::allocator::Fourcc;
++use smithay::backend::allocator::{Allocator, Fourcc};
+ use smithay::backend::drm::compositor::{DrmCompositor, FrameFlags, PrimaryPlaneElement};
+ use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
+ use smithay::backend::drm::{
+@@ -32,7 +32,7 @@
+ use smithay::backend::renderer::gles::GlesRenderer;
+ use smithay::backend::renderer::multigpu::gbm::GbmGlesBackend;
+ use smithay::backend::renderer::multigpu::{GpuManager, MultiFrame, MultiRenderer};
+-use smithay::backend::renderer::{DebugFlags, ImportDma, ImportEgl, RendererSuper};
++use smithay::backend::renderer::{Bind, DebugFlags, ImportDma, ImportEgl, RendererSuper};
+ use smithay::backend::session::libseat::LibSeatSession;
+ use smithay::backend::session::{Event as SessionEvent, Session};
+ use smithay::backend::udev::{self, UdevBackend, UdevEvent};
+@@ -138,7 +138,9 @@
+     // See https://github.com/Smithay/smithay/issues/1102.
+     drm: DrmDevice,
+     gbm: GbmDevice<DrmDeviceFd>,
+-    // For display-only devices this will be the allocator from the primary device.
++    // For display-only devices this is the device's own allocator (system-memory dumb buffers
++    // that the primary GPU renders into) if the primary GPU can render into them, otherwise the
++    // allocator from the primary device.
+     allocator: GbmAllocator<DrmDeviceFd>,
+ 
+     pub drm_lease_state: Option<DrmLeaseState>,
+@@ -884,6 +886,13 @@
+ 
+         let allocator_gbm = if render_node.is_some() {
+             gbm.clone()
++        } else if self.primary_can_render_into(&gbm) {
++            // Display-only device: render on the primary GPU straight into buffers allocated on
++            // the display device (dumb buffers in system memory). Such devices (USB displays and
++            // the like) read the framebuffer with the CPU, and a CPU read of a primary-GPU buffer
++            // goes over PCIe from VRAM, which is an order of magnitude slower.
++            debug!("display-only device: rendering into buffers allocated on the device");
++            gbm.clone()
+         } else if let Some(primary_device) = self.devices.get(&self.primary_node) {
+             primary_device.gbm.clone()
+         } else {
+@@ -930,6 +939,46 @@
+         Ok(())
+     }
+ 
++    /// Checks whether the primary GPU can render into buffers allocated on a display-only device.
++    fn primary_can_render_into(&mut self, gbm: &GbmDevice<DrmDeviceFd>) -> bool {
++        if std::env::var_os("NIRI_DISPLAY_ONLY_PRIMARY_ALLOC").is_some() {
++            debug!("NIRI_DISPLAY_ONLY_PRIMARY_ALLOC set, allocating on the primary GPU");
++            return false;
++        }
++
++        let mut allocator =
++            GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
++        let buffer = match allocator.create_buffer(64, 64, Fourcc::Xrgb8888, &[Modifier::Linear]) {
++            Ok(buffer) => buffer,
++            Err(err) => {
++                debug!("display-only device can't allocate buffers: {err:?}");
++                return false;
++            }
++        };
++        let mut dmabuf = match buffer.export() {
++            Ok(dmabuf) => dmabuf,
++            Err(err) => {
++                debug!("display-only device can't export buffers: {err:?}");
++                return false;
++            }
++        };
++        let mut renderer = match self.gpu_manager.single_renderer(&self.primary_render_node) {
++            Ok(renderer) => renderer,
++            Err(err) => {
++                debug!("no primary renderer to test display-only buffers with: {err:?}");
++                return false;
++            }
++        };
++        let res = renderer.as_gles_renderer().bind(&mut dmabuf).map(drop);
++        match res {
++            Ok(()) => true,
++            Err(err) => {
++                debug!("primary GPU can't render into display-only device buffers: {err:?}");
++                false
++            }
++        }
++    }
++
+     fn device_changed(&mut self, device_id: dev_t, niri: &mut Niri, cleanup: bool) {
+         debug!("device changed: {device_id}");
+ 
