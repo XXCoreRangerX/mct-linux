@@ -576,3 +576,12 @@ the numbers say for 3440x1440@60 (CVT-RB ~319 MHz, below the 340 MHz cap):
 - Unknown: whether the scanout has a line length limit (format 0 broke
   after ~2300 bytes per row; 3440 px is 3440 bytes of Y in NV12). Test from
   userspace with a computed mode before changing the driver.
+
+**3440x1440@60 on the Gigabyte MO34WQC2 (HDMI): monitor hung.**
+`tools/t6_wide_test.py` set the monitor's own timing (DTD 1: 3600 x 1481,
+319.75 MHz, PLL N 31 P 975 out 3). The monitor stayed dark and its
+controller froze (no OSD, its USB hub/KVM dropped off and re-enumerated
+after a replug). No picture, so the formats were never seen. Likely the
+T6's HDMI transmitter misbehaves at this clock/width (MCT's own table
+stops at 2048x1152). Not retried. Next, only with a spare monitor:
+2560x1440@60 (241.5 MHz), closer to the proven 1080p144 (333 MHz).
