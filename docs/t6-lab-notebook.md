@@ -697,3 +697,19 @@ came): back to back 396 frames, 134 done events in 4 s; spaced frames: done
 0.09 to 10.0 ms after the last write (median 1.9), phase against 60 Hz
 R = 0.03. Not tied to the refresh, as the vendor capture said; whether the
 chip sends them at all varies between runs. Pacing stays on the timer.
+
+**0.20.0 (cursor, capabilities, USB 2, timings).**
+- Cursor (`tools/t6_cursor_test.py`): negative positions sent as v - 1 work
+  (cursor slides off the top and left edges); 96 px works with 4096-byte
+  uploads; 128 px doesn't (its 65,544 bytes need upload offsets past the
+  16-bit wIndex). Driver: up to 96 px, the 64 px image unless something
+  shows outside it, 4096-byte chunks, native negative positions. Live:
+  edges smooth, shapes right.
+- Capabilities at probe: `Super Lite, feature level 6, 58 MiB, display
+  flags 0x0`.
+- Modes: generated ones use CVT-RB (160 px blanking) where it fits; on the
+  simulated monitors only 1080p at 100/120 Hz changed (99.92 / 119.91 Hz),
+  1440p, ultrawide and 4K stay on the tighter timing (clock limits).
+- The MO34WQC2 hung (OSD dead) after the EDID simulation toggled the T6
+  output and EDID; stopping the T6 signal brought it back, then 2560x1440
+  and 3440x1440@60 were fine again. Run simulations without that monitor.
