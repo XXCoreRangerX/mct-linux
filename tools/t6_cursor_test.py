@@ -9,6 +9,10 @@ Each step changes the cursor and waits for y/n; summary at the end.
   4  128x128 blue square with a white border, 4096-byte uploads
   5  96x96 green square with a white border, 4096-byte uploads
 
+  t6_cursor_test.py 128   only: 128x128 blue square, upload cut at 0x10000
+                          bytes (the last 2 pixels never sent), like the
+                          16-bit offset allows
+
 Run through tools/t6_run.sh.
 """
 import os, sys, struct, time, select
@@ -58,8 +62,8 @@ def cursor_img(size, kind):
     return struct.pack("<4H", 1, size, size, size * 4) + c.tobytes()
 
 
-def upload(t, slot, img, chunk):
-    for off in range(0, len(img), chunk):
+def upload(t, slot, img, chunk, limit=None):
+    for off in range(0, min(len(img), limit or len(img)), chunk):
         t.cout(0x10, slot, off, img[off:off + chunk])
     t.cout(0x05, slot, 1)
 
@@ -77,6 +81,20 @@ def ask(q):
 
 t = t6dev.T6()
 res = []
+if sys.argv[1:] == ["128"]:
+    try:
+        t.cout(0x12, t.out, 0, mode()); t.cout(0x31, 0, 0); t.output(True)
+        time.sleep(1)
+        grey_frame(t)
+        print("mode 2560x1440@60 set; wait for the grey picture", flush=True)
+        print("\nSTEP 1: 128x128 blue square, upload stops at 0x10000 bytes")
+        upload(t, 1, cursor_img(128, "blue"), 4096, 0x10000); pos(t, 600, 400)
+        a = ask("Blue square with a white border, about 128 px (twice the size of a normal pointer)?")
+        print(f"\nsummary:\n  128 px cursor, cut upload     {'ok' if a == 'y' else 'BAD'}")
+        t.cout(0x05, 1, 0)
+    finally:
+        t.close()
+    sys.exit(0)
 try:
     t.cout(0x12, t.out, 0, mode()); t.cout(0x31, 0, 0); t.output(True)
     time.sleep(1)

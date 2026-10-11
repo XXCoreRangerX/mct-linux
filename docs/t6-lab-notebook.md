@@ -713,3 +713,18 @@ chip sends them at all varies between runs. Pacing stays on the timer.
 - The MO34WQC2 hung (OSD dead) after the EDID simulation toggled the T6
   output and EDID; stopping the T6 signal brought it back, then 2560x1440
   and 3440x1440@60 were fine again. Run simulations without that monitor.
+
+**NV12 sharpness, offline** (`tools/nv12_eval.py`: coloured text on light
+and dark backgrounds, Lab dE against the original):
+
+| method | mean dE | px dE > 5 |
+|---|---|---|
+| 2x2 average (driver) | 1.33 | 5.8% |
+| linear-light average | 1.36 | 5.4% |
+| average + luma correction | 1.36 | 5.8% |
+| linear + luma correction | 1.39 | 5.5% |
+
+(nearest chroma upsampling; bilinear ranks the same.) With one chroma per
+2x2 block and free luma per pixel, the plain average already minimises the
+RGB error; the other methods move the error around. The fringes at coloured
+text are NV12 itself. No driver change; full colour at 3440x1440 means 55 Hz.
