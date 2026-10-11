@@ -33,9 +33,8 @@ Order agreed 2026-10-11:
 2. ~~T6 hardware rotation~~ (`40 1f`): the 5600 stalls on the request, like
    on gamma (feature level 6), and the Windows driver never sends it. The
    driver code is kept on branch `t6-rotation` for a chip that has it.
-3. **Shared core refactor:** modeset, cursor plane, damage handling, stats in
-   common code; backends only speak the chip protocol. Design:
-   [shared-core.md](shared-core.md).
+3. ~~Shared core refactor~~: done, see [shared-core.md](shared-core.md).
+   Left: the DTU-1031X profile struct in `mct_t2.c`.
 4. **T2 rainbow lines** (analog sampling phase, ~10-25% of inits): look for an
    auto-adjust/phase command for the RTD2280 scaler, reachable through the pen
    HID side. Wacom's driver has none ([wacom-display-settings.md](wacom-display-settings.md));

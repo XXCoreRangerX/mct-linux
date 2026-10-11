@@ -1,4 +1,16 @@
-# Shared core: design (2026-10-11, not implemented yet)
+# Shared core (2026-10-11)
+
+**Done** (main, `kernel/mct_drv.c` / `mct_drv.h`), tested live on both
+devices at once: T6 at 1080p144, tablet with all updates under 16 ms. The
+API ended up close to the plan below; differences: chips get the shadow's
+changed rows through `mdev->changed` and run their own worker body
+(`funcs->update`), the settle timer is shared (T6 back to full colour, T2
+lossless refinement), and chip-specific setup (DMA device, events) stays in
+the chip's probe. Size: core 670 lines, `mct_t2.c` 1550 -> 1270,
+`mct_t6.c` 2300 -> 1680. Not done yet: the Wacom profile struct in
+`mct_t2.c`.
+
+The design as written before:
 
 Today `mct.ko` is one USB driver with two backends, `mct_t2.c` (1550 lines)
 and `mct_t6.c` (2300), each a full DRM driver of its own. About a third of

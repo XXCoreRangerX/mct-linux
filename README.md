@@ -20,8 +20,9 @@ vendor drivers' disassembly and testing on real hardware.
 Contents
 --------
 
-  kernel/   mct, a DRM/KMS driver with a backend per chip (mct_t2.c,
-            mct_t6.c). Works with Wayland/X11 and the text console,
+  kernel/   mct, a DRM/KMS driver: a shared core (mct_drv.c) and a backend
+            per chip (mct_t2.c, mct_t6.c). Works with Wayland/X11 and the
+            text console,
             hardware cursor, DPMS. This is the one to use.
   t2d/      userspace daemon on top of EVDI. Older, handy for protocol work
             since it needs no kernel module reloads.

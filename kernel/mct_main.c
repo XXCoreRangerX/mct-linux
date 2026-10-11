@@ -5,8 +5,9 @@
  * each to the backend for its chip generation:
  *  - mct_t2.c: Trigger II, e.g. the Wacom DTU-1031X pen display
  *  - mct_t6.c: Trigger 6, e.g. the "T6 USB Station" HDMI adapter
- * The backends are separate DRM drivers (their own names, modes and module
- * parameters) and can be left out at build time (MCT_T2=n / MCT_T6=n).
+ * The backends share the DRM core in mct_drv.c but keep their own DRM
+ * driver names, modes and module parameters, and can be left out at build
+ * time (MCT_T2=n / MCT_T6=n).
  */
 
 #include <linux/module.h>
