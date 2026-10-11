@@ -90,9 +90,11 @@ Credits
 -------
 
 cyrozap's notes at https://github.com/cyrozap/mct-usb-display-adapter-re
-(doc/Protocol-T2.md) were the starting point for the protocol documentation.
-https://github.com/JingYenLoh/trigger6 is a separate Linux driver for the
-Trigger 6.
+(doc/Protocol-T2.md, Protocol-T6.md) were the starting point for the
+protocol documentation. https://github.com/JingYenLoh/trigger6, a separate
+Linux driver for the Trigger 6, and its Windows capture were the starting
+point for the T6 work; y-chan's and ramifriedman's T6 forks and notes helped
+with partial updates.
 
 Mainline Linux has no driver for MCT's Trigger display chips. MCT's USB vendor
 ID shows up there only for the mct_u232 serial adapter, some SiS-based
