@@ -111,6 +111,20 @@ Known boards: `JUA254H` j5create JUA254 (USB 3.0 to HDMI; the 5600 here),
 `DTU-1031AX` Wacom DTU-1031AX (in MCT's firmware package). More board names
 are in MCT's `*.t6img` firmware files (see the lab's dll-analysis notes).
 
+## Saved settings (0.5.1)
+
+`app/src/settings.rs`. After a successful change (window, tray,
+`mctctl set` without `--temporary`) the display's settings (format,
+all_modes, lossy, brightness) are written to `~/.config/mct/settings.toml`
+(`$MCT_SETTINGS`; inside the fake tree when `MCT_SYSFS_ROOT` is set), one
+TOML table per display. The key is `VID:PID/serial-S` with the USB serial,
+the T6 chip serial or the DTU-1031X's pen serial, else `VID:PID/port-P`
+with the USB port (the JUA254 has no serial). `Reapplier` runs in the
+tray's one-second loop (or the window's when there is no tray): a display
+whose mct directory is new (another inode: the driver probed it again)
+gets the saved values that differ written back. `mctctl apply`, `forget`
+and `saved` handle it by hand.
+
 ## Later
 
 - The optional JPEG mode for the T6 (userspace encoder) would live next to

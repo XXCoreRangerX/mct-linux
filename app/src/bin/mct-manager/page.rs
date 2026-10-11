@@ -417,7 +417,7 @@ impl Page {
         let d = if read_only {
             format!("Read-only for your user. {PERMISSION_HINT}")
         } else {
-            String::new()
+            "Remembered for this display and restored when it reconnects.".to_string()
         };
         if self.settings.description().as_deref().unwrap_or("") != d {
             self.settings

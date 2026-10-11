@@ -70,6 +70,16 @@ Switching the tablet's driver asks for an administrator password (polkit
 action org.mctlinux.manager.helper). On NixOS the permanent choice is
 `hardware.mct.driver = "kernel"` or `"evdi"`.
 
+## Saved settings
+
+The driver starts every display with the module's defaults, also after a
+replug or a T6 restart. Settings changed in the window, the tray or with
+`mctctl set` are remembered in `~/.config/mct/settings.toml`, and the app
+(window or tray) writes them back whenever a remembered display appears;
+`mctctl apply` does it by hand. Displays are recognised by a serial number
+where they have one (the DTU-1031X by its pen's), otherwise by the USB
+port: a T6 adapter in another port starts with the defaults.
+
 ## mctctl
 
 ```text
@@ -82,6 +92,10 @@ mctctl info [-v|-vv] [DEV]         settings and state of one display;
                                    and raw EDID, driver details
 mctctl get [DEV] KEY               one value
 mctctl set [DEV] KEY VALUE         format, all_modes, lossy, brightness
+                                   (remembered; --temporary to not save)
+mctctl apply [DEV]                 apply the saved settings now
+mctctl forget [DEV]                drop the saved settings of a display
+mctctl saved                       list the saved settings
 mctctl stats [DEV] [--watch]       update rate, data rate, errors
 mctctl driver [DEV] kernel|legacy  switch the tablet's driver
 ```

@@ -4,6 +4,15 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
+## 0.5.1 (2026-10-11)
+
+- MCT Display Manager and mctctl remember each display's settings
+  (`~/.config/mct/settings.toml`) and restore them when it reconnects or is
+  probed again; displays are recognised by a serial number (the DTU-1031X
+  by its pen's) or else the USB port. `mctctl set --temporary`, `mctctl
+  apply`, `forget`, `saved`.
+- README: "analysis of the vendor drivers for interoperability".
+
 ## 0.5.0 (2026-10-11): first public release
 
 Includes MCT Display Manager and mctctl 0.5.0 (the app's version follows

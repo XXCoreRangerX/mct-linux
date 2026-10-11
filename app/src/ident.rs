@@ -324,26 +324,33 @@ fn monitor(root: &Path, connector: &str, out: &mut Vec<Section>) {
 }
 
 /// The tablet's pen digitizer: a Wacom device on the same hub.
-fn pen(root: &Path, interface: &str, out: &mut Vec<Section>) {
+/// The Wacom device on the same hub as a tablet's display: its USB device
+/// name (e.g. `6-3.2`) and sysfs directory.
+fn pen_device(root: &Path, interface: &str) -> Option<(String, PathBuf)> {
     let dev = interface.split(':').next().unwrap_or(interface);
-    let Some((hub, _)) = dev.rsplit_once('.') else {
-        return;
-    };
+    let (hub, _) = dev.rsplit_once('.')?;
     let devices = root.join("sys/bus/usb/devices");
-    let Ok(entries) = fs::read_dir(&devices) else {
-        return;
-    };
-    let mut names: Vec<String> = entries
+    let mut names: Vec<String> = fs::read_dir(&devices)
+        .ok()?
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|n| !n.contains(':') && n.rsplit_once('.').is_some_and(|(h, _)| h == hub))
         .collect();
     names.sort();
-    for n in names {
+    names.into_iter().find_map(|n| {
         let dir = devices.join(&n);
-        if read(&dir.join("idVendor")).as_deref() != Some("056a") {
-            continue;
-        }
+        (read(&dir.join("idVendor")).as_deref() == Some("056a")).then_some((n, dir))
+    })
+}
+
+/// The serial number of a tablet's pen digitizer (the display function has
+/// none).
+pub fn pen_serial(root: &Path, interface: &str) -> Option<String> {
+    read(&pen_device(root, interface)?.1.join("serial"))
+}
+
+fn pen(root: &Path, interface: &str, out: &mut Vec<Section>) {
+    if let Some((n, dir)) = pen_device(root, interface) {
         let mut s = Builder::new();
         s.add("pen_product", "Product", read(&dir.join("product")));
         s.add("pen_manufacturer", "Manufacturer", read(&dir.join("manufacturer")));
@@ -356,7 +363,6 @@ fn pen(root: &Path, interface: &str, out: &mut Vec<Section>) {
             read(&dir.join("bcdDevice")).map(|b| bcd_text(&b)),
         );
         s.done("pen", "Pen digitizer", out);
-        return;
     }
 }
 

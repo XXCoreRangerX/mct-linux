@@ -63,9 +63,9 @@ Later:
 - ~~Userspace companion app~~: built (`app/`: MCT Display Manager window
   and tray, `mctctl`; [companion-app.md](driver/companion-app.md)), on
   per-device sysfs settings (mct_t6 0.23.0). It shows every identifier
-  (board name, firmware, USB, monitor EDID) since mct_t6 0.26.0. Left:
-  reapplying settings on replug, and optional extras the kernel driver
-  can't carry:
+  (board name, firmware, USB, monitor EDID) since mct_t6 0.26.0, and
+  restores saved settings on replug since 0.5.1. Left: optional extras the
+  kernel driver can't carry:
   - **T6 JPEG** for full-screen motion above the USB limit. The chip only
     decodes; the host has to encode, which can't live in the kernel driver
     (no in-kernel JPEG encoder, CPU heavy, wouldn't be accepted upstream).
@@ -116,9 +116,9 @@ panel sizes), minimum mode size, no recovery on an unplugged device, work
 cancelled at release, cursor source offsets refused, software unbind
 switches the output off first. Left:
 
-- Per-device settings (format, all_modes, lossy) and console mappings
-  start over on every replug, and on every T6 restart after a transfer
-  error. The companion app (or a udev rule) could reapply them on bind.
+- ~~Per-device settings start over on every replug~~: the companion app
+  saves them and restores them when a display appears (0.5.1). Console
+  mappings still start over.
 - Connector names (HDMI-A-n) can change on replug while the compositor
   still holds the old device; compositor output settings are better
   matched by make/model/serial.

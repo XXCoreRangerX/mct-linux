@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use clap::{Parser, Subcommand, ValueEnum};
 use mct::device::{KEYS, SETTABLE};
 use mct::ident::{self, Section};
+use mct::settings;
 use mct::{discover, switch, usb, Device, Display, Error, Info, RateMeter, Route};
 use serde::Serialize;
 
@@ -75,6 +76,22 @@ enum Cmd {
     Set {
         #[arg(value_name = "[DEV] KEY VALUE", num_args = 2..=3, required = true)]
         args: Vec<String>,
+        /// Don't remember the change (by default the display's settings are
+        /// saved and applied again when it reconnects)
+        #[arg(long)]
+        temporary: bool,
+    },
+    /// Apply the saved settings of a display now (MCT Display Manager does
+    /// this by itself when a display appears)
+    #[command(after_help = DEV_HELP)]
+    Apply { dev: Option<String> },
+    /// Forget the saved settings of a display
+    #[command(after_help = DEV_HELP)]
+    Forget { dev: Option<String> },
+    /// List the saved settings of all displays
+    Saved {
+        #[arg(long)]
+        json: bool,
     },
     /// Show update rate, data rate and errors
     #[command(after_help = DEV_HELP)]
@@ -154,15 +171,50 @@ fn run(cmd: Cmd) -> Result<(), Error> {
             out!("{}", bound(usb::select(&displays, dev)?)?.get(key)?);
             Ok(())
         }
-        Cmd::Set { args } => {
+        Cmd::Set {
+            args,
+            temporary,
+        } => {
             let (dev, key, value) = match args.as_slice() {
                 [key, value] => (None, key, value),
                 [dev, key, value] => (Some(dev.as_str()), key, value),
                 _ => unreachable!(),
             };
             check_key(key)?;
-            bound(usb::select(&displays, dev)?)?.set(key, value)
+            let display = usb::select(&displays, dev)?;
+            bound(display)?.set(key, value)?;
+            if temporary {
+                Ok(())
+            } else {
+                settings::remember(display)
+            }
         }
+        Cmd::Apply { dev } => {
+            let display = usb::select(&displays, dev.as_deref())?;
+            bound(display)?;
+            let store = settings::Store::load()?;
+            if !store.devices.contains_key(&settings::device_key(display)) {
+                out!("{}: no saved settings", display.interface);
+                return Ok(());
+            }
+            let done = settings::apply(display, &store)?;
+            if done.is_empty() {
+                out!("{}: already as saved", display.interface);
+            } else {
+                out!("{}: applied {}", display.interface, done.join(", "));
+            }
+            Ok(())
+        }
+        Cmd::Forget { dev } => {
+            let display = usb::select(&displays, dev.as_deref())?;
+            if settings::forget(display)? {
+                out!("{}: saved settings forgotten", display.interface);
+            } else {
+                out!("{}: no saved settings", display.interface);
+            }
+            Ok(())
+        }
+        Cmd::Saved { json } => saved(json),
         Cmd::Stats {
             dev,
             watch,
@@ -463,6 +515,28 @@ fn list(displays: &[Display], verbose: u8, json: bool) -> Result<(), Error> {
                 out!("  {line}");
             }
         }
+    }
+    Ok(())
+}
+
+fn saved(json: bool) -> Result<(), Error> {
+    let store = settings::Store::load()?;
+    if json {
+        print_json(&store.devices);
+        return Ok(());
+    }
+    let path = settings::path()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "-".into());
+    if store.devices.is_empty() {
+        out!("no saved settings ({path})");
+        return Ok(());
+    }
+    out!("{path}:");
+    for (key, s) in &store.devices {
+        let values: Vec<String> = s.entries().iter().map(|(k, v)| format!("{k}={v}")).collect();
+        let name = if s.name.is_empty() { String::new() } else { format!("{}  ", s.name) };
+        out!("  {key}  {name}{}", values.join(" "));
     }
     Ok(())
 }

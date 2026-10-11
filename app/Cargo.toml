@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com>
 [package]
 name = "mct-app"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 license = "GPL-2.0-only"
 description = "Companion app for the mct driver: mctctl and MCT Display Manager"
@@ -30,6 +30,7 @@ gui = ["dep:relm4", "dep:ksni"]
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "1"
 relm4 = { version = "0.9", features = ["libadwaita", "gnome_46"], optional = true }
 ksni = { version = "0.3", features = ["blocking"], optional = true }
 

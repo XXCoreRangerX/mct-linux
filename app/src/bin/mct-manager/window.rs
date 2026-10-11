@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use mct::device::FORMATS;
+use mct::settings::{self, Reapplier};
 use mct::{discover, switch, Error, RateMeter, Rates, Route, Snapshot};
 use relm4::adw::prelude::*;
 use relm4::gtk::{gio, glib};
@@ -54,6 +55,9 @@ pub struct App {
     switching: bool,
     /// Last failed action, shown as a toast; the serial tells new from shown.
     toast: (u64, String),
+    /// Applies saved settings to displays that appear (here unless the tray
+    /// runs, which does it itself).
+    reapplier: Reapplier,
 }
 
 pub struct AppWidgets {
@@ -102,7 +106,15 @@ impl App {
     }
 
     fn rescan(&mut self) {
-        let snaps: Vec<Snapshot> = discover().into_iter().map(Snapshot::take).collect();
+        let displays = discover();
+        if !self.tray_mode {
+            for (name, res) in self.reapplier.scan(&displays) {
+                if let Err(e) = res {
+                    self.toast(format!("Could not restore the settings of {name}: {}", message(&e)));
+                }
+            }
+        }
+        let snaps: Vec<Snapshot> = displays.into_iter().map(Snapshot::take).collect();
         let key = |v: &[Snapshot]| -> Vec<String> {
             v.iter().map(|s| s.display.interface.clone()).collect()
         };
@@ -172,12 +184,21 @@ impl App {
         self.legacy_reason = reason;
     }
 
+    /// Changes a setting of the shown display and remembers its settings.
     fn change(&mut self, f: impl FnOnce(&mct::Device) -> Result<(), Error>) {
-        let Some(dev) = self.current().and_then(|s| s.display.device.clone()) else {
+        let Some(display) = self.current().map(|s| s.display.clone()) else {
             return;
         };
-        if let Err(e) = f(&dev) {
-            self.toast(message(&e));
+        let Some(dev) = display.device.clone() else {
+            return;
+        };
+        match f(&dev) {
+            Ok(()) => {
+                if let Err(e) = settings::remember(&display) {
+                    self.toast(format!("Could not save the settings: {}", message(&e)));
+                }
+            }
+            Err(e) => self.toast(message(&e)),
         }
         self.reload_current();
     }
@@ -332,6 +353,7 @@ impl SimpleComponent for App {
             legacy_reason: None,
             switching: false,
             toast: (0, String::new()),
+            reapplier: Reapplier::new(),
         };
         model.rescan();
         model.sample();

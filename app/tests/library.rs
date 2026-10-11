@@ -411,3 +411,33 @@ fn identity() {
     assert_eq!(value(b, "product_name"), None);
     assert!(mct::ident::report(&snaps).contains("Board:"));
 }
+
+#[test]
+fn reapplier() {
+    use mct::settings::{self, Reapplier};
+    let t = tree();
+    std::env::set_var("MCT_SETTINGS", t.path().join("settings.toml"));
+    let a = || {
+        discover_in(t.path())
+            .into_iter()
+            .find(|d| d.interface == T6_A)
+            .unwrap()
+    };
+    let mut re = Reapplier::new();
+    // nothing saved: nothing to do
+    assert!(re.scan(&discover_in(t.path())).is_empty());
+
+    a().device.unwrap().set_format("yuv444").unwrap();
+    settings::remember(&a()).unwrap();
+    // already seen and unchanged: no work
+    assert!(re.scan(&discover_in(t.path())).is_empty());
+
+    // probed again (a new directory): the saved format comes back
+    fake::unbind(t.path(), T6_A).unwrap();
+    fake::bind(t.path(), T6_A, fake::T6_A_FILES).unwrap();
+    let applied = re.scan(&discover_in(t.path()));
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].1.as_ref().unwrap(), &vec!["format"]);
+    assert_eq!(a().device.unwrap().read("format").unwrap().as_deref(), Some("yuv444"));
+    std::env::remove_var("MCT_SETTINGS");
+}

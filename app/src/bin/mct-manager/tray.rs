@@ -13,6 +13,7 @@ use ksni::menu::{CheckmarkItem, RadioGroup, RadioItem, StandardItem, SubMenu};
 use ksni::MenuItem;
 use mct::device::{FORMATS, LOSSY_MAX};
 use mct::menu::{self, Item};
+use mct::settings::{self, Reapplier};
 use mct::{discover, Device, Error, Info, Snapshot};
 
 type Callback = Box<dyn Fn() + Send>;
@@ -75,15 +76,15 @@ impl Tray {
         self.set_snaps(snapshot());
     }
 
+    /// Changes a setting and remembers the display's settings.
     fn change(&mut self, device: usize, f: impl FnOnce(&Device) -> Result<(), Error>) {
-        let Some(d) = self
-            .snaps
-            .get(device)
-            .and_then(|s| s.display.device.clone())
-        else {
+        let Some(display) = self.snaps.get(device).map(|s| s.display.clone()) else {
             return;
         };
-        let res = f(&d);
+        let Some(d) = display.device.clone() else {
+            return;
+        };
+        let res = f(&d).and_then(|()| settings::remember(&display));
         if let Some(slot) = self.errors.get_mut(device) {
             *slot = res.err().map(|e| match e {
                 Error::Permission { .. } => "Permission denied: see the window".to_string(),
@@ -264,12 +265,20 @@ pub fn spawn(
         quit: Box::new(quit),
     };
     let handle = tray.assume_sni_available(wait).spawn()?;
-    // hotplug and changes made elsewhere: update the menu when they show
+    // hotplug and changes made elsewhere: update the menu when they show;
+    // displays that appear get their saved settings back
     thread::spawn(move || {
         let mut last = Vec::new();
+        let mut reapplier = Reapplier::new();
         while !handle.is_closed() {
             thread::sleep(Duration::from_secs(1));
-            let snaps = snapshot();
+            let displays = discover();
+            for (name, res) in reapplier.scan(&displays) {
+                if let Err(e) = res {
+                    eprintln!("mct-manager: could not restore the settings of {name}: {e}");
+                }
+            }
+            let snaps: Vec<Snapshot> = displays.into_iter().map(Snapshot::take).collect();
             let key = menu_key(&snaps);
             if key != last {
                 last = key;

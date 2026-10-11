@@ -252,8 +252,10 @@ tool, both per device. On NixOS: `hardware.mct.app.enable = true`, and
 - **`mctctl`:** `list [-v|-vv]`, `info [-v|-vv] [DEV]`, `get`/`set [DEV] KEY
   [VALUE]`, `stats -w`, `driver kernel|legacy`; `--json` for scripts.
 
-Writing settings without root needs the udev rule above and membership in
-group `video`.
+Settings changed in the app or with `mctctl set` are remembered in
+`~/.config/mct/settings.toml` and restored when the display reconnects (by
+the running app, or `mctctl apply`). Writing settings without root needs
+the udev rule above and membership in group `video`.
 
 ## Debugging
 

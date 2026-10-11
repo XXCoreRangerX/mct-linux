@@ -285,3 +285,32 @@ fn driver() {
     // switching back would stop the daemon: refused on a fake tree too
     assert!(fails(t.path(), &["driver", T2, "kernel"], 1).contains("MCT_SYSFS_ROOT"));
 }
+
+#[test]
+fn settings_saved_and_applied() {
+    let t = tree();
+    let saved = t.path().join("settings.toml");
+    ok(t.path(), &["set", "HDMI-A-3", "format", "nv12"]);
+    ok(t.path(), &["set", "USB-1", "lossy", "3"]);
+    let text = fs::read_to_string(&saved).unwrap();
+    assert!(text.contains("format = \"nv12\""), "{text}");
+    assert!(text.contains("0711:5600/port-2-2"), "{text}");
+    assert!(ok(t.path(), &["saved"]).contains("format=nv12"));
+
+    // a temporary change isn't saved
+    ok(t.path(), &["set", "--temporary", "HDMI-A-3", "all_modes", "1"]);
+    assert!(!fs::read_to_string(&saved).unwrap().contains("all_modes = true"));
+
+    // replug: the driver starts with its defaults, apply restores
+    fake::unbind(t.path(), T6_A).unwrap();
+    fake::bind(t.path(), T6_A, fake::T6_A_FILES).unwrap();
+    assert_eq!(file(t.path(), T6_A, "format").trim(), "auto");
+    assert!(ok(t.path(), &["apply", "HDMI-A-3"]).contains("applied format"));
+    assert_eq!(file(t.path(), T6_A, "format").trim(), "nv12");
+    assert!(ok(t.path(), &["apply", "HDMI-A-3"]).contains("already as saved"));
+
+    assert!(ok(t.path(), &["forget", "HDMI-A-3"]).contains("forgotten"));
+    assert!(ok(t.path(), &["apply", "HDMI-A-3"]).contains("no saved settings"));
+    // the tablet's entry stays
+    assert!(ok(t.path(), &["saved"]).contains("lossy=3"));
+}

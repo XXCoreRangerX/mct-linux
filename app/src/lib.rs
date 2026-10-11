@@ -8,6 +8,7 @@ pub mod device;
 pub mod ident;
 pub mod menu;
 pub mod rates;
+pub mod settings;
 pub mod switch;
 pub mod text;
 pub mod usb;
