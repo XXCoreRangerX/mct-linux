@@ -376,3 +376,15 @@ the pages), so not for a driver meant to go upstream. 0.9.2 drops the
 attached import (back to the no-map import) and keeps the review fixes.
 What remains for the 7 ms: smaller copies (damage), or the compositor
 rendering into system memory to begin with.
+
+## 2026-10-11
+
+**Gamma** (`tools/t6_gamma_test.py`): feature level (`b0` index 4) is 6 on
+the 5600, and the vendor driver only uses gamma from 8. The first `40 1d`
+gamma table request **stalls** (EPIPE): no hardware gamma on this chip. Plan:
+apply the DRM gamma LUT in software during the NV12 conversion.
+
+**Monitor change events** (mct_t6 0.10, interrupt transfer kept queued on EP
+0x83, byte 0x13 bits 0/1 -> connector check): unplugging and replugging the
+LG's HDMI cable was noticed by niri "pretty much instantly" both ways (the
+10 s polling stays as a fallback).
