@@ -741,3 +741,8 @@ heavier USB traffic during real use leaves less scanout bandwidth. 1080p120
 (~746) has been clean for days. Full colour now up to 122 Hz at 1080p,
 68 Hz at 2560x1440, 51 Hz at 3440x1440; a longer test under load could
 raise it again.
+
+**USB 2 link (mct_t6 0.24.0).** The T6 in a USB 2 port (5-1, high speed):
+the driver logs `USB 2 link: modes up to 2048 wide`, sysfs `usb_speed`
+says `usb2`, the LG ran at 1920x1080@122, picture correct, moving windows
+works (slower, as expected at ~35 MB/s).

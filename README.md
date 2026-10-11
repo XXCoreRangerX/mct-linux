@@ -36,9 +36,9 @@ Trigger 6:
   monitor's own timing is out of the adapter's reach
 - pixel formats: exact RGB or YUV 4:4:4 while the screen is still, NV12
   during large changes (auto, the default), or a fixed format
-- monitor hotplug (debounced), recovery from USB transfer errors; fallbacks
-  for monitors without a usable EDID and for USB 2 links (both not yet
-  tried on hardware)
+- monitor hotplug (debounced), recovery from USB transfer errors, USB 2
+  links (modes up to 2048 wide); a fallback for monitors without a usable
+  EDID (not yet tried on hardware)
 - hardware cursor up to 128 px
 - software gamma (the adapter has no gamma tables)
 
