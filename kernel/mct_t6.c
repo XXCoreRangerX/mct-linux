@@ -51,7 +51,7 @@ MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at re
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	21
-#define DRIVER_PATCH	0
+#define DRIVER_PATCH	1
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -1464,6 +1464,8 @@ static struct drm_display_mode *t6_timing(struct mct_t6 *t6, struct drm_device *
 			   drm_cvt_mode(dev, w, h, hz, true, false, false);
 		if (!mode)
 			continue;
+		/* CVT rounds the clock to 0.25 MHz; the T6's PLL doesn't need that */
+		mode->clock = DIV_ROUND_CLOSEST_ULL((u64)mode->htotal * mode->vtotal * hz, 1000);
 		if (!t6_mode_entry(t6, mode, &m) &&
 		    (!t6->mon_max_khz || mode->clock <= t6->mon_max_khz) &&
 		    (!t6->mon_max_hfreq || mode->clock <= t6->mon_max_hfreq * mode->htotal)) {
@@ -1628,6 +1630,28 @@ static int t6_add_preferred_fallbacks(struct mct_t6 *t6, struct drm_connector *c
 	}
 
 	full_hz = min(full_hz, hz - 1);
+	/* as the default, an existing mode up to 10% slower beats an odd rate */
+	if (full_hz >= max(min_hz, 24)) {
+		struct drm_display_mode *best = NULL;
+		struct t6_mode m2;
+
+		list_for_each_entry(mode, &connector->probed_modes, head) {
+			int r = drm_mode_vrefresh(mode);
+
+			if (mode->hdisplay != pref->hdisplay || mode->vdisplay != pref->vdisplay ||
+			    r > full_hz || r * 10 < full_hz * 9 || t6_mode_entry(t6, mode, &m2))
+				continue;
+			if (!best || r > drm_mode_vrefresh(best))
+				best = mode;
+		}
+		/* the exact maximum stays available next to it */
+		if (best && !have_pref) {
+			best->type |= DRM_MODE_TYPE_PREFERRED;
+			have_pref = true;
+		}
+		if (best && drm_mode_vrefresh(best) == full_hz)
+			return count;
+	}
 	mode = full_hz >= max(min_hz, 24) ? drm_mode_duplicate(connector->dev, pref) : NULL;
 	if (mode) {
 		mode->clock = DIV_ROUND_CLOSEST_ULL((u64)mode->htotal * mode->vtotal * full_hz,
