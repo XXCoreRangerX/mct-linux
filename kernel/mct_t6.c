@@ -190,7 +190,7 @@ static const char *const t6_kind_name[] = { "NV12", "YUV 4:4:4", "RGB24", "RGB32
  */
 static const u64 t6_scan_max[] = {
 	[T6_NV12] = U64_MAX,
-	[T6_YUV444] = 820000000,
+	[T6_YUV444] = 760000000,
 	[T6_RGB24] = 500000000,
 	[T6_RGB32] = 500000000,
 };

@@ -18,7 +18,7 @@ left to do. Percentages are estimates, not a checklist score.
 | Compared to | Estimate | Notes |
 |---|---|---|
 | Vendor drivers, same device | ~95%, ahead in most areas | Missing: JPEG (only matters for full-screen motion and USB 2). Same: error recovery, debounced hotplug, capability checks, USB 2 handling, cursor up to 96 px. Ahead: up to 144 Hz and 3440x1440@60 / 4K30 (vendor 60 Hz, table modes), lossless / full colour at rest, adaptive format, gamma on any feature level, exact row diffing. |
-| Trigger 6 family | ~80% | Not done: second output, HDMI audio, the chip's JPEG decoder. The 5600 is a single-output "Super Lite". Up to 3440x1440@60 (NV12; 4:4:4 at 55 Hz) and 4K30 (NV12) work. |
+| Trigger 6 family | ~80% | Not done: second output, HDMI audio, the chip's JPEG decoder. The 5600 is a single-output "Super Lite". Up to 3440x1440@60 (NV12; 4:4:4 up to 51 Hz) and 4K30 (NV12) work. |
 | Speed headroom | ~15-25% | Hard limits: ~350 MHz pixel clock (1080p144 max, no 1080p240), ~360 MB/s USB, per-format scanout bandwidth. Raw full-screen NV12 1080p ~98 fps. |
 
 ## Work items

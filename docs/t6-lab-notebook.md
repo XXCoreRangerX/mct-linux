@@ -733,3 +733,12 @@ text are NV12 itself. No driver change; full colour at 3440x1440 means 55 Hz.
 0x10000 bytes (16-bit offset; the last two pixels never sent) shows a clean
 128 px cursor. Driver: the smallest of 64 / 96 / 128 that holds everything
 visible, 128 cut at 0x10000. Live: pointer, shapes, edges and the tablet fine.
+
+**4:4:4 limit back to 760 MB/s (0.21.1).** With 820 MB/s the driver offered
+1080p131 in 4:4:4 (~815 MB/s); in daily use it showed thin white lines (1 px
+wide, up to ~100 px tall) whenever a lot changed on screen. The short sweep
+step at 3440x1440@55 (~817) had looked clean with a moving block, but
+heavier USB traffic during real use leaves less scanout bandwidth. 1080p120
+(~746) has been clean for days. Full colour now up to 122 Hz at 1080p,
+68 Hz at 2560x1440, 51 Hz at 3440x1440; a longer test under load could
+raise it again.

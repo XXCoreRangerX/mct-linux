@@ -42,7 +42,7 @@ the picture shows thin vertical lines or flickers.
 
 | Format | Clean | Not clean | Limit |
 |---|---|---|---|
-| YUV 4:4:4 | 1080p120 (~750 MB/s), 3440x1440@55 (~817 MB/s) | 3440x1440@57 (~847), 1080p144 (~896) | 820 MB/s |
+| YUV 4:4:4 | 1080p120 (~746 MB/s, daily use) | 1080p131 (~815, thin lines during activity), 3440x1440@57 (~847), 1080p144 (~896) | 760 MB/s |
 | RGB24 | 1080p75 (~470 MB/s) | 1080p100 (~620), 1080p120 | 500 MB/s |
 | RGB32 | (not tested past RGB24's limit) | | 500 MB/s |
 | NV12 | 1080p144, 3440x1440@60, 4K30 (~450 MB/s) | | none found |
