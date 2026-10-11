@@ -392,3 +392,12 @@ LG's HDMI cable was noticed by niri "pretty much instantly" both ways (the
 **Software gamma** (mct_t6 0.11: DRM GAMMA_LUT, 256 entries, applied per
 pixel during the NV12 conversion): Noctalia's night light works on the LG,
 no noticeable slowdown.
+
+**mct_t6 0.12, queued bulk transfers**: a pool of 16 URBs (100 KB coherent
+buffers each); band data is copied straight into a free URB and submitted
+without waiting, so the worker converts and diffs the next frame while the
+previous one is still going out, and the endpoint never idles between
+transfers. The bulk endpoint keeps the order (writes before their flip).
+A failed transfer invalidates all three buffer copies (next update sends
+whole frames); disable/suspend/unplug wait for or kill what is in flight.
+"usb" time in the stats is now the time spent queueing (backpressure).

@@ -59,7 +59,7 @@
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	11
+#define DRIVER_MINOR	12
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -86,6 +86,7 @@
 #define T6_MAX_MODES	30		/* 0x89 table: 512 + 448 bytes */
 #define T6_MAX_OUTPUTS	2
 #define T6_FRAG		0x19000		/* largest fragment the vendor driver sends */
+#define T6_URBS		16		/* bulk transfers in flight at most */
 #define T6_CTRL_BUF	512
 #define T6_TIMEOUT	2000
 
@@ -182,6 +183,15 @@ struct t6_video_header {
 	__le32 unk11[3];
 } __packed;
 
+struct mct_t6;
+
+struct t6_urb {
+	struct mct_t6 *t6;
+	struct urb *urb;
+	u8 *buf;			/* T6_FRAG bytes, DMA coherent */
+	struct list_head node;		/* in the free list while idle */
+};
+
 struct mct_t6 {
 	struct drm_device dev;
 	struct drm_plane primary;
@@ -196,9 +206,16 @@ struct mct_t6 {
 	int max_w, max_h;
 	int pll_base_khz;		/* 48 MHz ("Lite") or 40 MHz ("Super Lite") */
 
-	struct mutex io_lock;		/* USB transfers, ctrl and xfer buffers */
+	struct mutex io_lock;		/* USB transfers and the ctrl buffer */
 	u8 *ctrl;			/* DMA-able control transfer buffer */
-	u8 *xfer;			/* DMA-able bulk fragment buffer */
+
+	/* bulk transfers are queued without waiting; the endpoint keeps their order */
+	struct t6_urb urbs[T6_URBS];
+	struct list_head urb_free;
+	spinlock_t urb_lock;		/* urb_free */
+	wait_queue_head_t urb_wait;	/* for a URB to become free */
+	struct usb_anchor anchor;	/* URBs in flight */
+	atomic_t urb_err;		/* last error of a completed URB */
 	u8 *shadow;			/* XRGB8888 image as committed by userspace */
 	bool shadow_valid;		/* holds a whole committed image */
 	u8 *rowmask;			/* rows to copy from the framebuffer */
@@ -267,18 +284,113 @@ static int t6_ctrl_out(struct mct_t6 *t6, u8 req, u16 value, u16 index, u16 len)
 			       value, index, len ? t6->ctrl : NULL, len, T6_TIMEOUT);
 }
 
+static void t6_urb_complete(struct urb *urb)
+{
+	struct t6_urb *u = urb->context;
+	struct mct_t6 *t6 = u->t6;
+	unsigned long flags;
+
+	if (urb->status && urb->status != -ENOENT && urb->status != -ECONNRESET &&
+	    urb->status != -ESHUTDOWN)
+		atomic_set(&t6->urb_err, urb->status);
+	spin_lock_irqsave(&t6->urb_lock, flags);
+	list_add_tail(&u->node, &t6->urb_free);
+	spin_unlock_irqrestore(&t6->urb_lock, flags);
+	wake_up(&t6->urb_wait);
+}
+
+static struct t6_urb *t6_urb_pop(struct mct_t6 *t6)
+{
+	struct t6_urb *u;
+
+	spin_lock_irq(&t6->urb_lock);
+	u = list_first_entry_or_null(&t6->urb_free, struct t6_urb, node);
+	if (u)
+		list_del(&u->node);
+	spin_unlock_irq(&t6->urb_lock);
+	return u;
+}
+
+/* a free URB to fill, waiting for one to complete if all are in flight */
+static struct t6_urb *t6_urb_get(struct mct_t6 *t6)
+{
+	struct t6_urb *u = NULL;
+
+	wait_event_timeout(t6->urb_wait, (u = t6_urb_pop(t6)), msecs_to_jiffies(T6_TIMEOUT));
+	return u;
+}
+
+static int t6_urb_send(struct mct_t6 *t6, struct t6_urb *u, int len)
+{
+	int ret;
+
+	u->urb->transfer_buffer_length = len;
+	usb_anchor_urb(u->urb, &t6->anchor);
+	ret = usb_submit_urb(u->urb, GFP_KERNEL);
+	if (ret) {
+		usb_unanchor_urb(u->urb);
+		spin_lock_irq(&t6->urb_lock);
+		list_add_tail(&u->node, &t6->urb_free);
+		spin_unlock_irq(&t6->urb_lock);
+		wake_up(&t6->urb_wait);
+	}
+	return ret;
+}
+
+/* queue len bytes on the bulk endpoint */
 static int t6_bulk(struct mct_t6 *t6, const void *data, int len)
 {
-	struct usb_device *udev = t6_udev(t6);
-	int ret, done;
+	struct t6_urb *u = t6_urb_get(t6);
 
-	if (data != t6->xfer)
-		memcpy(t6->xfer, data, len);
-	ret = usb_bulk_msg(udev, usb_sndbulkpipe(udev, T6_EP_OUT), t6->xfer, len,
-			   &done, T6_TIMEOUT);
-	if (!ret && done != len)
-		ret = -EIO;
-	return ret;
+	if (!u)
+		return -ETIMEDOUT;
+	memcpy(u->buf, data, len);
+	return t6_urb_send(t6, u, len);
+}
+
+static void t6_free_urbs(void *data)
+{
+	struct mct_t6 *t6 = data;
+	struct usb_device *udev = t6_udev(t6);
+	int i;
+
+	usb_kill_anchored_urbs(&t6->anchor);
+	for (i = 0; i < T6_URBS; i++) {
+		if (t6->urbs[i].buf)
+			usb_free_coherent(udev, T6_FRAG, t6->urbs[i].buf,
+					  t6->urbs[i].urb->transfer_dma);
+		usb_free_urb(t6->urbs[i].urb);
+	}
+}
+
+static int t6_alloc_urbs(struct mct_t6 *t6, struct usb_interface *intf)
+{
+	struct usb_device *udev = interface_to_usbdev(intf);
+	int i, ret;
+
+	INIT_LIST_HEAD(&t6->urb_free);
+	spin_lock_init(&t6->urb_lock);
+	init_waitqueue_head(&t6->urb_wait);
+	init_usb_anchor(&t6->anchor);
+	ret = devm_add_action(&intf->dev, t6_free_urbs, t6);
+	if (ret)
+		return ret;
+	for (i = 0; i < T6_URBS; i++) {
+		struct t6_urb *u = &t6->urbs[i];
+
+		u->t6 = t6;
+		u->urb = usb_alloc_urb(0, GFP_KERNEL);
+		if (!u->urb)
+			return -ENOMEM;
+		u->buf = usb_alloc_coherent(udev, T6_FRAG, GFP_KERNEL, &u->urb->transfer_dma);
+		if (!u->buf)
+			return -ENOMEM;
+		usb_fill_bulk_urb(u->urb, udev, usb_sndbulkpipe(udev, T6_EP_OUT), u->buf,
+				  T6_FRAG, t6_urb_complete, u);
+		u->urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
+		list_add_tail(&u->node, &t6->urb_free);
+	}
+	return 0;
 }
 
 static int t6_output_status(struct mct_t6 *t6, int output)
@@ -517,31 +629,34 @@ static int t6_send_band(struct mct_t6 *t6, int k, const struct t6_band *b)
 	int p, n, i, ret = 0;
 
 	for (p = b->p0; p < b->p1 && !ret; p += n) {
-		struct t6_rect_header *r = (struct t6_rect_header *)t6->xfer;
+		struct t6_rect_header r = { };
 		size_t yo = (size_t)p * 2 * w + b->x0, uvo = (size_t)w * h + (size_t)p * w + b->x0;
+		struct t6_urb *u;
 		u8 *d;
 
 		n = min(step, b->p1 - p);
-		memset(r, 0, sizeof(*r));
-		r->type = cpu_to_le32(7);
-		r->len = cpu_to_le32(3 * n * bw);
-		r->y_addr = cpu_to_le32(base + yo);
-		r->uv_addr = cpu_to_le32(base + uvo);
-		r->y_pitch = cpu_to_le16(w);
-		r->uv_pitch = cpu_to_le16(w);
-		r->width = cpu_to_le16(bw);
-		r->height = cpu_to_le16(n * 2);
-		ret = t6_bulk(t6, r, sizeof(*r));
+		r.type = cpu_to_le32(7);
+		r.len = cpu_to_le32(3 * n * bw);
+		r.y_addr = cpu_to_le32(base + yo);
+		r.uv_addr = cpu_to_le32(base + uvo);
+		r.y_pitch = cpu_to_le16(w);
+		r.uv_pitch = cpu_to_le16(w);
+		r.width = cpu_to_le16(bw);
+		r.height = cpu_to_le16(n * 2);
+		ret = t6_bulk(t6, &r, sizeof(r));
 		if (ret)
 			break;
-		d = t6->xfer;
+		u = t6_urb_get(t6);
+		if (!u)
+			return -ETIMEDOUT;
+		d = u->buf;
 		for (i = 0; i < 2 * n; i++, d += bw)
 			memcpy(d, t6->img + yo + (size_t)i * w, bw);
 		for (i = 0; i < n; i++, d += bw)
 			memcpy(d, t6->img + uvo + (size_t)i * w, bw);
-		ret = t6_bulk(t6, t6->xfer, 3 * n * bw);
+		ret = t6_urb_send(t6, u, 3 * n * bw);
 		t6->stats.rows += n * 2;
-		t6->stats.bytes += sizeof(*r) + 3 * n * bw;
+		t6->stats.bytes += sizeof(r) + 3 * n * bw;
 	}
 	return ret;
 }
@@ -585,8 +700,15 @@ static int t6_present(struct mct_t6 *t6)
 {
 	struct t6_band bands[T6_MAX_BANDS];
 	int k = t6->buf, w = t6->width, h = t6->height;
-	int n, i, p, ret = 0;
+	int n, i, p, ret;
 
+	/* a failed transfer may have left any buffer half written */
+	ret = atomic_xchg(&t6->urb_err, 0);
+	if (ret) {
+		drm_err_ratelimited(&t6->dev, "frame transfer error: %d\n", ret);
+		memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
+		ret = 0;
+	}
 	n = t6_diff_bands(t6, k, bands);
 	t6->hw_valid[k] = false;
 	for (i = 0; i < n && !ret; i++)
@@ -764,6 +886,8 @@ static bool t6_damage_rows(struct mct_t6 *t6, const struct drm_plane_state *stat
 static void t6_stop_updates(struct mct_t6 *t6)
 {
 	cancel_work_sync(&t6->upd.work);
+	if (!usb_wait_anchor_empty_timeout(&t6->anchor, T6_TIMEOUT))
+		usb_kill_anchored_urbs(&t6->anchor);
 	mutex_lock(&t6->upd.lock);
 	t6->upd.dirty = false;
 	mutex_unlock(&t6->upd.lock);
@@ -1581,17 +1705,22 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 
 	INIT_WORK(&t6->upd.work, t6_update_work);
 	INIT_WORK(&t6->hpd_work, t6_hpd_work);
-	for (i = 0; i < 256; i++)
-		t6->lut[0][i] = t6->lut[1][i] = t6->lut[2][i] = i;
+	for (i = 0; i < 256; i++) {
+		t6->lut[0][i] = i;
+		t6->lut[1][i] = i;
+		t6->lut[2][i] = i;
+	}
 	mutex_init(&t6->upd.lock);
 	mutex_init(&t6->io_lock);
 
 	t6->ctrl = drmm_kmalloc(dev, T6_CTRL_BUF, GFP_KERNEL);
-	t6->xfer = drmm_kmalloc(dev, T6_FRAG, GFP_KERNEL);
 	t6->cur.img = drmm_kmalloc(dev, T6_CUR_BYTES, GFP_KERNEL);
 	t6->cur.shown = drmm_kmalloc(dev, T6_CUR_BYTES, GFP_KERNEL);
-	if (!t6->ctrl || !t6->xfer || !t6->cur.img || !t6->cur.shown)
+	if (!t6->ctrl || !t6->cur.img || !t6->cur.shown)
 		return -ENOMEM;
+	ret = t6_alloc_urbs(t6, interface);
+	if (ret)
+		return ret;
 
 	t6_pick_output(t6);
 	t6_read_platform(t6);
