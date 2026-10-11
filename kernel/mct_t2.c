@@ -53,15 +53,16 @@
 #include "mct_drv.h"
 #include "mct_t2_init.h"
 
+/* default for devices probed later; each device has its own in sysfs */
 static int lossy;
 module_param(lossy, int, 0644);
-MODULE_PARM_DESC(lossy, "Maximum lossy tolerance (1-8) for updates too big to send losslessly within a frame, refined to lossless once motion stops; 0 = always lossless (default)");
+MODULE_PARM_DESC(lossy, "Default for new devices: maximum lossy tolerance (1-8) for updates too big to send losslessly within a frame, refined to lossless once motion stops; 0 = always lossless (default). Per device: /sys/bus/usb/devices/<interface>/mct/lossy.");
 
 #define DRIVER_NAME	"mct_t2"
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	19
+#define DRIVER_PATCH	20
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -103,7 +104,7 @@ struct mct_t2 {
 
 	struct {			/* debugfs statistics */
 		u64 lossy_tol[9];	/* lossy updates by highest tolerance used */
-		u64 updates, lossy_updates, rects, px_sent, bytes;
+		u64 updates, lossy_updates, rects, px_sent, bytes, errors;
 		u64 over_budget, max_payload;	/* encoded bytes per update */
 		u64 latency[6];			/* damage to flip: <8 <16 <33 <50 <100 >=100 ms */
 		u64 ns_diff, ns_encode, ns_usb;	/* time spent per stage */
@@ -115,6 +116,7 @@ struct mct_t2 {
 	u32 front;			/* framebuffer address currently scanned out */
 
 	int refine;			/* lossless updates still owed, under base.lock */
+	int lossy;			/* sysfs lossy: maximum tolerance, 0 = lossless */
 
 	struct {
 		u8 *buf;		/* DMA-able: position packets */
@@ -443,8 +445,8 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 	t2->stats.ns_diff += ktime_to_ns(ktime_sub(ktime_get(), t0));
 
 	/* updates too big for one frame may go lossy; refined once motion stops */
-	if (!lossless && lossy > 0)
-		tol = clamp(lossy, 1, 8);
+	if (!lossless && READ_ONCE(t2->lossy) > 0)
+		tol = READ_ONCE(t2->lossy);
 
 	t2->hw_valid[back] = false;
 	for (i = 0; i < n && !ret; i++)
@@ -891,8 +893,10 @@ static void t2_update(struct mct_device *mdev)
 	if (drm_dev_enter(&t2->base.dev, &idx)) {
 		ret = t2_present(t2, refine, &went_lossy);
 		/* an interrupted frame leaves the firmware mid-command: always report */
-		if (ret)
+		if (ret) {
+			t2->stats.errors++;
 			drm_err_ratelimited(&t2->base.dev, "frame update error: %d\n", ret);
+		}
 		drm_dev_exit(idx);
 	}
 	mutex_unlock(&t2->io_lock);
@@ -1142,6 +1146,57 @@ static const struct drm_driver t2_drm_driver = {
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
 };
 
+/* sysfs (docs/companion-app.md) */
+
+#define T2_SHOW_U64(_name, _expr)						\
+static ssize_t _name##_show(struct device *dev, struct device_attribute *attr, char *buf) \
+{										\
+	struct mct_t2 *t2 = to_t2(mct_from_dev(dev));				\
+										\
+	return sysfs_emit(buf, "%llu\n", (u64)(_expr));			\
+}										\
+static DEVICE_ATTR_RO(_name)
+
+T2_SHOW_U64(updates, t2->stats.updates);
+T2_SHOW_U64(bytes, t2->stats.bytes);
+T2_SHOW_U64(errors, t2->stats.errors);
+
+static ssize_t backlight_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t2 *t2 = to_t2(mct_from_dev(dev));
+
+	return sysfs_emit(buf, "%s\n", t2->bl ? dev_name(&t2->bl->dev) : "-");
+}
+static DEVICE_ATTR_RO(backlight);
+
+static ssize_t lossy_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", READ_ONCE(to_t2(mct_from_dev(dev))->lossy));
+}
+
+static ssize_t lossy_store(struct device *dev, struct device_attribute *attr,
+			   const char *buf, size_t len)
+{
+	int v, ret = kstrtoint(buf, 0, &v);
+
+	if (ret)
+		return ret;
+	if (v < 0 || v > 8)
+		return -EINVAL;
+	WRITE_ONCE(to_t2(mct_from_dev(dev))->lossy, v);
+	return len;
+}
+static DEVICE_ATTR_RW(lossy);
+
+static struct attribute *t2_attrs[] = {
+	&dev_attr_updates.attr,
+	&dev_attr_bytes.attr,
+	&dev_attr_errors.attr,
+	&dev_attr_backlight.attr,
+	&dev_attr_lossy.attr,
+	NULL
+};
+
 static const struct mct_funcs t2_funcs = {
 	.get_modes = t2_get_modes,
 	.mode_valid = t2_mode_valid,
@@ -1178,6 +1233,8 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 		.cursor_size = T2_CUR,
 		.encoder_type = DRM_MODE_ENCODER_NONE,
 		.stats_name = "mct_t2_stats",
+		.chip = "t2",
+		.attrs = t2_attrs,
 	};
 	struct mct_t2 *t2;
 	struct drm_device *dev;
@@ -1201,6 +1258,8 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	}
 
 	mutex_init(&t2->io_lock);
+	/* the module parameter is the default this device starts with */
+	t2->lossy = clamp(READ_ONCE(lossy), 0, 8);
 	mutex_init(&t2->power_lock);
 	t2->front = T2_FB_A;
 

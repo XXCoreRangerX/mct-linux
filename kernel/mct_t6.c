@@ -45,18 +45,19 @@
 #include "mct.h"
 #include "mct_drv.h"
 
+/* defaults for devices probed later; each device has its own in sysfs */
 static char *format = "auto";
 module_param(format, charp, 0644);
-MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at rest, NV12 during large changes; default), rgb24, rgb32, yuv444, nv12. The full colour formats are only used where the device can scan them out at the current mode.");
+MODULE_PARM_DESC(format, "Default pixel format for new devices: auto (exact RGB at rest, NV12 during large changes; default), rgb24, rgb32, yuv444, nv12. Per device: /sys/bus/usb/devices/<interface>/mct/format.");
 
 static bool all_modes;
 module_param(all_modes, bool, 0644);
-MODULE_PARM_DESC(all_modes, "Also offer modes larger than the monitor's native resolution (4K on a 1080p monitor that scales it down); default off. Takes effect at the next monitor probe.");
+MODULE_PARM_DESC(all_modes, "Default for new devices: also offer modes larger than the monitor's native resolution; off by default. Per device: .../mct/all_modes.");
 
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	22
+#define DRIVER_MINOR	23
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -190,6 +191,10 @@ struct t6_rect_header {
 enum t6_kind { T6_NV12, T6_YUV444, T6_RGB24, T6_RGB32 };
 
 static const char *const t6_kind_name[] = { "NV12", "YUV 4:4:4", "RGB24", "RGB32" };
+/* format values in sysfs and the module parameter, by kind */
+static const char *const t6_kind_param[] = { "nv12", "yuv444", "rgb24", "rgb32" };
+static const char *const t6_kind_sysfs[] = { "NV12", "YUV444", "RGB24", "RGB32" };
+#define T6_FMT_AUTO	-1
 /*
  * Scanout reads the frame buffer from the device's memory once per refresh,
  * and how much it can read depends on the format. Bytes per second at most:
@@ -265,6 +270,8 @@ struct mct_t6 {
 	int vram_mb;
 	u32 disp_func;			/* DISP descriptor display function flags */
 	int mon_max_khz, mon_max_hfreq;	/* monitor limits from its EDID, 0 if none */
+	int fmt_req;			/* T6_FMT_AUTO or the fixed kind (sysfs format) */
+	bool all_modes;			/* sysfs all_modes */
 	int frag;			/* largest bulk write: smaller on USB 2 */
 	bool usb2;
 
@@ -319,7 +326,7 @@ struct mct_t6 {
 		u64 rows, bands;		/* image rows and bands sent */
 		u64 to_420;			/* switches to 4:2:0 for motion */
 		u64 ev_done, ev_change, ev_redraw, ev_other;	/* interrupt events */
-		u64 ev_errors, recoveries;
+		u64 ev_errors, recoveries, xfer_errors;
 	} stats;
 };
 
@@ -967,6 +974,7 @@ static void t6_recover(struct mct_t6 *t6, int err)
 {
 	struct usb_device *udev = t6_udev(t6);
 
+	t6->stats.xfer_errors++;
 	usb_kill_anchored_urbs(&t6->anchor);
 	if (err == -EPIPE)
 		usb_clear_halt(udev, usb_sndbulkpipe(udev, T6_EP_OUT));
@@ -1085,26 +1093,27 @@ static bool t6_fits(const struct mct_t6 *t6, enum t6_kind kind)
  * to drop to NV12 during large changes. auto takes the best that fits the
  * mode: exact RGB, else YUV 4:4:4, else NV12.
  */
-static enum t6_kind t6_requested_format(const struct mct_t6 *t6, bool *adaptive)
+/* "auto" or a format name -> T6_FMT_AUTO or the kind; -EINVAL otherwise */
+static int t6_parse_format(const char *s)
 {
-	static const struct { const char *name; enum t6_kind kind; } names[] = {
-		{ "nv12", T6_NV12 }, { "yuv444", T6_YUV444 },
-		{ "rgb24", T6_RGB24 }, { "rgb32", T6_RGB32 },
-	};
-	enum t6_kind kind = t6_fits(t6, T6_RGB24) ? T6_RGB24 :
-			    t6_fits(t6, T6_YUV444) ? T6_YUV444 : T6_NV12;
 	int i;
 
-	*adaptive = true;
-	kernel_param_lock(THIS_MODULE);
-	for (i = 0; i < ARRAY_SIZE(names); i++) {
-		if (format && sysfs_streq(format, names[i].name)) {
-			kind = names[i].kind;
-			*adaptive = false;
-		}
-	}
-	kernel_param_unlock(THIS_MODULE);
-	return kind;
+	if (sysfs_streq(s, "auto"))
+		return T6_FMT_AUTO;
+	for (i = 0; i < ARRAY_SIZE(t6_kind_param); i++)
+		if (sysfs_streq(s, t6_kind_param[i]))
+			return i;
+	return -EINVAL;
+}
+
+static enum t6_kind t6_requested_format(const struct mct_t6 *t6, bool *adaptive)
+{
+	int req = READ_ONCE(t6->fmt_req);
+
+	*adaptive = req == T6_FMT_AUTO;
+	if (req != T6_FMT_AUTO)
+		return req;
+	return t6_fits(t6, T6_RGB24) ? T6_RGB24 : t6_fits(t6, T6_YUV444) ? T6_YUV444 : T6_NV12;
 }
 
 static bool t6_large(const struct mct_t6 *t6, const struct t6_band *bands, int n)
@@ -1726,12 +1735,13 @@ static int t6_add_table_modes(struct mct_t6 *t6, struct drm_connector *connector
  * Drop modes larger than the native size (the EDID's preferred mode)
  * unless all_modes is set.
  */
-static int t6_drop_above_native(struct drm_connector *connector, int w, int h)
+static int t6_drop_above_native(struct mct_t6 *t6, struct drm_connector *connector,
+				int w, int h)
 {
 	struct drm_display_mode *mode, *tmp;
 	int n = 0;
 
-	if (READ_ONCE(all_modes) || !w || !h)
+	if (READ_ONCE(t6->all_modes) || !w || !h)
 		return 0;
 	list_for_each_entry_safe(mode, tmp, &connector->probed_modes, head) {
 		if (mode->hdisplay <= w && mode->vdisplay <= h)
@@ -1772,7 +1782,7 @@ static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector
 	if (has_720p && (w != 1280 || h != 720))
 		count += t6_add_extra_modes(connector, 1280, 720);
 	count += t6_add_preferred_fallbacks(t6, connector);
-	return count - t6_drop_above_native(connector, w, h);
+	return count - t6_drop_above_native(t6, connector, w, h);
 }
 
 static enum drm_mode_status t6_mode_valid(struct mct_device *mdev,
@@ -1983,6 +1993,111 @@ static void t6_stats(struct mct_device *mdev, struct seq_file *m)
 		   div64_u64(t6->stats.bytes * 1000, max_t(u64, t6->stats.ns_usb, 1)));
 }
 
+/* ------------------------------------------------------------------ */
+/* sysfs (docs/companion-app.md)				      */
+
+#define T6_SHOW_U64(_name, _expr)						\
+static ssize_t _name##_show(struct device *dev, struct device_attribute *attr, char *buf) \
+{										\
+	struct mct_t6 *t6 = to_t6(mct_from_dev(dev));				\
+										\
+	return sysfs_emit(buf, "%llu\n", (u64)(_expr));			\
+}										\
+static DEVICE_ATTR_RO(_name)
+
+T6_SHOW_U64(updates, t6->stats.updates);
+T6_SHOW_U64(bytes, t6->stats.bytes);
+T6_SHOW_U64(errors, t6->stats.xfer_errors);
+T6_SHOW_U64(recoveries, t6->stats.recoveries);
+T6_SHOW_U64(vram_mb, t6->vram_mb);
+
+static ssize_t feature_level_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", to_t6(mct_from_dev(dev))->level);
+}
+static DEVICE_ATTR_RO(feature_level);
+
+static ssize_t usb_speed_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%s\n", to_t6(mct_from_dev(dev))->usb2 ? "usb2" : "usb3");
+}
+static DEVICE_ATTR_RO(usb_speed);
+
+static ssize_t pixel_format_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t6 *t6 = to_t6(mct_from_dev(dev));
+	const char *name = "-";
+
+	mutex_lock(&t6->base.lock);
+	if (t6->base.width && t6->lay.planes)
+		name = t6_kind_sysfs[t6->lay.kind];
+	mutex_unlock(&t6->base.lock);
+	return sysfs_emit(buf, "%s\n", name);
+}
+static DEVICE_ATTR_RO(pixel_format);
+
+static ssize_t format_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	int req = READ_ONCE(to_t6(mct_from_dev(dev))->fmt_req);
+
+	return sysfs_emit(buf, "%s\n", req == T6_FMT_AUTO ? "auto" : t6_kind_param[req]);
+}
+
+/* takes effect with the next update; send one now */
+static ssize_t format_store(struct device *dev, struct device_attribute *attr,
+			    const char *buf, size_t len)
+{
+	struct mct_t6 *t6 = to_t6(mct_from_dev(dev));
+	int req = t6_parse_format(buf);
+
+	if (req == -EINVAL)
+		return req;
+	WRITE_ONCE(t6->fmt_req, req);
+	mutex_lock(&t6->base.lock);
+	t6->base.dirty = true;
+	mutex_unlock(&t6->base.lock);
+	mct_kick(&t6->base);
+	return len;
+}
+static DEVICE_ATTR_RW(format);
+
+static ssize_t all_modes_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%d\n", READ_ONCE(to_t6(mct_from_dev(dev))->all_modes));
+}
+
+/* the mode list changes: let userspace probe the monitor again */
+static ssize_t all_modes_store(struct device *dev, struct device_attribute *attr,
+			       const char *buf, size_t len)
+{
+	struct mct_t6 *t6 = to_t6(mct_from_dev(dev));
+	bool v;
+	int ret = kstrtobool(buf, &v);
+
+	if (ret)
+		return ret;
+	if (v != READ_ONCE(t6->all_modes)) {
+		WRITE_ONCE(t6->all_modes, v);
+		drm_kms_helper_hotplug_event(&t6->base.dev);
+	}
+	return len;
+}
+static DEVICE_ATTR_RW(all_modes);
+
+static struct attribute *t6_attrs[] = {
+	&dev_attr_updates.attr,
+	&dev_attr_bytes.attr,
+	&dev_attr_errors.attr,
+	&dev_attr_recoveries.attr,
+	&dev_attr_vram_mb.attr,
+	&dev_attr_feature_level.attr,
+	&dev_attr_usb_speed.attr,
+	&dev_attr_pixel_format.attr,
+	&dev_attr_format.attr,
+	&dev_attr_all_modes.attr,
+	NULL
+};
+
 static ssize_t t6_inject_write(struct file *file, const char __user *buf, size_t len,
 			       loff_t *pos)
 {
@@ -2128,6 +2243,8 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 		.poll = true,
 		.gamma = true,
 		.stats_name = "mct_t6_stats",
+		.chip = "t6",
+		.attrs = t6_attrs,
 	};
 	struct mct_t6 *t6;
 	struct drm_device *dev;
@@ -2145,6 +2262,13 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 		return PTR_ERR(t6);
 	dev = &t6->base.dev;
 
+	/* the module parameters are the defaults this device starts with */
+	kernel_param_lock(THIS_MODULE);
+	t6->fmt_req = format ? t6_parse_format(format) : T6_FMT_AUTO;
+	kernel_param_unlock(THIS_MODULE);
+	if (t6->fmt_req == -EINVAL)
+		t6->fmt_req = T6_FMT_AUTO;
+	t6->all_modes = all_modes;
 	INIT_DELAYED_WORK(&t6->hpd_work, t6_hpd_work);
 	INIT_DELAYED_WORK(&t6->ev_retry, t6_ev_retry);
 	INIT_WORK(&t6->redraw_work, t6_redraw_work);

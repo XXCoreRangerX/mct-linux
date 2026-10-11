@@ -8,6 +8,16 @@ let
   kmod = pkgs.callPackage ./kmod.nix { inherit (kernelPackages) kernel; };
   evdi = pkgs.callPackage ./evdi.nix { inherit kernelPackages; };
   wacom-t2d = pkgs.callPackage ./wacom-t2d.nix { inherit evdi; };
+  # group video may write these files (the companion app, mctctl)
+  mctSettingsPerms = pkgs.writeShellScript "mct-settings-perms" ''
+    dir=$1
+    shift
+    for f in "$@"; do
+      [ -e "$dir/$f" ] || continue
+      ${pkgs.coreutils}/bin/chgrp video "$dir/$f"
+      ${pkgs.coreutils}/bin/chmod g+w "$dir/$f"
+    done
+  '';
 in
 {
   options.hardware.mct = {
@@ -48,8 +58,8 @@ in
         uses 1 or 2 when that is enough and this value only for updates far
         over budget; the picture is refined to lossless about 150 ms after
         motion stops. 0 = always lossless. 4 matches the vendor driver.
-        Trigger II (Wacom DTU-1031X) only. Can be changed at runtime through
-        /sys/module/mct/parameters/lossy.
+        Trigger II (Wacom DTU-1031X) only. The default for new devices; each device's
+        own value is in /sys/bus/usb/devices/<interface>/mct/lossy.
       '';
     };
     format = lib.mkOption {
@@ -60,8 +70,8 @@ in
         where RGB exceeds the adapter's memory bandwidth) while the screen is
         still, NV12 during large changes. The others fix the format; full
         colour formats still fall back to NV12 at modes the adapter can't
-        scan them out at. Can be changed at runtime through
-        /sys/module/mct/parameters/format.
+        scan them out at. The default for new devices; each device's
+        own value is in /sys/bus/usb/devices/<interface>/mct/format.
       '';
     };
     allModes = lib.mkOption {
@@ -70,9 +80,8 @@ in
       description = ''
         Trigger 6: also offer modes larger than the monitor's native
         resolution (monitors often accept 4K and scale it down, which over
-        the adapter only costs bandwidth). Can be changed at runtime through
-        /sys/module/mct/parameters/all_modes; it applies at the next monitor
-        probe (replug, or writing "detect" to the connector's status file).
+        the adapter only costs bandwidth). The default for new devices; each device's
+        own value is in /sys/bus/usb/devices/<interface>/mct/all_modes.
       '';
     };
     driver = lib.mkOption {
@@ -123,6 +132,11 @@ in
       services.udev.packages = [
         (pkgs.writeTextDir "etc/udev/rules.d/70-mct.rules" ''
           SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d|5600|5601", TAG+="uaccess"
+        '')
+        # per-device settings (and the tablet's brightness) writable for group video
+        (pkgs.writeTextDir "etc/udev/rules.d/71-mct-settings.rules" ''
+          ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="mct", RUN+="${mctSettingsPerms} /sys%p/mct format all_modes lossy"
+          ACTION=="add", SUBSYSTEM=="backlight", KERNEL=="mct_t2-*", RUN+="${mctSettingsPerms} /sys%p brightness"
         '')
       ];
     })

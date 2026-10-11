@@ -550,6 +550,80 @@ static int mct_stats_show(struct seq_file *m, void *data)
 }
 
 /* ------------------------------------------------------------------ */
+/* sysfs: /sys/bus/usb/devices/<interface>/mct/ (docs/companion-app.md) */
+
+struct mct_device *mct_from_dev(struct device *dev)
+{
+	return to_mct(usb_get_intfdata(to_usb_interface(dev)));
+}
+
+static ssize_t chip_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "%s\n", mct_from_dev(dev)->chip);
+}
+static DEVICE_ATTR_RO(chip);
+
+static ssize_t model_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	const char *p = interface_to_usbdev(to_usb_interface(dev))->product;
+
+	return sysfs_emit(buf, "%s\n", p ?: "-");
+}
+static DEVICE_ATTR_RO(model);
+
+static ssize_t connector_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_device *mdev = mct_from_dev(dev);
+
+	return sysfs_emit(buf, "%s\n", mdev->conn.kdev ? dev_name(mdev->conn.kdev) : "-");
+}
+static DEVICE_ATTR_RO(connector);
+
+static ssize_t mode_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_device *mdev = mct_from_dev(dev);
+	int w, h, hz;
+
+	mutex_lock(&mdev->lock);
+	w = mdev->width;
+	h = mdev->height;
+	hz = mdev->refresh;
+	mutex_unlock(&mdev->lock);
+	if (!w)
+		return sysfs_emit(buf, "off\n");
+	return sysfs_emit(buf, "%dx%d@%d\n", w, h, hz);
+}
+static DEVICE_ATTR_RO(mode);
+
+static struct attribute *mct_common_attrs[] = {
+	&dev_attr_chip.attr,
+	&dev_attr_model.attr,
+	&dev_attr_connector.attr,
+	&dev_attr_mode.attr,
+};
+
+/* the common files and the chip's, as one group "mct" */
+static int mct_attrs_init(struct mct_device *mdev, const struct mct_config *cfg)
+{
+	int n = 0, i;
+
+	while (cfg->attrs && cfg->attrs[n])
+		n++;
+	mdev->attrs = drmm_kcalloc(&mdev->dev, ARRAY_SIZE(mct_common_attrs) + n + 1,
+				   sizeof(*mdev->attrs), GFP_KERNEL);
+	if (!mdev->attrs)
+		return -ENOMEM;
+	for (i = 0; i < ARRAY_SIZE(mct_common_attrs); i++)
+		mdev->attrs[i] = mct_common_attrs[i];
+	for (i = 0; i < n; i++)
+		mdev->attrs[ARRAY_SIZE(mct_common_attrs) + i] = cfg->attrs[i];
+	mdev->attr_group.name = "mct";
+	mdev->attr_group.attrs = mdev->attrs;
+	mdev->chip = cfg->chip;
+	return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* setup							      */
 
 /*
@@ -594,6 +668,9 @@ int mct_init(struct mct_device *mdev, const struct mct_config *cfg)
 
 	mdev->funcs = cfg->funcs;
 	mutex_init(&mdev->lock);
+	ret = mct_attrs_init(mdev, cfg);
+	if (ret)
+		return ret;
 	INIT_WORK(&mdev->work, mct_update_work);
 	INIT_DELAYED_WORK(&mdev->settle_work, mct_settle_work);
 
@@ -684,6 +761,10 @@ int mct_register(struct mct_device *mdev, struct usb_interface *intf)
 	ret = drm_dev_register(&mdev->dev, 0);
 	if (ret)
 		return ret;
+	/* removed with the interface's devres when the driver unbinds */
+	ret = devm_device_add_group(&intf->dev, &mdev->attr_group);
+	if (ret)
+		drm_warn(&mdev->dev, "no sysfs files: %d\n", ret);
 	drm_client_setup(&mdev->dev, NULL);
 	return 0;
 }

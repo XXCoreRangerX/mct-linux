@@ -127,20 +127,30 @@ without a reboot).
 Options
 -------
 
-Module parameters, also writable at runtime in /sys/module/mct/parameters/:
+Every device has its own settings, in
+/sys/bus/usb/devices/<interface>/mct/ (with read-only information next to
+them; docs/companion-app.md lists all files):
 
   format    T6 pixel format: auto (default), rgb24, rgb32, yuv444, nv12.
             auto uses exact RGB or YUV 4:4:4 while the screen is still and
             NV12 during large changes. A fixed format stays fixed (no NV12
             for motion) where the adapter can scan it out at the current
-            mode, NV12 elsewhere. Unknown values mean auto.
-  all_modes T6: also offer modes larger than the monitor's native
+            mode, NV12 elsewhere.
+  all_modes T6: 1 also offers modes larger than the monitor's native
             resolution (off by default; monitors often list 4K and scale it
-            down). Applies at the next monitor probe: replug, or
-            `echo detect | sudo tee /sys/class/drm/card*-HDMI-A-*/status`.
+            down). The compositor re-probes the monitor on a change.
   lossy     T2: maximum lossy tolerance (1-8) for updates too big for one
             60 Hz frame, refined to lossless once motion stops. 0 = off
             (default).
+
+    echo nv12 | sudo tee /sys/bus/usb/devices/2-2:1.0/mct/format
+
+The module parameters of the same names (/sys/module/mct/parameters/,
+`modprobe mct format=...`) are the values new devices start with. To change
+settings without root, make the files writable for a group, as the NixOS
+module does for group video:
+
+    ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="mct", RUN+="/bin/sh -c 'cd /sys%p/mct && for f in format all_modes lossy; do [ -e $f ] && chgrp video $f && chmod g+w $f; done'"
 
 NixOS options (hardware.mct.*): `enable`, `format`, `allModes` and `lossy` as above,
 `driver = "evdi"` for the EVDI + wacom-t2d route instead of the kernel driver,
@@ -161,7 +171,8 @@ Debugging
     sudo cat /sys/kernel/debug/dri/*/mct_t2_stats
 
 show the mode, the format in use, update rates, bytes sent, timings and
-error counters (docs/debugfs.md explains the fields). The T6 logs its
+error counters (docs/debugfs.md explains the fields). The same basics,
+without root, are in each device's mct/ directory in sysfs. The T6 logs its
 feature level and video memory at probe.
 
 Known issues

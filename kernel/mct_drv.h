@@ -61,6 +61,9 @@ struct mct_funcs {
 
 struct mct_config {
 	const struct mct_funcs *funcs;
+	const char *chip;		/* "t2", "t6": sysfs chip file */
+	/* chip specific sysfs files next to the common ones, NULL terminated */
+	struct attribute *const *attrs;
 	int min_w, min_h, max_w, max_h;	/* image sizes */
 	int connector_type, encoder_type;
 	int cursor_size;		/* square hardware cursor, pixels */
@@ -93,6 +96,9 @@ struct mct_device {
 	struct delayed_work settle_work;	/* marks dirty and runs the worker */
 	u8 *cur;			/* cursor pixels for funcs->cursor_set */
 	int cur_size;
+	const char *chip;
+	struct attribute **attrs;	/* the sysfs "mct" group: common + chip files */
+	struct attribute_group attr_group;
 
 	struct {			/* debugfs statistics of the commit side */
 		u64 skipped;			/* images replaced before they went out */
@@ -113,6 +119,9 @@ int mct_register(struct mct_device *mdev, struct usb_interface *intf);
 void mct_unplug(struct mct_device *mdev);
 int mct_suspend(struct mct_device *mdev);
 int mct_resume(struct mct_device *mdev);
+
+/* the device behind a sysfs file of the USB interface */
+struct mct_device *mct_from_dev(struct device *dev);
 
 /* run the update worker; mark the shadow dirty first (under mdev->lock) */
 void mct_kick(struct mct_device *mdev);

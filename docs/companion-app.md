@@ -22,7 +22,7 @@ For per-device settings and for information without root:
 - the connector name (HDMI-A-n, USB-n) is linked from there, so the app can
   match a device to what the compositor shows
 
-## The interface (fixed, 2026-10-11)
+## The interface (fixed 2026-10-11, in the driver since mct_t6 0.23.0 / mct_t2 0.3.20)
 
 Per bound device, in `/sys/bus/usb/drivers/mct/<interface>/mct/` (the same
 directory as `/sys/bus/usb/devices/<interface>/mct/`); `<interface>` is
