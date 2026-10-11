@@ -32,6 +32,7 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_cache.h>
+#include <drm/drm_color_mgmt.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_crtc_helper.h>
@@ -58,7 +59,7 @@
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	10
+#define DRIVER_MINOR	11
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -202,6 +203,7 @@ struct mct_t6 {
 	bool shadow_valid;		/* holds a whole committed image */
 	u8 *rowmask;			/* rows to copy from the framebuffer */
 	u8 *img;			/* the shadow in NV12 */
+	u8 lut[3][256];			/* gamma, R G B, applied in software */
 	u8 *hw[3];			/* NV12 image each frame buffer holds */
 	bool hw_valid[3];
 	int width, height;		/* current mode */
@@ -415,7 +417,8 @@ static int t6_set_mode(struct mct_t6 *t6, const struct t6_mode *m)
  */
 static void t6_convert(struct mct_t6 *t6)
 {
-	int w = t6->width, h = t6->height, x, y;
+	const u8 *lr = t6->lut[0], *lg = t6->lut[1], *lb = t6->lut[2];
+	int w = t6->width, h = t6->height, x, y, i;
 	u8 *py = t6->img, *puv = t6->img + (size_t)w * h;
 
 	for (y = 0; y < h; y += 2) {
@@ -425,14 +428,19 @@ static void t6_convert(struct mct_t6 *t6)
 		u8 *uv = puv + (size_t)(y / 2) * w;
 
 		for (x = 0; x < w; x += 2, s0 += 8, s1 += 8, y0 += 2, y1 += 2, uv += 2) {
-			int b = s0[0] + s0[4] + s1[0] + s1[4];
-			int g = s0[1] + s0[5] + s1[1] + s1[5];
-			int r = s0[2] + s0[6] + s1[2] + s1[6];
+			/* the 2x2 block: top left, top right, bottom left, bottom right */
+			const u8 *px[4] = { s0, s0 + 4, s1, s1 + 4 };
+			u8 *out[4] = { y0, y0 + 1, y1, y1 + 1 };
+			int r = 0, g = 0, b = 0;
 
-			y0[0] = ((66 * s0[2] + 129 * s0[1] + 25 * s0[0] + 128) >> 8) + 16;
-			y0[1] = ((66 * s0[6] + 129 * s0[5] + 25 * s0[4] + 128) >> 8) + 16;
-			y1[0] = ((66 * s1[2] + 129 * s1[1] + 25 * s1[0] + 128) >> 8) + 16;
-			y1[1] = ((66 * s1[6] + 129 * s1[5] + 25 * s1[4] + 128) >> 8) + 16;
+			for (i = 0; i < 4; i++) {
+				int pr = lr[px[i][2]], pg = lg[px[i][1]], pb = lb[px[i][0]];
+
+				*out[i] = ((66 * pr + 129 * pg + 25 * pb + 128) >> 8) + 16;
+				r += pr;
+				g += pg;
+				b += pb;
+			}
 			/* chroma of the 2x2 block: sums are 4x, so shift by 10 */
 			uv[0] = ((-38 * r - 74 * g + 112 * b + 512) >> 10) + 128;
 			uv[1] = ((112 * r - 94 * g - 18 * b + 512) >> 10) + 128;
@@ -684,7 +692,8 @@ static void t6_mark_dirty(struct mct_t6 *t6, struct drm_framebuffer *fb,
 			int i;
 
 			for (i = y; i < y + n; i++) {
-				struct iosys_map d = IOSYS_MAP_INIT_VADDR(t6->shadow + (size_t)i * w * 4);
+				u8 *row = t6->shadow + (size_t)i * w * 4;
+				struct iosys_map d = IOSYS_MAP_INIT_VADDR(row);
 				struct iosys_map sm = *map;
 
 				iosys_map_incr(&sm, (size_t)i * fb->pitches[0]);
@@ -863,7 +872,8 @@ static int t6_cursor_show(struct mct_t6 *t6, bool show)
 	if (t6->cur.visible == show)
 		return 0;
 	mutex_lock(&t6->io_lock);
-	ret = t6_ctrl_out(t6, T6_REQ_CUR_SHOW(t6->output), t6_cursor_slot(t6, t6->cur.slot), show, 0);
+	ret = t6_ctrl_out(t6, T6_REQ_CUR_SHOW(t6->output), t6_cursor_slot(t6, t6->cur.slot),
+			  show, 0);
 	mutex_unlock(&t6->io_lock);
 	if (ret < 0)
 		return ret;
@@ -1009,7 +1019,43 @@ static int t6_crtc_atomic_check(struct drm_crtc *crtc, struct drm_atomic_commit 
 
 	if (crtc_state->enable && t6_mode_entry(t6, &crtc_state->mode, &m))
 		return -EINVAL;
+	if (crtc_state->gamma_lut && drm_color_lut_size(crtc_state->gamma_lut) != 256)
+		return -EINVAL;
 	return drm_crtc_helper_atomic_check(crtc, state);
+}
+
+/*
+ * The T6 in hand has no gamma tables (feature level 6; the request stalls),
+ * so the DRM gamma LUT is applied during the NV12 conversion. A change
+ * reconverts the whole image; the diff then sends what changed.
+ */
+static void t6_set_gamma(struct mct_t6 *t6, const struct drm_property_blob *blob)
+{
+	const struct drm_color_lut *lut = blob ? blob->data : NULL;
+	bool kick;
+	int i;
+
+	mutex_lock(&t6->upd.lock);
+	for (i = 0; i < 256; i++) {
+		t6->lut[0][i] = lut ? drm_color_lut_extract(lut[i].red, 8) : i;
+		t6->lut[1][i] = lut ? drm_color_lut_extract(lut[i].green, 8) : i;
+		t6->lut[2][i] = lut ? drm_color_lut_extract(lut[i].blue, 8) : i;
+	}
+	kick = t6->width && t6->shadow_valid;
+	if (kick)
+		t6->upd.dirty = true;
+	mutex_unlock(&t6->upd.lock);
+	if (kick)
+		queue_work(system_long_wq, &t6->upd.work);
+}
+
+static void t6_crtc_atomic_flush(struct drm_crtc *crtc, struct drm_atomic_commit *state)
+{
+	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
+
+	if (crtc_state->color_mgmt_changed)
+		t6_set_gamma(to_t6(crtc->dev), crtc_state->gamma_lut);
+	drm_crtc_vblank_atomic_flush(crtc, state);
 }
 
 static void t6_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commit *state)
@@ -1065,7 +1111,7 @@ static void t6_crtc_atomic_disable(struct drm_crtc *crtc, struct drm_atomic_comm
  */
 static const struct drm_crtc_helper_funcs t6_crtc_helper_funcs = {
 	.atomic_check = t6_crtc_atomic_check,
-	.atomic_flush = drm_crtc_vblank_atomic_flush,
+	.atomic_flush = t6_crtc_atomic_flush,
 	.atomic_enable = t6_crtc_atomic_enable,
 	.atomic_disable = t6_crtc_atomic_disable,
 };
@@ -1445,6 +1491,10 @@ static int t6_modeset_init(struct mct_t6 *t6)
 	if (ret)
 		return ret;
 	drm_crtc_helper_add(&t6->crtc, &t6_crtc_helper_funcs);
+	drm_crtc_enable_color_mgmt(&t6->crtc, 0, false, 256);
+	ret = drm_mode_crtc_set_gamma_size(&t6->crtc, 256);
+	if (ret)
+		return ret;
 
 	ret = drm_encoder_init(dev, &t6->encoder, &t6_encoder_funcs, DRM_MODE_ENCODER_TMDS, NULL);
 	if (ret)
@@ -1515,7 +1565,7 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	struct mct_t6 *t6;
 	struct drm_device *dev;
 	size_t px;
-	int ret;
+	int ret, i;
 
 	BUILD_BUG_ON(sizeof(struct t6_mode) != 32);
 	BUILD_BUG_ON(sizeof(struct t6_session) != 32);
@@ -1531,6 +1581,8 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 
 	INIT_WORK(&t6->upd.work, t6_update_work);
 	INIT_WORK(&t6->hpd_work, t6_hpd_work);
+	for (i = 0; i < 256; i++)
+		t6->lut[0][i] = t6->lut[1][i] = t6->lut[2][i] = i;
 	mutex_init(&t6->upd.lock);
 	mutex_init(&t6->io_lock);
 
