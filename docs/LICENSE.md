@@ -7,4 +7,4 @@ https://github.com/cyrozap/mct-usb-display-adapter-re, which use it.
 
 Full licence text: https://creativecommons.org/licenses/by-sa/4.0/legalcode
 
-The code (kernel/, nix/, tools/, t2d/) is GPL-2.0, see `../LICENSE`.
+The code (kernel/, nix/, tools/, wacom-t2d/) is GPL-2.0, see `../LICENSE`.

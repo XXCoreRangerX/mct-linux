@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""t2d/init-full.bin (359 vendor transfers) -> t2d/init.bin (78, validated cold 2026-09-24).
+"""wacom-t2d/init-full.bin (359 vendor transfers) -> wacom-t2d/init.bin (78, validated cold 2026-09-24).
 
 Dropped (see docs/init-sequence.md, "Trimmed init"):
   - 0x05 register reads whose values are unused, 0x91 ID-ROM query
@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from t2dev import load_init
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-recs = load_init(os.path.join(ROOT, "t2d", "init-full.bin"))
+recs = load_init(os.path.join(ROOT, "wacom-t2d", "init-full.bin"))
 assert len(recs) == 359
 
 reads = [0, 2, 3, 6, 8, 21, 22, 55, 56, 66]
@@ -39,5 +39,5 @@ for i in keep:
         out += d
     if fl & 2:
         out += struct.pack("<I", rd)
-open(os.path.join(ROOT, "t2d", "init.bin"), "wb").write(out)
-print(f"{len(keep)} records, {len(out)} bytes -> t2d/init.bin; kept: {keep}")
+open(os.path.join(ROOT, "wacom-t2d", "init.bin"), "wb").write(out)
+print(f"{len(keep)} records, {len(out)} bytes -> wacom-t2d/init.bin; kept: {keep}")

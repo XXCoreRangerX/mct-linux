@@ -7,7 +7,7 @@ let
   kernelPackages = config.boot.kernelPackages;
   kmod = pkgs.callPackage ./kmod.nix { inherit (kernelPackages) kernel; };
   evdi = pkgs.callPackage ./evdi.nix { inherit kernelPackages; };
-  t2d = pkgs.callPackage ./t2d.nix { inherit evdi; };
+  wacom-t2d = pkgs.callPackage ./wacom-t2d.nix { inherit evdi; };
 in
 {
   options.hardware.mct = {
@@ -69,7 +69,7 @@ in
       default = "kernel";
       description = ''
         "kernel": native DRM driver (module mct; works on the text console too).
-        "evdi": EVDI virtual connector + t2d userspace daemon.
+        "evdi": EVDI virtual connector + wacom-t2d userspace daemon (DTU-1031X only).
       '';
     };
   };
@@ -123,18 +123,18 @@ in
 
       # video function of the tablet: accessible to the logged-in user, pulls in the daemon
       services.udev.extraRules = ''
-        SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d", TAG+="uaccess", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="t2d.service"
+        SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d", TAG+="uaccess", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="wacom-t2d.service"
       '';
 
-      environment.systemPackages = [ t2d ];
+      environment.systemPackages = [ wacom-t2d ];
 
-      systemd.user.services.t2d = {
+      systemd.user.services.wacom-t2d = {
         description = "MCT Trigger II display daemon";
         wantedBy = [ "graphical-session.target" ];
         partOf = [ "graphical-session.target" ];
         after = [ "graphical-session.target" ];
         serviceConfig = {
-          ExecStart = lib.getExe t2d;
+          ExecStart = lib.getExe wacom-t2d;
           Restart = "always";
           RestartSec = 3;
         };

@@ -68,7 +68,7 @@ Later:
     MCT's Ubuntu driver does it in userspace: EVDI virtual display +
     libjpeg-turbo. Where it would help on USB 3: full-screen video/games at
     large sizes (3440x1440 NV12 full frames top out around 48 fps; JPEG
-    could reach 60). Options: an EVDI-based mode like t2d, or a path where
+    could reach 60). Options: an EVDI-based mode like wacom-t2d, or a path where
     the kernel driver hands frames to a userspace encoder; a GPU JPEG
     encoder through VA-API where available.
   - On USB 2 links, JPEG is what keeps the vendor drivers usable.

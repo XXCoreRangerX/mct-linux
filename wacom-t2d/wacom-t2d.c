@@ -2,7 +2,7 @@
 /*
  * Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com>
  *
- * t2d: Wacom DTU-1031X (MCT Trigger II, USB 0711:5209 or 0711:520d) display daemon.
+ * wacom-t2d: Wacom DTU-1031X (MCT Trigger II, USB 0711:5209 or 0711:520d) display daemon.
  *
  * EVDI gives the compositor a real 1024x600@60 connector (panel EDID); this
  * daemon grabs damaged pixels from it and streams them to the tablet:
@@ -10,7 +10,7 @@
  *   - small damage -> partial 0x13 rects straight into the front buffer
  * Protocol: docs/protocol-t2.md. The panel scans out rotated 180 degrees.
  *
- * Usage: t2d [-i init.bin] [-e edid.bin] [-n] [-t test] [-v]
+ * Usage: wacom-t2d [-i init.bin] [-e edid.bin] [-n] [-t test] [-v]
  *   -n        skip device init (tablet already initialised)
  *   -t test   no EVDI: send a test pattern + partial rect and exit
  *   -t encode in.xrgb out.bin   offline: encode a 1024x600 XRGB frame (no USB)

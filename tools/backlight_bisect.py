@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Run the trimmed init (t2d/init.bin) from cold up to step N, pausing so the
+"""Run the trimmed init (wacom-t2d/init.bin) from cold up to step N, pausing so the
 backlight state can be observed. Usage: backlight_bisect.py N  (resumes from a state file)."""
 import json, os, sys, tempfile, time, t2dev
 

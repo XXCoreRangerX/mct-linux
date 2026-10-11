@@ -15,7 +15,7 @@ For the Trigger 6 see [protocol-t6.md](protocol-t6.md),
 > in order; parts marked superseded describe earlier versions. Open work is
 > in [roadmap.md](roadmap.md).
 
-`kernel/mct_t2.c` is a DRM/KMS driver for the T2. It replaces EVDI + `t2d`, and
+`kernel/mct_t2.c` is a DRM/KMS driver for the T2. It replaces EVDI + `wacom-t2d`, and
 because it's a normal DRM device with fbdev emulation, the **text console
 works on the tablet** too.
 
@@ -31,7 +31,7 @@ Modelled on `drivers/gpu/drm/tiny/gm12u320.c` (in-tree USB projector driver).
 
 - USB driver for `0711:520d` interface 0 (since then also `0711:5209`, and
   the module is `mct`). `probe` runs the init sequence
-  (`kernel/mct_t2_init.h`, generated from `t2d/init.bin` by
+  (`kernel/mct_t2_init.h`, generated from `wacom-t2d/init.bin` by
   `tools/gen_init_header.py`): 359 transfers, ~3 s, with 20 ms pacing on EP3/EP4
   (since trimmed to 78 transfers, ~1 s, see below).
 - (superseded by the shared core) `drm_simple_display_pipe`, XRGB8888 only, GEM shmem + shadow-plane helpers,

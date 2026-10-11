@@ -5,7 +5,9 @@ successful and unsuccessful findings. It was created when the old, untracked
 workspace `HANDOFF.md` was replaced with a current handoff on 2026-09-25. The
 old handoff was read before replacement and its substantive historical details
 are retained here. (Commit IDs quoted below are those of the development
-repository; the published history has the same commits under other IDs.)
+repository; the published history has the same commits under other IDs.
+`t2d` below is today's `wacom-t2d`, renamed on 2026-10-11 because it only
+fits the DTU-1031X.)
 Git remains the exact source for every tracked code change;
 the specialized documents linked below contain the byte-level evidence.
 

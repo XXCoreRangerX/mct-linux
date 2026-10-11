@@ -154,7 +154,7 @@ re-encoding it **byte-identically** (`tools/t2rle.py`).
 - Sizes: solid colour 27 000 B; photo wallpaper ~ 837 KB; worst case ~ 1.84 MB
   (all literals). Full-frame send + flip ~ 0.2 s from Python.
 
-### Partial updates (verified live via t2d)
+### Partial updates (verified live via wacom-t2d)
 
 - Same 36 B `0x13` header with the rect's `w h w h`; address fields =
   `(buffer + y*3072 + x*3) << 8` (device coordinates, i.e. after 180 degrees rotation).

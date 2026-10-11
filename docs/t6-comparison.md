@@ -96,7 +96,7 @@ mct_t2's mould; the code was separate then (mct_t2.c ~1360 lines, mct_t6.c
 - USB displays that compress on Linux do it in userspace: DisplayLink's
   official driver and MCT's Ubuntu driver both pair the EVDI kernel module
   (a virtual DRM output) with a userspace program that encodes frames
-  (MCT's uses libjpeg-turbo) and talks USB. Our older t2d daemon for the T2
+  (MCT's uses libjpeg-turbo) and talks USB. Our older wacom-t2d daemon for the T2
   works the same way.
 - The RX 9070's video engine decodes JPEG but doesn't encode it; some Intel
   GPUs encode JPEG through VA-API, again only from userspace.
@@ -105,7 +105,7 @@ mct_t2's mould; the code was separate then (mct_t2.c ~1360 lines, mct_t6.c
   while JPEG would add encode time per frame, latency and compression
   artifacts. It matters for the vendor because they also serve USB 2 hosts
   and multi-monitor docks. A JPEG mode would be a separate userspace
-  project (an EVDI daemon like t2d), not part of mct_t6.
+  project (an EVDI daemon like wacom-t2d), not part of mct_t6.
 
 ## Feature table (2026-10-11, mct_t6 0.21.0)
 

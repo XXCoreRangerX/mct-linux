@@ -11,7 +11,7 @@ W, H = 1024, 600
 FB_A, FB_B = 0x00C000, 0x1CE000
 
 
-def load_init(path=os.path.join(ROOT, "t2d", "init.bin")):
+def load_init(path=os.path.join(ROOT, "wacom-t2d", "init.bin")):
     """-> list of (ep, flags, data_or_None, length, rdlen)"""
     b = open(path, "rb").read(); p = 0; recs = []
     while p < len(b):

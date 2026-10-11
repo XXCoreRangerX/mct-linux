@@ -33,8 +33,8 @@
 
 - `captures/redir2.bin` (development repository only, not in the public one):
   full usbredir capture of the Windows driver's init and
-  first (black) frames. Source of `t2d/init-full.bin` (`tools/gen_init_blob.py`),
-  which `tools/gen_init_min.py` trims to `t2d/init.bin`.
+  first (black) frames. Source of `wacom-t2d/init-full.bin` (`tools/gen_init_blob.py`),
+  which `tools/gen_init_min.py` trims to `wacom-t2d/init.bin`.
 - `captures/frame1_rle.bin`: one captured black `0x13` frame (encoder test vector).
 - Not published: the usbmon text capture (`cap_install.bin`, 750 MB) and
   `redir4.bin` (desktop session incl. partial updates; it contains screen

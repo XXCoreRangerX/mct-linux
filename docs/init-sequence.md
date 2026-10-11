@@ -2,7 +2,7 @@
 
 Source: usbmon text capture (bus 6, dev 011, not published), first bulk at
 line ~2629162. Order below = wire order. EP `0x03` unless noted.
-The exact bytes (no truncation) are in `captures/redir2.bin` (development repository only); `tools/replay.py` replays them and `t2d/init-full.bin` is extracted from them (`t2d/init.bin` is the trimmed version).
+The exact bytes (no truncation) are in `captures/redir2.bin` (development repository only); `tools/replay.py` replays them and `wacom-t2d/init-full.bin` is extracted from them (`wacom-t2d/init.bin` is the trimmed version).
 
 ## Phase 1: probe
 
@@ -69,8 +69,8 @@ R, G, B, white shown on the panel.
 
 ## Trimmed init (78 transfers, ~1 s from cold), verified 2026-09-24
 
-`t2d/init.bin` / `kernel/mct_t2_init.h` (made by `tools/gen_init_min.py` from
-`t2d/init-full.bin`). Record numbers refer to the full 359-record sequence.
+`wacom-t2d/init.bin` / `kernel/mct_t2_init.h` (made by `tools/gen_init_min.py` from
+`wacom-t2d/init-full.bin`). Record numbers refer to the full 359-record sequence.
 
 | Records | What | Notes |
 |---|---|---|

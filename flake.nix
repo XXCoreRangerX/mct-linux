@@ -14,9 +14,9 @@
     {
       packages.${system} = {
         inherit evdi;
-        t2d = pkgs.callPackage ./nix/t2d.nix { inherit evdi; };
+        wacom-t2d = pkgs.callPackage ./nix/wacom-t2d.nix { inherit evdi; };
         mct-kmod = pkgs.callPackage ./nix/kmod.nix { inherit (kernelPackages) kernel; };
-        default = self.packages.${system}.t2d;
+        default = self.packages.${system}.mct-kmod;
       };
 
       nixosModules.default = import ./nix/module.nix { inherit self; };

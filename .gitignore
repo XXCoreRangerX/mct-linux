@@ -1,6 +1,6 @@
 result
 result-*
-t2d/t2d
+wacom-t2d/wacom-t2d
 __pycache__/
 *.pyc
 # VM artefacts / vendor files (never commit)

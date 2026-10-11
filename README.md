@@ -63,9 +63,11 @@ Contents
             first probe outputs, an encoded test frame, how the Windows VM
             for the captures was run (the captures themselves and the vendor
             files are not published)
-  t2d/      legacy: the T2 as a userspace daemon on top of EVDI, for
+  wacom-t2d/
+            legacy: the DTU-1031X as a userspace daemon on top of EVDI, for
             kernels older than 7.2 and for protocol work; also holds the
-            T2 init sequence the kernel driver is built from
+            tablet's init sequence the kernel driver is built from. Written
+            for this tablet only, like the init it replays
 
 Supported devices
 -----------------
@@ -137,7 +139,7 @@ Module parameters, also writable at runtime in /sys/module/mct/parameters/:
             (default).
 
 NixOS options (hardware.mct.*): `enable`, `format` and `lossy` as above,
-`driver = "evdi"` for the EVDI + t2d route instead of the kernel driver,
+`driver = "evdi"` for the EVDI + wacom-t2d route instead of the kernel driver,
 `consoleMap` to put text consoles on the tablet (adds fbcon=map:..., e.g.
 "01" for every second VT), `niriFix` to build niri with the two patches in
 nix/ (drop a removed USB display's output; render display-only devices into
@@ -200,7 +202,7 @@ Trigger 5.
 License
 -------
 
-Code (kernel/, tools/, t2d/, nix/) is GPL-2.0-only, see LICENSE and the
+Code (kernel/, tools/, wacom-t2d/, nix/) is GPL-2.0-only, see LICENSE and the
 SPDX line in each file; Copyright (C) 2026 Filip Piękoś
 <mail@filippiekos.com>. The patches in nix/ follow the licence of the
 project they change (niri: GPL-3.0-or-later, EVDI: GPL-2.0). The
