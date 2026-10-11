@@ -11,6 +11,7 @@ time; later findings are added, earlier ones are kept.
 | [roadmap.md](roadmap.md) | where the driver stands against the vendor drivers and the chips, what's left |
 | [t6-comparison.md](t6-comparison.md) | the T2 and T6 backends side by side, and mct against MCT's Windows, macOS and Ubuntu drivers (feature table) |
 | [shared-core.md](shared-core.md) | how the driver is split: DRM core and chip backends |
+| [companion-app.md](companion-app.md) | design of the planned desktop app (per-device settings, tray, About) |
 
 ## Protocol references
 

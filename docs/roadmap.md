@@ -58,7 +58,8 @@ Later:
   (~41 MB at 1080p, ~99 MB at 3440x1440). 4K30 (3840x2160, NV12) works too.
 - ~~Modes above the monitor's native size~~: hidden since mct_t6 0.22.0,
   `all_modes=1` (NixOS `hardware.mct.allModes`) shows them; tested.
-- **Userspace companion app** (like DisplayLink Manager or the vendors'
+- **Userspace companion app** (design: [companion-app.md](companion-app.md);
+  needs per-device sysfs settings in the driver first) (like DisplayLink Manager or the vendors'
   tray apps): settings in one place (format/auto mode, T2 lossy, brightness,
   "show all modes" = all_modes plus a re-probe, modes), and optional extras
   the kernel driver can't carry:
