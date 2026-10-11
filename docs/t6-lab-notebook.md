@@ -432,3 +432,15 @@ switch doesn't count), back to 4:4:4 150 ms after the last large update
 (timer resends the image). `yuv444=1` forces 4:4:4, `0` NV12; the bandwidth
 guard applies to both 4:4:4 settings.
 0.14 live at 120 Hz: drags snappy, text sharpens quickly after stopping.
+
+**Packed formats** (`tools/t6_formats_test.py`, 1080p60, vendor recipe:
+plane 0 = plane 1 = fb + 0x30, pitch in bytes, second pitch 0):
+- RGB32 (8, B G R X, pitch w*4): image correct, no tearing, 40 fps full frames.
+- BGR24 (9, B G R, pitch align32(w)*3): image correct, no tearing, 53 fps.
+  (The early BGR24 tearing came from the wrong header length, not the format.)
+- YUYV (0, Y0 U Y1 V, pitch w*2): broken; the bottom half of the detail image
+  stayed plain background and the moving block glitched at top and bottom.
+  The layout the chip expects for format 0 is unknown (the vendor uses it as
+  a JPEG 4:2:2 decode target); left open.
+BGR24 needs the same bandwidth as YUV 4:4:4 and is exact, so it is the
+better full-quality format.
