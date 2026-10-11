@@ -5,12 +5,12 @@
 { lib, rustPlatform, pkg-config, wrapGAppsHook4, gtk4, libadwaita, kmod }:
 rustPlatform.buildRustPackage {
   pname = "mct-app";
-  version = "0.1.0";
+  version = "0.5.0";
   src = lib.cleanSourceWith {
     src = ../app;
     filter = path: type: baseNameOf path != "target";
   };
-  cargoHash = "sha256-+xLHEGB83L8OkphFf9lYcA7AtX1EbzXnmP8Hjm4ZOGo=";
+  cargoHash = "sha256-xSN+Ni+kMd0pqC9kyqvwFRE1yxiHZD70QpLaZWktmGg=";
 
   nativeBuildInputs = [ pkg-config wrapGAppsHook4 ];
   buildInputs = [ gtk4 libadwaita ];

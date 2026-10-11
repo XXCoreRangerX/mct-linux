@@ -4,8 +4,25 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
-## Unreleased
+## 0.5.0 (2026-10-11): first public release
 
+Includes MCT Display Manager and mctctl 0.5.0 (the app's version follows
+the package from here on).
+
+Driver:
+
+- mct_t6 0.22.0: no modes above the monitor's native size unless
+  `all_modes=1`.
+- mct_t6 0.23.0 / mct_t2 0.3.20: every setting per device in sysfs
+  (`format`, `all_modes`, `lossy`), with read-only information next to them;
+  the module parameters are the defaults for new devices.
+- mct_t6 0.24.0 / mct_t2 0.3.21: fixes from a full code review (sysfs during
+  unbind, workers outliving the device, locking, endpoint checks, the
+  5601's output, T2 resync and resume, and more; see the roadmap).
+- mct_t6 0.25.0: fixes from an edge-case review (cursor after a monitor
+  reconnect, EDID retries after wake-up, HPD blips, a preferred mode on USB
+  2 with wide monitors, no recovery on an unplugged device); USB 2 links
+  and the text console tested on hardware.
 - mct_t6 0.27.0: the device's function descriptors (request `b1`), its
   mode table and the driver's clock limits in sysfs (`functions`,
   `device_modes`, `clock_limits`).
@@ -21,6 +38,15 @@ drm_info and in the kernel log at probe).
   host that starts later. `-vv` (and the window's collapsed "Technical
   details") adds the adapter's internals, USB descriptors and endpoints,
   the decoded and raw EDID, and driver details.
+
+App: MCT Display Manager (GTK 4 / libadwaita window and tray icon) and
+`mctctl`: per-device settings, live status, warnings (T6 on USB 2), the
+DTU-1031X's switch between the kernel driver and wacom-t2d.
+
+Project: GPL-2.0-only code, CC BY-SA 4.0 documentation; `t2d` renamed
+`wacom-t2d`; docs sorted into reference, driver, research and history with
+a status per file; releases with the driver as DKMS source and the app for
+x86_64 and aarch64; NixOS options `allModes`, `app.enable`, `app.tray`.
 
 ## 0.4.0 (2026-10-11): one module, mct
 
