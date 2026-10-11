@@ -657,3 +657,15 @@ and the full colour fallback mode now also checks that a 4:4:4 frame fits.
 Live through the driver (`tools/t6_modes.sh`): 3840x2160@30 and back to
 3440x1440@60 fine. Simulated 4K60 monitor: 2560x1440@60 preferred,
 3840x2160@30 offered.
+
+**Error recovery (mct_t6 0.19.0, `tools/t6_cancel_test.sh`).** debugfs
+`mct_t6_inject` announces a 64 KiB rectangle write and sends 256 bytes:
+- With the cancel request (`40 14`): the T6 leaves the bus right away and
+  re-enumerates ~3 s later; the driver probes it again, picture back.
+- `40 14` alone, nothing broken: the same restart. So on the 5600 it is a
+  device restart, not a soft cancel.
+- Cut transfer without the cancel: the next transfers time out (-110, then
+  -71), i.e. the chip is wedged waiting for the missing bytes; the second
+  recovery attempt (with `40 14`) restarted it.
+So `40 14` is the right last resort after a real transfer error (the
+vendor drivers do the same), at the price of ~3 s without picture.

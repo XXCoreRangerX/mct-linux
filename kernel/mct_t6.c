@@ -280,6 +280,7 @@ struct mct_t6 {
 	struct work_struct redraw_work;
 	atomic_t redraw;		/* resend everything with the next update */
 	atomic_t inject;		/* debugfs: break the next update on purpose */
+	atomic_t no_cancel;		/* ... and skip the cancel request */
 	struct t6_mode mode_entry;	/* the mode set at the last enable */
 
 	struct {
@@ -931,11 +932,12 @@ static int t6_flip(struct mct_t6 *t6, int k)
 }
 
 /*
- * A bulk transfer failed or got stuck: the device may be waiting for the
- * rest of a cut off session and would take the next headers as its data.
- * Drop what is queued, clear a stall, cancel the session on the device
- * (as the vendor driver does after a failed write) and send whole frames
- * again. io_lock held.
+ * A bulk transfer failed or got stuck: a session cut off halfway leaves the
+ * device waiting for the rest, and later transfers time out. Drop what is
+ * queued, clear a stall and send the cancel request, as the vendor drivers
+ * do after a failed write. On the 5600 that request restarts the device:
+ * it leaves the bus and comes back about 3 s later, and is probed again.
+ * io_lock held.
  */
 static void t6_recover(struct mct_t6 *t6, int err)
 {
@@ -944,7 +946,10 @@ static void t6_recover(struct mct_t6 *t6, int err)
 	usb_kill_anchored_urbs(&t6->anchor);
 	if (err == -EPIPE)
 		usb_clear_halt(udev, usb_sndbulkpipe(udev, T6_EP_OUT));
-	t6_ctrl_out(t6, T6_REQ_CANCEL, 0, 0, 0);
+	if (atomic_xchg(&t6->no_cancel, 0))
+		drm_info(&t6->base.dev, "test: no cancel request\n");
+	else
+		t6_ctrl_out(t6, T6_REQ_CANCEL, 0, 0, 0);
 	memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
 	t6->stats.recoveries++;
 	drm_err_ratelimited(&t6->base.dev, "frame transfer error %d, transfer cancelled\n", err);
@@ -953,6 +958,8 @@ static void t6_recover(struct mct_t6 *t6, int err)
 /*
  * Test hook (debugfs mct_t6_inject): announce a 64 KiB rectangle write
  * into frame buffer k, send only 256 bytes of it and fail the update.
+ * Writing 1 does that with the usual recovery, 3 without the cancel
+ * request, 2 only sends the cancel request.
  */
 static int t6_inject_cut(struct mct_t6 *t6, int k)
 {
@@ -989,8 +996,17 @@ static int t6_present(struct mct_t6 *t6, const struct t6_band *bands, int n)
 	int i, j, p, r, ret = 0;
 
 	t6->hw_valid[k] = false;
-	if (atomic_xchg(&t6->inject, 0))
+	switch (atomic_xchg(&t6->inject, 0)) {
+	case 3:
+		atomic_set(&t6->no_cancel, 1);
+		fallthrough;
+	case 1:
 		return t6_inject_cut(t6, k);
+	case 2:
+		drm_info(&t6->base.dev, "test: cancel request only\n");
+		t6_ctrl_out(t6, T6_REQ_CANCEL, 0, 0, 0);
+		break;
+	}
 	for (i = 0; i < n && !ret; i++)
 		ret = t6_send_band(t6, k, &bands[i]);
 	if (!ret)
@@ -1772,7 +1788,8 @@ static void t6_event_complete(struct urb *urb)
 		if (ev[0x13] & (T6_EV_CHANGE0 | T6_EV_CHANGE1)) {
 			t6->stats.ev_change++;
 			t6->hpd_same = 0;
-			mod_delayed_work(system_wq, &t6->hpd_work, msecs_to_jiffies(T6_HPD_MS));
+			mod_delayed_work(system_percpu_wq, &t6->hpd_work,
+					 msecs_to_jiffies(T6_HPD_MS));
 		}
 		if (ev[0x13] & T6_EV_REDRAW) {
 			t6->stats.ev_redraw++;
@@ -1840,8 +1857,14 @@ static ssize_t t6_inject_write(struct file *file, const char __user *buf, size_t
 			       loff_t *pos)
 {
 	struct mct_t6 *t6 = file->private_data;
+	int v, ret;
 
-	atomic_set(&t6->inject, 1);
+	ret = kstrtoint_from_user(buf, len, 0, &v);
+	if (ret)
+		return ret;
+	if (v < 1 || v > 3)
+		return -EINVAL;
+	atomic_set(&t6->inject, v);
 	mutex_lock(&t6->base.lock);
 	t6->base.dirty = true;
 	mutex_unlock(&t6->base.lock);

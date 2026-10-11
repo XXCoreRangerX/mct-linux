@@ -46,7 +46,7 @@ Nothing here shares code or framing with the T2.
 | `c0 b0` | 0 | 0..5 | 4-8 B in | 0 platform (0 "Lite", 48 MHz PLL base; 1 "Super Lite", 40 MHz), 1 boot code, 2 image code, 3 project code (5600: "JUA254H", 5601: "A8613HV"), 4 feature level, 5 serial |
 | `c0 b1`, `c0 b3` | 0 | | 132 / 112 B in | function descriptors, "DISP" section (flags, quality, bandwidth cap) (C) |
 | `40 1c`, `40 1d` | output << 8 (\| 2 enable) | 0x100 / 0x200 / 0x400 | 256 B out | gamma enable and one table per channel (C) |
-| `40 14` | 0 | 0 | none | cancel / reset after a bulk timeout (C) |
+| `40 14` | 0 | 0 | none | cancel after a failed bulk write (C); on the 5600 it restarts the device: it leaves the bus and re-enumerates ~3 s later (V) |
 | `40 30` | | level | none | hardware reset (C) |
 | `40 1f` | | 0..3 | none | hardware rotation (C); stalls on the 5600, also with 0 (V) |
 | `40 23`, `40 24`, `c0 a1..a5` | | | | audio (C) |
