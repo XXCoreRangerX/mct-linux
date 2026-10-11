@@ -5,6 +5,7 @@
 //! (docs/companion-app.md), shared by mctctl, the window and the tray.
 
 pub mod device;
+pub mod ident;
 pub mod menu;
 pub mod rates;
 pub mod switch;
@@ -21,5 +22,10 @@ pub use usb::{discover, Display, Route, Snapshot};
 pub const APP_ID: &str = "org.mctlinux.Manager";
 pub const APP_NAME: &str = "MCT Display Manager";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// Placeholder until the project has a public home.
-pub const WEBSITE: &str = "https://example.org/mct-linux";
+pub const AUTHOR: &str = "Filip Piękoś";
+pub const AUTHOR_URL: &str = "https://github.com/XXCoreRangerX";
+pub const WEBSITE: &str = "https://github.com/XXCoreRangerX/mct-linux";
+pub const ISSUES: &str = "https://github.com/XXCoreRangerX/mct-linux/issues";
+pub const DOCS: &str = "https://github.com/XXCoreRangerX/mct-linux/tree/main/docs";
+pub const CHANGELOG: &str =
+    "https://github.com/XXCoreRangerX/mct-linux/blob/main/CHANGELOG.md";

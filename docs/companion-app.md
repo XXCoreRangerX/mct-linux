@@ -32,6 +32,7 @@ e.g. `2-2:1.0`. One value per file, newline terminated.
 |---|---|---|---|
 | `chip` | all | ro | `t2` or `t6` |
 | `model` | all | ro | the USB product string, e.g. `T6 USB Station` |
+| `driver_version` | all | ro | DRM driver and version, e.g. `mct_t6 0.26.0` (since mct_t6 0.26.0) |
 | `connector` | all | ro | DRM connector name, e.g. `card2-HDMI-A-3` (the compositor calls it `HDMI-A-3`) |
 | `mode` | all | ro | current mode `WxH@Hz`, or `off` |
 | `updates` | all | ro | frames sent since probe |
@@ -41,6 +42,11 @@ e.g. `2-2:1.0`. One value per file, newline terminated.
 | `feature_level` | t6 | ro | number, `-1` if unknown |
 | `vram_mb` | t6 | ro | number |
 | `usb_speed` | t6 | ro | `usb2` or `usb3` |
+| `platform` | t6 | ro | `lite` or `super-lite` (since 0.26.0, like the four below) |
+| `board` | t6 | ro | board name ("project code"), e.g. `JUA254H`, or `-`; the app maps it to the product (j5create JUA254) |
+| `firmware` | t6 | ro | boot code and image code, e.g. `16062899 17091401` |
+| `serial` | t6 | ro | chip serial, 16 hex digits, or `-` |
+| `display_flags` | t6 | ro | DISP descriptor flags, hex |
 | `recoveries` | t6 | ro | device restarts after transfer errors |
 | `format` | t6 | rw | `auto`, `rgb24`, `rgb32`, `yuv444`, `nv12` |
 | `all_modes` | t6 | rw | `0` / `1`; a change makes userspace re-probe the monitor |
@@ -62,8 +68,10 @@ distributions copy it from the README.
 
 ## The app
 
-- Qt 6 (PySide6): tray icon through StatusNotifierItem works on Wayland
-  (Noctalia, Waybar, KDE), GTK 4 has no tray.
+- Planned as Qt 6 (PySide6) for the tray; built instead with GTK 4,
+  libadwaita and Relm4 for the GNOME look, the tray icon through ksni
+  (StatusNotifierItem: Noctalia, Waybar, KDE). `--tray` waits for a tray host
+  that starts after the app (2026-10-11: at login the icon was missing).
 - Tray menu: each device with its mode and format, quick toggles, "Open".
 - Window:
   - a list of connected devices (hotplug through udev)
@@ -72,6 +80,23 @@ distributions copy it from the README.
     and lossy for the tablet), live stats (update rate, data rate, errors)
   - About: version, licence, links, credits
 - Packaged in the flake; NixOS option `hardware.mct.app.enable`.
+
+## Identification (2026-10-11)
+
+Besides the driver's files the app reads the USB device (`idVendor`,
+`idProduct`, `manufacturer`, `product`, `serial`, `bcdDevice`, `version`,
+`speed`, `busnum`/`devnum`, `bMaxPower`), the monitor's EDID from
+`/sys/class/drm/<connector>/edid` (maker, name, product code, serial, date,
+size), and for the tablet the Wacom pen digitizer on the same hub. The
+product name comes from the board name (table `BOARDS` in `app/src/ident.rs`)
+or the USB IDs. All of it shows in the window's lower groups, in
+`mctctl info -v` / `list -v`, and in the About dialog's Troubleshooting
+report.
+
+Known boards: `JUA254H` j5create JUA254 (USB 3.0 to HDMI; the 5600 here),
+`A8613HV` MCT U3-A8613 (HDMI + VGA, the 5601 in the trigger6 capture),
+`DTU-1031AX` Wacom DTU-1031AX (in MCT's firmware package). More board names
+are in MCT's `*.t6img` firmware files (see the lab's dll-analysis notes).
 
 ## Later
 

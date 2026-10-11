@@ -3,10 +3,11 @@
 
 //! The page of one display: driver, display, settings, status, device.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use mct::device::{FORMATS, LOSSY_MAX, PERMISSION_HINT};
+use mct::ident::Section;
 use mct::{switch, text, Chip, Rates, Route, Snapshot};
 use relm4::adw::prelude::*;
 use relm4::gtk::glib;
@@ -42,8 +43,6 @@ pub struct Page {
     display_group: adw::PreferencesGroup,
     mode: adw::ActionRow,
     pixel_format: adw::ActionRow,
-    feature_level: adw::ActionRow,
-    vram: adw::ActionRow,
     settings: adw::PreferencesGroup,
     format: adw::ComboRow,
     all_modes: adw::SwitchRow,
@@ -57,13 +56,10 @@ pub struct Page {
     errors_icon: gtk::Image,
     recoveries: adw::ActionRow,
     recoveries_icon: gtk::Image,
-    model: adw::ActionRow,
-    chip: adw::ActionRow,
-    /// The driver in the Device group, when the Driver group is hidden.
-    driver_info: adw::ActionRow,
-    connector: adw::ActionRow,
-    interface: adw::ActionRow,
-    usb: adw::ActionRow,
+    prefs: adw::PreferencesPage,
+    /// Product, chip, USB, driver, monitor: rebuilt when they change.
+    ident_groups: RefCell<Vec<adw::PreferencesGroup>>,
+    shown_ident: RefCell<(Vec<Section>, bool)>,
 }
 
 /// A row showing a value under its name.
@@ -133,9 +129,7 @@ impl Page {
 
         let mode = property_row("Mode");
         let pixel_format = property_row("Pixel format");
-        let feature_level = property_row("Feature level");
-        let vram = property_row("Video memory");
-        let display_group = group("Display", &[&mode, &pixel_format, &feature_level, &vram]);
+        let display_group = group("Display", &[&mode, &pixel_format]);
 
         let format = adw::ComboRow::builder()
             .title("Format")
@@ -184,22 +178,11 @@ impl Page {
         recoveries.add_suffix(&recoveries_icon);
         let status_group = group("Status", &[&update_rate, &data_rate, &errors, &recoveries]);
 
-        let model = property_row("Model");
-        let chip = property_row("Chip");
-        let connector = property_row("Connector");
-        let interface = property_row("USB interface");
-        let usb = property_row("USB link");
-        let driver_info = property_row("Driver");
-
         let prefs = adw::PreferencesPage::new();
         prefs.add(&driver_group);
         prefs.add(&display_group);
         prefs.add(&settings);
         prefs.add(&status_group);
-        prefs.add(&group(
-            "Device",
-            &[&model, &chip, &connector, &interface, &usb, &driver_info],
-        ));
 
         let banner = adw::Banner::new("");
         let view = adw::ToolbarView::new();
@@ -216,8 +199,6 @@ impl Page {
             display_group,
             mode,
             pixel_format,
-            feature_level,
-            vram,
             settings,
             format,
             all_modes,
@@ -231,17 +212,45 @@ impl Page {
             errors_icon,
             recoveries,
             recoveries_icon,
-            model,
-            chip,
-            driver_info,
-            connector,
-            interface,
-            usb,
+            prefs,
+            ident_groups: RefCell::new(Vec::new()),
+            shown_ident: RefCell::new((Vec::new(), false)),
+        }
+    }
+
+    /// One group per identity section. The driver in use is left out while
+    /// the Driver group above shows it.
+    fn show_ident(&self, sections: &[Section]) {
+        let skip_route = self.driver_group.is_visible();
+        let mut shown = self.shown_ident.borrow_mut();
+        if shown.0 == sections && shown.1 == skip_route {
+            return;
+        }
+        *shown = (sections.to_vec(), skip_route);
+        for g in self.ident_groups.borrow_mut().drain(..) {
+            self.prefs.remove(&g);
+        }
+        for s in sections {
+            let rows: Vec<adw::ActionRow> = s
+                .fields
+                .iter()
+                .filter(|f| !(skip_route && f.key == "driver"))
+                .map(|f| {
+                    let row = property_row(f.label);
+                    row.set_subtitle(&f.value);
+                    row
+                })
+                .collect();
+            if rows.is_empty() {
+                continue;
+            }
+            let g = group(s.title, &rows.iter().collect::<Vec<_>>());
+            self.prefs.add(&g);
+            self.ident_groups.borrow_mut().push(g);
         }
     }
 
     pub fn show(&self, s: &State) {
-        let display = &s.snap.display;
         let info = s.snap.info.as_ref();
 
         // a setup problem (USB 2) stays visible above the page
@@ -254,25 +263,7 @@ impl Page {
         }
 
         self.show_driver(s);
-
-        set(&self.model, Some(s.snap.name().to_string()));
-        set(
-            &self.chip,
-            Some(match display.chip {
-                Chip::T6 => "Trigger 6".into(),
-                Chip::T2 => "Trigger II".into(),
-                Chip::Unknown => "Unknown".into(),
-            }),
-        );
-        set(
-            &self.connector,
-            info.and_then(|i| i.connector_short()).map(String::from),
-        );
-        set(&self.interface, Some(display.interface.clone()));
-        let speed = info
-            .and_then(|i| i.usb_speed.as_deref())
-            .or(display.usb_speed.as_deref());
-        set(&self.usb, speed.map(text::usb_link));
+        self.show_ident(&s.snap.ident);
 
         // the rest needs the kernel driver
         self.display_group.set_visible(info.is_some());
@@ -288,11 +279,6 @@ impl Page {
             &self.pixel_format,
             info.pixel_format.as_deref().map(text::pixel_format),
         );
-        set(
-            &self.feature_level,
-            info.feature_level.map(text::feature_level),
-        );
-        set(&self.vram, info.vram_mb.map(text::vram));
 
         let (ups, mbs) = match s.rates {
             Some(r) => (
@@ -317,7 +303,6 @@ impl Page {
         // a T6 on the kernel driver has nothing to switch: just a row below
         let quiet = display.route == Route::Kernel && !display.is_tablet();
         self.driver_group.set_visible(!quiet);
-        set(&self.driver_info, quiet.then(|| display.route.label()));
         set(&self.driver, Some(display.route.label()));
         let (label, target_legacy) = match display.route {
             Route::Kernel => ("Use legacy daemon", true),

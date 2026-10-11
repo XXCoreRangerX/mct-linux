@@ -4,16 +4,19 @@ mct-linux
 A Linux DRM/KMS driver for USB displays built on MCT (Magic Control
 Technology) Trigger chips:
 
-- Trigger 6 (T6): USB 3 to HDMI adapters such as the "T6 USB Station"
-  (0711:5600; 0711:5601 should work too). Any HDMI monitor, from its EDID:
+- Trigger 6 (T6): USB 3 to HDMI adapters such as the j5create JUA254
+  ("T6 USB Station", 0711:5600; 0711:5601 should work too). Any HDMI monitor, from its EDID:
   up to 1080p at 144 Hz, 2560x1440 and 3440x1440 at 60 Hz, 3840x2160 at
   30 Hz.
 - Trigger II (T2): the Wacom DTU-1031X pen display (1024x600, USB
   0711:520d / 0711:5209). The pen (056a:032f) is a separate USB function
-  handled by the in-kernel wacom driver. This backend is written for the
-  DTU-1031X (its fixed panel and 180 degree scanout, its init sequence taken
-  from Wacom's driver, its brightness control through the pen function);
-  other T2 adapters are untested and would need changes.
+  handled by the in-kernel wacom driver. **The T2 backend has only been
+  tested on the DTU-1031X** and is written for it: its fixed panel and 180
+  degree scanout, its init sequence taken from Wacom's driver, its
+  brightness control through the pen function. Trigger II products differ
+  from each other far more than Trigger 5/6 adapters do (each has its own
+  init sequence and panel setup), so other T2 devices will most likely not
+  work without changes.
 
 MCT's own drivers are for Windows and macOS, plus a userspace Linux driver
 for the T6. The protocols here were worked out from USB captures, the vendor
@@ -56,6 +59,8 @@ Contents
 
   kernel/   the driver, module "mct": a shared DRM core (mct_drv.c) and a
             backend per chip (mct_t2.c, mct_t6.c)
+  app/      MCT Display Manager (GTK 4 window and tray icon) and mctctl
+            (command line): per-device settings, status, identification
   nix/      flake package and NixOS module, two optional niri patches
   docs/     protocol references, limits, lab notes (docs/README.md)
   tools/    test and research scripts (tools/README.md)
@@ -72,7 +77,7 @@ Contents
 Supported devices
 -----------------
 
-  0711:5600  T6 USB Station (Trigger 6, feature level 6)    tested
+  0711:5600  j5create JUA254, "T6 USB Station" (Trigger 6)   tested
   0711:5601  single-output Trigger 6 adapter               untested
   0711:520d  Wacom DTU-1031X (Trigger II), interface 0      tested
   0711:5209  the same tablet, which enumerates with either ID
@@ -164,6 +169,27 @@ e.g. `brightnessctl -d 'mct_t2-*' set 3`.
 
 Text console on a display: map a VT to its framebuffer, e.g. `con2fbmap 2 1`.
 
+MCT Display Manager and mctctl
+------------------------------
+
+app/ holds a desktop app for the settings above and a command line tool,
+both per device (NixOS: `hardware.mct.app.enable = true`, `app.tray = true`
+for the tray icon at login; elsewhere `cargo build --release`
+in app/, see app/README.md):
+
+- `mct-manager`: one page per connected display with its mode, format,
+  settings, live update and data rate, transfer errors, and everything
+  that identifies it (product, chip and firmware, USB, driver, the
+  monitor's EDID). Switches the DTU-1031X between the kernel driver and the
+  legacy wacom-t2d daemon. Warns when a T6 runs over USB 2.
+- `mct-manager --tray`: the same from a tray icon (StatusNotifierItem).
+- `mctctl list [-v]`, `mctctl info [-v] [DEV]`, `mctctl get/set [DEV] KEY
+  [VALUE]`, `mctctl stats -w`, `mctctl driver kernel|legacy`; `--json` for
+  scripts.
+
+Writing settings without root needs the udev rule that gives group video
+write access (installed by the NixOS module; see docs/companion-app.md).
+
 Debugging
 ---------
 
@@ -187,7 +213,11 @@ Known issues
   request; the adapter then reconnects, about 3 s without picture.
 - On some starts the DTU-1031X's picture shows faint vertical lines, a
   sampling issue of its analog panel link; reloading the driver or a replug
-  gives another try.
+  gives another try. If the lines never go away, or the picture is
+  garbled, the tablet's T2-285A controller may be failing: these chips run
+  hot, and the author of the iFixit disassembly guide found it damaged in
+  all three of their units
+  (https://www.ifixit.com/Guide/Wacom+DTU-1031X+Disassembly/166191).
 - Compositors that hand over buffers in GPU memory make the driver read
   them over PCIe (a few ms per frame at 1080p); niri with the patch above
   doesn't.
@@ -217,7 +247,7 @@ Trigger 5.
 License
 -------
 
-Code (kernel/, tools/, wacom-t2d/, nix/) is GPL-2.0-only, see LICENSE and the
+Code (kernel/, app/, tools/, wacom-t2d/, nix/) is GPL-2.0-only, see LICENSE and the
 SPDX line in each file; Copyright (C) 2026 Filip Piękoś
 <mail@filippiekos.com>. The patches in nix/ follow the licence of the
 project they change (niri: GPL-3.0-or-later, EVDI: GPL-2.0). The

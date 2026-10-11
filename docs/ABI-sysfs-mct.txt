@@ -10,6 +10,8 @@ Description:
 
 		chip		"t2" or "t6"
 		model		USB product string
+		driver_version	DRM driver name and version, e.g.
+				"mct_t6 0.26.0"
 		connector	DRM connector name, e.g. "card2-HDMI-A-3"
 		mode		current mode "WxH@Hz", or "off"
 		updates		frames sent since probe
@@ -22,6 +24,15 @@ Description:
 		feature_level	the device's feature level, -1 if unknown
 		vram_mb		video memory in MiB
 		usb_speed	"usb2" or "usb3"
+		platform	"lite" or "super-lite"
+		board		the board name the chip reports ("project
+				code", e.g. "JUA254H"), or "-"
+		firmware	boot code and image code versions, two
+				8-digit hex numbers, e.g. "16062899 17091401"
+		serial		the chip's serial number as 16 hex digits,
+				or "-" if it has none
+		display_flags	display function flags from the device's
+				DISP descriptor, hex
 		recoveries	device restarts after transfer errors
 
 		Read-only, Trigger II:

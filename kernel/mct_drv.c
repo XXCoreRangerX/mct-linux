@@ -584,6 +584,19 @@ static ssize_t model_show(struct device *dev, struct device_attribute *attr, cha
 }
 static DEVICE_ATTR_RO(model);
 
+static ssize_t driver_version_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_device *mdev = mct_from_dev(dev);
+	const struct drm_driver *drv;
+
+	if (!mdev)
+		return -ENODEV;
+	drv = mdev->dev.driver;
+	return sysfs_emit(buf, "%s %d.%d.%d\n", drv->name, drv->major, drv->minor,
+			  drv->patchlevel);
+}
+static DEVICE_ATTR_RO(driver_version);
+
 static ssize_t connector_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct mct_device *mdev = mct_from_dev(dev);
@@ -615,6 +628,7 @@ static DEVICE_ATTR_RO(mode);
 static struct attribute *mct_common_attrs[] = {
 	&dev_attr_chip.attr,
 	&dev_attr_model.attr,
+	&dev_attr_driver_version.attr,
 	&dev_attr_connector.attr,
 	&dev_attr_mode.attr,
 };

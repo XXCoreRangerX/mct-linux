@@ -31,6 +31,12 @@ pub const KEYS: &[&str] = &[
     "feature_level",
     "vram_mb",
     "usb_speed",
+    "platform",
+    "board",
+    "firmware",
+    "serial",
+    "display_flags",
+    "driver_version",
     "updates",
     "bytes",
     "errors",
@@ -203,6 +209,23 @@ pub struct Info {
     pub vram_mb: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usb_speed: Option<String>,
+    /// T6 platform: `lite` or `super-lite`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    /// T6 board name ("project code"), e.g. `JUA254H`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub board: Option<String>,
+    /// T6 firmware: boot code and image code, e.g. `16062899 17091401`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firmware: Option<String>,
+    /// T6 chip serial number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub serial: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_flags: Option<String>,
+    /// e.g. `mct_t6 0.26.0`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub driver_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updates: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -241,6 +264,12 @@ impl Info {
             "feature_level" => s(&self.feature_level),
             "vram_mb" => s(&self.vram_mb),
             "usb_speed" => s(&self.usb_speed),
+            "platform" => s(&self.platform),
+            "board" => s(&self.board),
+            "firmware" => s(&self.firmware),
+            "serial" => s(&self.serial),
+            "display_flags" => s(&self.display_flags),
+            "driver_version" => s(&self.driver_version),
             "updates" => s(&self.updates),
             "bytes" => s(&self.bytes),
             "errors" => s(&self.errors),
@@ -483,6 +512,12 @@ impl Device {
             feature_level: parse(r("feature_level")?),
             vram_mb: parse(r("vram_mb")?),
             usb_speed: r("usb_speed")?,
+            platform: none_if_dash(r("platform")?),
+            board: none_if_dash(r("board")?),
+            firmware: none_if_dash(r("firmware")?),
+            serial: none_if_dash(r("serial")?),
+            display_flags: none_if_dash(r("display_flags")?),
+            driver_version: none_if_dash(r("driver_version")?),
             updates: parse(r("updates")?),
             bytes: parse(r("bytes")?),
             errors: parse(r("errors")?),

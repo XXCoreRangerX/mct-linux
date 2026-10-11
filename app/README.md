@@ -68,8 +68,10 @@ action org.mctlinux.manager.helper). On NixOS the permanent choice is
 mctctl
 ------
 
-    mctctl list                        displays, their driver and notes
-    mctctl info [DEV]                  everything about one display
+    mctctl list [-v]                   displays, their driver and notes
+    mctctl info [-v] [DEV]             settings and state of one display;
+                                       -v adds product, chip and firmware,
+                                       USB, driver, monitor (EDID), pen
     mctctl get [DEV] KEY               one value
     mctctl set [DEV] KEY VALUE         format, all_modes, lossy, brightness
     mctctl stats [DEV] [--watch]       update rate, data rate, errors

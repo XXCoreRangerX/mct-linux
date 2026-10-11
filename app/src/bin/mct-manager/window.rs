@@ -338,13 +338,15 @@ impl SimpleComponent for App {
 
         if init.tray {
             let (open, quit) = (sender.input_sender().clone(), sender.input_sender().clone());
+            // at login the bar may start after us: wait for its tray host
             match tray::spawn(
                 move || open.emit(AppMsg::Present),
                 move || quit.emit(AppMsg::Quit),
+                true,
             ) {
                 Ok(()) => model.tray_mode = true,
                 Err(e) => {
-                    eprintln!("mct-manager: no system tray available ({e}), opening the window");
+                    eprintln!("mct-manager: could not start the tray icon ({e}), opening the window");
                     sender.input(AppMsg::Present);
                 }
             }
@@ -437,7 +439,7 @@ impl SimpleComponent for App {
                 self.rescan();
                 self.sample();
             }
-            AppMsg::About => about(&self.window),
+            AppMsg::About => about(&self.window, &self.snaps),
             AppMsg::Activated => {
                 self.activations += 1;
                 // in tray mode the first activation is the start itself
@@ -521,20 +523,65 @@ impl App {
     }
 }
 
-fn about(parent: &adw::ApplicationWindow) {
+fn about(parent: &adw::ApplicationWindow, snaps: &[Snapshot]) {
     let about = adw::AboutDialog::builder()
         .application_name(mct::APP_NAME)
         .application_icon(mct::APP_ID)
         .version(mct::VERSION)
-        .developer_name("Filip Piękoś")
-        .copyright("Copyright (C) 2026 Filip Piękoś")
+        .developer_name(mct::AUTHOR)
+        .developers([format!("{} {}", mct::AUTHOR, mct::AUTHOR_URL).as_str()])
+        .copyright(format!("© 2026 {}", mct::AUTHOR))
         .license_type(gtk::License::Gpl20Only)
         .website(mct::WEBSITE)
-        .comments("Settings and status for MCT USB displays")
+        .issue_url(mct::ISSUES)
+        .support_url(mct::DOCS)
+        .comments(
+            "Settings and status for USB displays with MCT Trigger chips: Trigger 6 \
+             adapters such as the j5create JUA254, and the Wacom DTU-1031X pen display, \
+             on the mct kernel driver.",
+        )
+        .debug_info(mct::ident::report(snaps))
+        .debug_info_filename("mct-debug-info.txt")
         .build();
+    about.add_link("Source code", mct::WEBSITE);
+    about.add_link("Documentation", mct::DOCS);
+    about.add_link("Changelog", mct::CHANGELOG);
+    about.add_credit_section(
+        Some("Protocol research"),
+        &[
+            "cyrozap https://github.com/cyrozap/mct-usb-display-adapter-re",
+            "JingYenLoh (trigger6) https://github.com/JingYenLoh/trigger6",
+            "y-chan https://github.com/y-chan/trigger6",
+            "ramifriedman https://github.com/ramifriedman/mct-t6-linux",
+        ],
+    );
     about.add_acknowledgement_section(
-        Some("Protocol work builds on"),
-        &["cyrozap's notes", "the trigger6 driver"],
+        Some("Built with"),
+        &[
+            "GTK https://gtk.org",
+            "libadwaita https://gnome.pages.gitlab.gnome.org/libadwaita/",
+            "Relm4 https://relm4.org",
+            "ksni https://github.com/iovxw/ksni",
+        ],
+    );
+    about.add_legal_section(
+        "Documentation",
+        None,
+        gtk::License::Custom,
+        Some(
+            "The protocol notes and other documentation are licensed under \
+             <a href=\"https://creativecommons.org/licenses/by-sa/4.0/\">CC BY-SA 4.0</a>.",
+        ),
+    );
+    about.add_legal_section(
+        "Trademarks",
+        None,
+        gtk::License::Custom,
+        Some(
+            "MCT and Trigger are trademarks of Magic Control Technology Corp. Wacom, \
+             j5create and other product names are trademarks of their owners. This \
+             project is not affiliated with or endorsed by any of them.",
+        ),
     );
     about.present(Some(parent));
 }

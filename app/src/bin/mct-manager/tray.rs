@@ -40,6 +40,7 @@ fn menu_key(snaps: &[Snapshot]) -> Vec<Snapshot> {
                 bytes: None,
                 ..i.clone()
             }),
+            ident: Vec::new(),
         })
         .collect()
 }
@@ -247,11 +248,13 @@ impl ksni::Tray for Tray {
     }
 }
 
-/// Starts the tray in its own thread; fails if there is no StatusNotifier
-/// host (no bar with a tray).
+/// Starts the tray in its own thread. With `wait`, a missing StatusNotifier
+/// host (a bar that starts after us) is not an error: the icon appears when
+/// one registers. Without it, spawning fails if there is none.
 pub fn spawn(
     open: impl Fn() + Send + 'static,
     quit: impl Fn() + Send + 'static,
+    wait: bool,
 ) -> Result<(), ksni::Error> {
     let snaps = snapshot();
     let tray = Tray {
@@ -260,7 +263,7 @@ pub fn spawn(
         open: Box::new(open),
         quit: Box::new(quit),
     };
-    let handle = tray.spawn()?;
+    let handle = tray.assume_sni_available(wait).spawn()?;
     // hotplug and changes made elsewhere: update the menu when they show
     thread::spawn(move || {
         let mut last = Vec::new();

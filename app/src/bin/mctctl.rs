@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use mct::device::{KEYS, SETTABLE};
+use mct::ident::{self, Section};
 use mct::{discover, switch, usb, Device, Display, Error, Info, RateMeter, Route};
 use serde::Serialize;
 
@@ -41,13 +42,19 @@ enum DriverChoice {
 enum Cmd {
     /// List MCT displays on USB and their driver
     List {
+        /// Also show every identifier of each display (as in "info -v")
+        #[arg(long, short)]
+        verbose: bool,
         #[arg(long)]
         json: bool,
     },
-    /// Show everything about a display
+    /// Show the settings and state of a display
     #[command(after_help = DEV_HELP)]
     Info {
         dev: Option<String>,
+        /// Show everything: product, chip and firmware, USB, driver, monitor
+        #[arg(long, short)]
+        verbose: bool,
         #[arg(long)]
         json: bool,
     },
@@ -129,8 +136,10 @@ fn check_key(key: &str) -> Result<(), Error> {
 fn run(cmd: Cmd) -> Result<(), Error> {
     let displays = discover();
     match cmd {
-        Cmd::List { json } => list(&displays, json),
-        Cmd::Info { dev, json } => info(usb::select(&displays, dev.as_deref())?, json),
+        Cmd::List { verbose, json } => list(&displays, verbose, json),
+        Cmd::Info { dev, verbose, json } => {
+            info(usb::select(&displays, dev.as_deref())?, verbose, json)
+        }
         Cmd::Get { args } => {
             let (dev, key) = match args.as_slice() {
                 [key] => (None, key),
@@ -204,6 +213,9 @@ struct DisplayJson<'a> {
     #[serde(flatten)]
     info: Option<&'a Info>,
     warnings: Vec<String>,
+    /// With --verbose: product, chip, USB, driver, monitor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    identity: Option<Vec<Section>>,
 }
 
 fn notes(d: &Display, info: Option<&Info>) -> Vec<String> {
@@ -226,6 +238,7 @@ fn display_json<'a>(
     index: Option<usize>,
     d: &'a Display,
     info: Option<&'a Info>,
+    verbose: bool,
 ) -> DisplayJson<'a> {
     let unbound = info.is_none();
     DisplayJson {
@@ -237,7 +250,51 @@ fn display_json<'a>(
         driver: d.route.short(),
         info,
         warnings: notes(d, info),
+        identity: verbose.then(|| ident::identify(d, info)),
     }
+}
+
+/// The product's short name, else the USB product string.
+fn name<'a>(d: &'a Display, info: Option<&'a Info>) -> &'a str {
+    ident::product(d, info)
+        .map(|p| p.short)
+        .or_else(|| info.map(|i| i.name()))
+        .unwrap_or(d.name())
+}
+
+/// Settings and counters, for "info -v" after the identity sections.
+const STATE_KEYS: &[(&str, &str)] = &[
+    ("mode", "Mode"),
+    ("pixel_format", "Pixel format"),
+    ("format", "Format setting"),
+    ("all_modes", "All modes"),
+    ("lossy", "Lossy"),
+    ("brightness", "Brightness"),
+    ("max_brightness", "Max brightness"),
+    ("updates", "Updates"),
+    ("bytes", "Bytes sent"),
+    ("errors", "Transfer errors"),
+    ("recoveries", "Device restarts"),
+];
+
+fn verbose_text(d: &Display, info: Option<&Info>) -> String {
+    let mut sections = ident::identify(d, info);
+    if let Some(i) = info {
+        let fields: Vec<ident::Field> = STATE_KEYS
+            .iter()
+            .filter_map(|(key, label)| {
+                i.value(key).map(|value| ident::Field { key, label, value })
+            })
+            .collect();
+        if !fields.is_empty() {
+            sections.push(Section {
+                key: "state",
+                title: "State",
+                fields,
+            });
+        }
+    }
+    ident::sections_text(&sections, "")
 }
 
 fn read_info(d: &Display) -> Result<Option<Info>, Error> {
@@ -247,10 +304,18 @@ fn read_info(d: &Display) -> Result<Option<Info>, Error> {
     }
 }
 
-fn info(d: &Display, json: bool) -> Result<(), Error> {
+fn info(d: &Display, verbose: bool, json: bool) -> Result<(), Error> {
     let info = read_info(d)?;
     if json {
-        print_json(&display_json(None, d, info.as_ref()));
+        print_json(&display_json(None, d, info.as_ref(), verbose));
+        return Ok(());
+    }
+    if verbose {
+        out!("{} ({})", name(d, info.as_ref()), d.interface);
+        out!("{}", verbose_text(d, info.as_ref()).trim_end());
+        for n in notes(d, info.as_ref()) {
+            out!("warning: {n}");
+        }
         return Ok(());
     }
     let mut entries: Vec<(&str, String)> = match &info {
@@ -280,7 +345,7 @@ fn info(d: &Display, json: bool) -> Result<(), Error> {
     Ok(())
 }
 
-fn list(displays: &[Display], json: bool) -> Result<(), Error> {
+fn list(displays: &[Display], verbose: bool, json: bool) -> Result<(), Error> {
     let mut rows = Vec::new();
     for d in displays {
         match read_info(d) {
@@ -294,7 +359,7 @@ fn list(displays: &[Display], json: bool) -> Result<(), Error> {
         let v: Vec<DisplayJson> = rows
             .iter()
             .enumerate()
-            .map(|(i, (d, info))| display_json(Some(i), d, info.as_ref()))
+            .map(|(i, (d, info))| display_json(Some(i), d, info.as_ref(), verbose))
             .collect();
         print_json(&v);
         return Ok(());
@@ -333,10 +398,7 @@ fn list(displays: &[Display], json: bool) -> Result<(), Error> {
             format!("{i}{mark}"),
             d.interface.clone(),
             d.chip.to_string(),
-            info.as_ref()
-                .map(|i| i.name())
-                .unwrap_or(d.name())
-                .to_string(),
+            name(d, info.as_ref()).to_string(),
             info.as_ref()
                 .and_then(|i| i.connector_short())
                 .unwrap_or("-")
@@ -374,6 +436,16 @@ fn list(displays: &[Display], json: bool) -> Result<(), Error> {
             .unwrap_or(&d.interface);
         for n in notes(d, info.as_ref()) {
             out!("{i}! {place}: {n}");
+        }
+    }
+    if verbose {
+        for (i, (d, info)) in rows.iter().enumerate() {
+            out!("");
+            out!("#{i} {} ({})", name(d, info.as_ref()), d.interface);
+            let text = verbose_text(d, info.as_ref());
+            for line in text.lines() {
+                out!("  {line}");
+            }
         }
     }
     Ok(())

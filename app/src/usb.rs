@@ -4,10 +4,11 @@
 //! Every MCT display on USB, whichever driver (if any) handles it.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::ident::{identify, product, Section};
 use crate::device::{
     list_devices_in, natural_cmp, short_connector, sysfs_root, Chip, Device, Error, Info, Warning,
 };
@@ -86,6 +87,8 @@ pub struct Display {
     pub route: Route,
     /// The mct sysfs directory, when bound to mct.
     pub device: Option<Device>,
+    /// The sysfs tree it was found in (`/` unless `MCT_SYSFS_ROOT` is set).
+    pub root: PathBuf,
 }
 
 impl Display {
@@ -104,15 +107,27 @@ pub struct Snapshot {
     pub display: Display,
     /// Present when bound to mct and readable.
     pub info: Option<Info>,
+    /// Product, chip, USB, driver, monitor (see `ident`).
+    pub ident: Vec<Section>,
 }
 
 impl Snapshot {
     pub fn take(display: Display) -> Snapshot {
         let info = display.device.as_ref().and_then(|d| d.info().ok());
-        Snapshot { display, info }
+        let ident = identify(&display, info.as_ref());
+        Snapshot {
+            display,
+            info,
+            ident,
+        }
     }
 
+    /// The product name when known (j5create JUA254 ...), else the USB
+    /// product string.
     pub fn name(&self) -> &str {
+        if let Some(p) = product(&self.display, self.info.as_ref()) {
+            return p.short;
+        }
         match &self.info {
             Some(i) => i.name(),
             None => self.display.name(),
@@ -241,6 +256,7 @@ pub fn discover_in(root: &Path) -> Vec<Display> {
             usb_speed: read(&dir.join("speed")).and_then(|s| speed_name(&s)),
             route,
             device,
+            root: root.to_path_buf(),
         });
     }
 
@@ -257,6 +273,7 @@ pub fn discover_in(root: &Path) -> Vec<Display> {
             usb_speed: info.as_ref().and_then(|i| i.usb_speed.clone()),
             route: Route::Kernel,
             device: Some(d),
+            root: root.to_path_buf(),
         });
     }
     out.sort_by(|a, b| natural_cmp(&a.interface, &b.interface));

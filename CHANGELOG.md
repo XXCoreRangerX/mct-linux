@@ -5,6 +5,20 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
+Unreleased
+----------
+
+- mct_t6 0.26.0: reads the board name, firmware versions and chip serial
+  (request `b0`) and shows them in sysfs (`platform`, `board`, `firmware`,
+  `serial`, `display_flags`) and the probe log line; all devices get
+  `driver_version`.
+- MCT Display Manager: names products from the board name or USB IDs
+  (j5create JUA254, Wacom DTU-1031X); lists every identifier (product, chip
+  and firmware, USB, driver, monitor EDID, the tablet's pen) in the window,
+  `mctctl info -v` / `list -v` and the About dialog's Troubleshooting report;
+  About with the project's links and credits; the tray icon waits for a tray
+  host that starts later.
+
 0.4.0 (2026-10-11): one module, mct
 -----------------------------------
 

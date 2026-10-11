@@ -23,6 +23,7 @@
  * flip. Commits never wait for USB and the newest image always wins.
  */
 
+#include <linux/ctype.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/module.h>
@@ -57,7 +58,7 @@ MODULE_PARM_DESC(all_modes, "Default for new devices: also offer modes larger th
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	25
+#define DRIVER_MINOR	26
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -265,11 +266,17 @@ struct mct_t6 {
 	int nmodes;
 	int output;			/* index the monitor is on */
 	int max_w, max_h;
+	int platform;			/* 0 "Lite", 1 "Super Lite" */
 	int pll_base_khz;		/* 48 MHz ("Lite") or 40 MHz ("Super Lite") */
+	u32 boot_code, image_code;	/* firmware versions, 0 if unknown */
+	char project[17];		/* board ("project code"), "" if unknown */
+	u8 serial[8];
+	bool has_serial;
 	int level;			/* feature level, -1 if unknown */
 	int vram_mb;
 	u32 disp_func;			/* DISP descriptor display function flags */
 	int mon_max_khz, mon_max_hfreq;	/* monitor limits from its EDID, 0 if none */
+	const struct drm_edid *last_edid; /* last EDID read, for failed reads */
 	int fmt_req;			/* T6_FMT_AUTO or the fixed kind (sysfs format) */
 	bool all_modes;			/* sysfs all_modes */
 	int frag;			/* largest bulk write: smaller on USB 2 */
@@ -1822,13 +1829,26 @@ static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector
 
 	/* some monitors answer DDC late after waking up: try a few times */
 	edid = NULL;
-	for (i = 0; i < 3 && !edid; i++) {
+	for (i = 0; i < 5 && !edid; i++) {
 		if (i)
-			msleep(100);
+			msleep(200);
 		if (!drm_dev_enter(connector->dev, &idx))
 			break;
 		edid = drm_edid_read_custom(connector, t6_read_edid_block, t6);
 		drm_dev_exit(idx);
+	}
+	/*
+	 * A monitor that stops answering DDC (asleep, showing another input)
+	 * is most likely still the same monitor: keep its modes.
+	 */
+	if (edid) {
+		drm_edid_free(t6->last_edid);
+		t6->last_edid = drm_edid_dup(edid);
+	} else if (t6->last_edid) {
+		drm_warn(connector->dev, "could not read the monitor's EDID, using the last one read\n");
+		edid = drm_edid_dup(t6->last_edid);
+	} else {
+		drm_warn(connector->dev, "could not read the monitor's EDID, offering the adapter's modes\n");
 	}
 	drm_edid_connector_update(connector, edid);
 	count = drm_edid_connector_add_modes(connector);
@@ -2123,6 +2143,48 @@ static ssize_t usb_speed_show(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RO(usb_speed);
 
+static ssize_t platform_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t6 *t6 = t6_from_dev(dev);
+
+	return t6 ? sysfs_emit(buf, "%s\n", t6->platform ? "super-lite" : "lite") : -ENODEV;
+}
+static DEVICE_ATTR_RO(platform);
+
+static ssize_t board_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t6 *t6 = t6_from_dev(dev);
+
+	return t6 ? sysfs_emit(buf, "%s\n", t6->project[0] ? t6->project : "-") : -ENODEV;
+}
+static DEVICE_ATTR_RO(board);
+
+static ssize_t firmware_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t6 *t6 = t6_from_dev(dev);
+
+	return t6 ? sysfs_emit(buf, "%08x %08x\n", t6->boot_code, t6->image_code) : -ENODEV;
+}
+static DEVICE_ATTR_RO(firmware);
+
+static ssize_t serial_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t6 *t6 = t6_from_dev(dev);
+
+	if (!t6)
+		return -ENODEV;
+	return t6->has_serial ? sysfs_emit(buf, "%8phN\n", t6->serial) : sysfs_emit(buf, "-\n");
+}
+static DEVICE_ATTR_RO(serial);
+
+static ssize_t display_flags_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t6 *t6 = t6_from_dev(dev);
+
+	return t6 ? sysfs_emit(buf, "%#x\n", t6->disp_func) : -ENODEV;
+}
+static DEVICE_ATTR_RO(display_flags);
+
 static ssize_t pixel_format_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct mct_t6 *t6 = t6_from_dev(dev);
@@ -2204,6 +2266,11 @@ static struct attribute *t6_attrs[] = {
 	&dev_attr_vram_mb.attr,
 	&dev_attr_feature_level.attr,
 	&dev_attr_usb_speed.attr,
+	&dev_attr_platform.attr,
+	&dev_attr_board.attr,
+	&dev_attr_firmware.attr,
+	&dev_attr_serial.attr,
+	&dev_attr_display_flags.attr,
 	&dev_attr_pixel_format.attr,
 	&dev_attr_format.attr,
 	&dev_attr_all_modes.attr,
@@ -2277,6 +2344,7 @@ static void t6_release(struct drm_device *dev, void *res)
 	struct mct_t6 *t6 = to_t6(to_mct(dev));
 
 	usb_free_urb(t6->ev_urb);
+	drm_edid_free(t6->last_edid);
 	kvfree(t6->img);
 	kvfree(t6->hw[0]);
 	kvfree(t6->hw[1]);
@@ -2294,11 +2362,30 @@ static int t6_read_caps(struct mct_t6 *t6)
 {
 	struct drm_device *dev = &t6->base.dev;
 	struct usb_device *udev = t6_udev(t6);
-	int platform = 1, ret;
+	int platform = 1, ret, i;
 
 	mutex_lock(&t6->io_lock);
 	if (t6_ctrl_in(t6, 0xb0, 0, 0, 4) == 4)
 		platform = t6->ctrl[0];
+	if (t6_ctrl_in(t6, 0xb0, 0, 1, 4) == 4)
+		t6->boot_code = get_unaligned_le32(t6->ctrl);
+	if (t6_ctrl_in(t6, 0xb0, 0, 2, 4) == 4)
+		t6->image_code = get_unaligned_le32(t6->ctrl);
+	ret = t6_ctrl_in(t6, 0xb0, 0, 3, 16);
+	if (ret > 0) {
+		memcpy(t6->project, t6->ctrl, ret);
+		t6->project[ret] = '\0';
+		for (i = 0; t6->project[i]; i++) {
+			if (!isprint(t6->project[i])) {
+				t6->project[i] = '\0';
+				break;
+			}
+		}
+	}
+	if (t6_ctrl_in(t6, 0xb0, 0, 5, 8) == 8) {
+		memcpy(t6->serial, t6->ctrl, 8);
+		t6->has_serial = memchr_inv(t6->serial, 0, 8) && memchr_inv(t6->serial, 0xff, 8);
+	}
 	ret = t6_ctrl_in(t6, 0xb0, 0, 4, 4);
 	t6->level = ret == 4 ? get_unaligned_le32(t6->ctrl) : -1;
 	ret = t6_ctrl_in(t6, 0x88, 0, 0, 1);
@@ -2307,11 +2394,13 @@ static int t6_read_caps(struct mct_t6 *t6)
 	t6->disp_func = ret >= 0x58 ? get_unaligned_le32(t6->ctrl + 0x54) : 0;
 	mutex_unlock(&t6->io_lock);
 
+	t6->platform = platform;
 	t6->pll_base_khz = platform == 0 ? 48000 : 40000;
 	t6->usb2 = udev->speed < USB_SPEED_SUPER;
 	t6->frag = t6->usb2 ? T6_FRAG_HS : T6_FRAG;
-	drm_info(dev, "%s, feature level %d, %d MiB, display flags %#x%s\n",
-		 platform ? "Super Lite" : "Lite", t6->level, t6->vram_mb, t6->disp_func,
+	drm_info(dev, "%s, board %s, firmware %08x/%08x, feature level %d, %d MiB, display flags %#x%s\n",
+		 platform ? "Super Lite" : "Lite", t6->project[0] ? t6->project : "?",
+		 t6->boot_code, t6->image_code, t6->level, t6->vram_mb, t6->disp_func,
 		 t6->usb2 ? ", USB 2 link: modes up to 2048 wide" : "");
 
 	if (t6->level >= 0 && t6->level < 3) {

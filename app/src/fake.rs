@@ -61,11 +61,18 @@ pub fn add_usb(
     let dir = usb_dir(root, dev);
     let intf = format!("{dev}:1.0");
     fs::create_dir_all(dir.join(&intf))?;
+    let (bus, _) = dev.split_once('-').unwrap_or(("1", ""));
     for (k, v) in [
         ("idVendor", "0711"),
         ("idProduct", product_id),
+        ("manufacturer", "MCT Corp."),
         ("product", product),
         ("speed", speed),
+        ("bcdDevice", "1010"),
+        ("version", " 3.20"),
+        ("busnum", bus),
+        ("devnum", "5"),
+        ("bMaxPower", "248mA"),
     ] {
         put(&dir, k, v)?;
     }
@@ -173,6 +180,12 @@ pub const T6_A_FILES: &[(&str, &str)] = &[
     ("feature_level", "6"),
     ("vram_mb", "256"),
     ("usb_speed", "usb3"),
+    ("platform", "super-lite"),
+    ("board", "JUA254H"),
+    ("firmware", "16062899 17091401"),
+    ("serial", "-"),
+    ("display_flags", "0x4"),
+    ("driver_version", "mct_t6 0.26.0"),
     ("updates", "1200"),
     ("bytes", "3500000000"),
     ("errors", "0"),

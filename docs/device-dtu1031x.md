@@ -14,6 +14,11 @@ before mct (`Driver=(none)`), `bcdDevice 0.01`, no serial. `0x85/0x06` unused.
 
 ## Internals (iFixit teardown)
 
+From https://www.ifixit.com/Guide/Wacom+DTU-1031X+Disassembly/166191 (device
+page https://www.ifixit.com/Device/Wacom_DTU-1031X, data sheet
+https://documents.cdn.ifixit.com/cYPLspRSspiWE5YP.pdf). The guide's author
+found the controller damaged in all three of their units.
+
 - MCT Trigger II **T2-285A** (USB->VGA) + EtronTech 128 MB DDR1
 - Realtek **RTD2280DLW** VGA->LVDS (panel path; shows Wacom logo with no signal)
 - Wacom W8008 pen controller, SMSC USB2413 hub, MK60D X256ZV10

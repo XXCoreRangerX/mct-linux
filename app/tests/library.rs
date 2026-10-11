@@ -325,10 +325,10 @@ fn tray_menu() {
             _ => None,
         })
         .collect();
-    assert_eq!(text[0], "T6 USB Station: HDMI-A-3");
+    assert_eq!(text[0], "j5create JUA254: HDMI-A-3");
     assert!(text.contains(&"Mode: 3440x1440@60".to_string()));
     assert!(text.contains(&"Format: auto (RGB24)".to_string()));
-    assert!(text.contains(&"DTU-1031X: USB-1".to_string()));
+    assert!(text.contains(&"Wacom DTU-1031X: USB-1".to_string()));
     assert!(text.contains(&"Brightness: 5 of 9".to_string()));
     assert!(text.contains(&"USB 2 link".to_string()));
     assert!(text.contains(&"Transfer errors: 2".to_string()));
@@ -366,11 +366,48 @@ fn tray_menu() {
         .map(Snapshot::take)
         .collect();
     let items = menu::items(&snaps, &[]);
-    assert!(items.contains(&Item::Header("DTU-1031X: 3-1:1.0".into())));
+    assert!(items.contains(&Item::Header("Wacom DTU-1031X: 3-1:1.0".into())));
     assert!(items.contains(&Item::Note("Not bound".into())));
     assert!(!items
         .iter()
         .any(|i| matches!(i, Item::Lossy { device: 1, .. })));
 
     assert_eq!(menu::items(&[], &[]), vec![Item::Empty]);
+}
+
+#[test]
+fn identity() {
+    let t = tree();
+    let snaps: Vec<Snapshot> = discover_in(t.path())
+        .into_iter()
+        .map(Snapshot::take)
+        .collect();
+    let value = |s: &Snapshot, key: &str| {
+        s.ident
+            .iter()
+            .flat_map(|sec| sec.fields.iter())
+            .find(|f| f.key == key)
+            .map(|f| f.value.clone())
+    };
+    let a = snaps.iter().find(|s| s.display.interface == T6_A).unwrap();
+    assert_eq!(a.name(), "j5create JUA254");
+    assert_eq!(
+        value(a, "product_name").as_deref(),
+        Some("j5create JUA254 USB 3.0 to HDMI Display Adapter")
+    );
+    assert_eq!(value(a, "board").as_deref(), Some("JUA254H"));
+    assert_eq!(value(a, "firmware_image").as_deref(), Some("17091401"));
+    assert_eq!(value(a, "firmware_boot").as_deref(), Some("16062899"));
+    assert_eq!(value(a, "chip_serial"), None);
+    assert_eq!(
+        value(a, "usb_id").as_deref(),
+        Some("0711:5600 (Magic Control Technology Corp.)")
+    );
+    assert_eq!(value(a, "usb_release").as_deref(), Some("10.10"));
+    assert_eq!(value(a, "driver_version").as_deref(), Some("mct_t6 0.26.0"));
+    // an older driver without the board file: the USB product string
+    let b = snaps.iter().find(|s| s.display.interface == T6_B).unwrap();
+    assert_eq!(b.name(), "T6 USB Station");
+    assert_eq!(value(b, "product_name"), None);
+    assert!(mct::ident::report(&snaps).contains("Board:"));
 }
