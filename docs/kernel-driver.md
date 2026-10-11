@@ -104,6 +104,60 @@ stay lossless. A first version that went lossy whenever more than a third of the
 screen changed was lossy for 83% of updates and showed "settling" shadows.
 Artifacts: short horizontal streaks during heavy motion (the RLE is row-wise).
 
+## Performance research backlog
+
+Keep proposed work distinct from the measurements above. In priority order:
+
+1. Frame-latency histogram and payload-size/over-budget counters (0.3.18,
+   not yet measured live). `mct_t2_stats` gained two lines: `over budget`
+   counts updates whose encoded payload exceeded ~600 KB, with the largest
+   payload seen, and `latency ms` is a histogram of the time from the first
+   damage of an update to its flip (<8, <16, <33, <50, <100, >=100 ms).
+2. Investigate adaptive lossy encoding: choose the smallest tolerance that
+   brings a large update near the device's roughly 600 KB-per-60-Hz-frame
+   budget, instead of applying one fixed tolerance. Benchmark its extra encode
+   cost and inspect gradients and motion before considering it for the driver.
+   Do not revive the earlier damage-size/lossy-streak heuristic unchanged; it
+   produced settling shadows and horizontal/CRT-like artifacts.
+
+   Offline numbers from a Python model of the encoder (full 1024x600 frame,
+   runs absorb values within +-tol of the run's first value; payload / PSNR):
+
+   | image    | tol 0        | 1           | 2           | 4           | 8           |
+   |----------|--------------|-------------|-------------|-------------|-------------|
+   | photo    | 817K / exact | 599K / 54dB | 519K / 49dB | 443K / 44dB | 294K / 36dB |
+   | gradient | 737K / exact | 374K / 53dB | 253K / 48dB | 156K / 42dB | 91K / 36dB  |
+   | desktop  | 75K / exact  | 72K         | 70K         | 68K         | 64K         |
+   | noise    | 1799K        | 1799K       | 1799K       | 1799K       | 1799K       |
+
+   So the smallest tolerance that fits is usually 1 or 2, well below the
+   fixed 4, and loses far less (54 or 49 dB against 44). Noise-like content
+   does not compress at any tolerance, so a search should give up early there
+   and keep the lossless encoding. Desktop content is always within budget.
+   Each tolerance tried costs one more encode (~2.5 ms full screen), so try
+   at most two, e.g. 2 then N, and not a full search.
+
+   Branch `adaptive-lossy` (0.3.19, not yet tested live) picks the tolerance
+   from how far the lossless encoding overshoots, with no extra encode: up to
+   4/3 of the budget uses 1, up to twice the budget uses 2, anything more the
+   `lossy` value, which becomes a maximum. The photo (817K) gets 2 and fits at
+   519K, the gradient (737K) gets 1 and fits at 374K. `lossy updates` in
+   `mct_t2_stats` now counts updates per tolerance used.
+3. Evaluate cost-based damage-band merging. Estimate the encoded/USB cost of
+   spanning unchanged rows rather than always using the fixed 16-row gap. This
+   may help scattered desktop damage, although measured desktop traffic is
+   already low, so the expected benefit is modest.
+4. If useful after the above, visually validate intermediate USB payload sizes
+   such as 32 or 64 KiB. The measured throughput gain over the vendor's 19968 B
+   chunks is only about 3%, while very large writes have corrupted frames.
+5. Treat the DLL's undocumented transfer/stretch operations as longer-term
+   reverse-engineering candidates for hardware-assisted moves or scaling, not
+   as a known optimization.
+
+Do not prioritize asynchronous URBs, front-buffer writes, or diff-loop
+micro-optimization: queued URBs were already slower, front-buffer updates risk
+tearing, and measured diff time is negligible compared with USB transfer time.
+
 ## Features added 2026-09-24 (driver 0.2)
 
 - **Trimmed init**: 78 transfers, ~1 s from cold (see `docs/init-sequence.md`), black
@@ -143,6 +197,35 @@ a desktop brightness slider, or brightness keys.
 `mct_t2` and loads the module of the current system generation. This needs a
 compositor that closes removed DRM devices (niri needs `niriFix`).
 
+Since 0.3.13, probe and resume also recover a T2 left halfway through a
+framebuffer payload by an interrupted older driver. The driver drains stale
+replies, detects the stalled command parser with a register-read timeout,
+pads the unfinished payload with zeros, and then runs the normal init. It
+checks `feb0=40` and the pixel-clock register `fcf6=01` afterward and retries
+the init once if either value is wrong.
+
+`tools/t2_recovery_test.py` repeats this: it unbinds the driver, sends a
+full-screen noise frame header plus a random 10-90% of its payload from
+userspace, binds again and checks the log and the connector. It always
+rebinds on exit. Soak results on 0.3.13: 36 of 37 interrupted-frame cycles
+recovered, and 8 manual padding replays from userspace saw no timeouts.
+The one failure was a padding chunk that itself timed out: probe gave up with
+-110 and the tablet needed a manual rebind. 0.3.14 treats a timed-out padding
+chunk like a missing reply and keeps going, but its 15 s deadline was still
+too short (third cycle of its soak).
+
+Why chunks stall (verified 2026-09-25 from userspace): the zeros replace the
+lost rest of the frame, and each zero decodes to one pixel. Unless the lost
+part had no RLE runs at all (pure noise), the padded frame ends with the wrong
+pixel count. The firmware then stops taking data and answers the queued read
+only after an internal timeout of about 15-30 s. Padding with runs
+(`30 fa 00`) instead of zeros stalls the same way, and sending exactly the
+missing byte count still takes ~14 s. A USB reset while it is stuck is worse:
+the chip ignores control requests too, enumeration fails, and only a port
+power cycle or a replug brings it back. So 0.3.17 simply waits, with a 45 s
+deadline. This only happens after a driver was stopped mid-frame; normal
+frames of any length are unaffected.
+
 ## Suspend / resume
 
 Verified 2026-09-24 (deep suspend, driver 0.3.7): the USB core resets the tablet on
@@ -158,6 +241,46 @@ power-up (seen 2026-09-24: 20 times `520d` over three days, then `5209`, `5209`,
 unchanged; the low bits are decided at power-up. MCT's Windows INF maps both
 IDs to the same driver, and so does `mct_t2`. The pen function can enumerate
 after the display, so the backlight looks the pen up on each access.
+
+## Development roadmap
+
+Only the Wacom DTU-1031X is presently available for live testing. Make its
+driver reliable and keep unverified family support out of the USB ID table;
+an INF entry or a shared DLL does not prove that another product has compatible
+timings, memory layout or initialization.
+
+Near-term work, in recommended order:
+
+1. (0.3.14 recovery soak: see "Updating the module without a reboot".)
+   Soak-test through ordinary use, repeated module reloads, deliberately
+   interrupted frames, unplug/replug, suspend/resume, DPMS, brightness, cursor,
+   console and optional lossy video. Record failures with the kernel log and
+   `mct_t2_stats` rather than adding recovery guesses.
+2. Done: `tools/t2_recovery_test.py` replaces the scratch reproducer
+   `tools/desync_lab.py`, which stays uncommitted.
+3. Counters added in 0.3.18 (see the performance backlog). Measure with
+   them, then investigate adaptive lossy encoding as described above.
+4. Investigate command `0x0a` as a possible 256 x RGB hardware gamma table.
+   Its 768-byte size is suggestive, not proof. Test controlled ramps on the
+   real panel first; expose a standard DRM gamma LUT only if its semantics and
+   persistence across flips, DPMS and resume are verified.
+5. Gradually isolate known DTU-specific constants (USB IDs, mode/timings,
+   rotation, framebuffer addresses and init sequence) behind a device profile,
+   but avoid a large common-family abstraction until a second device reveals
+   the actual variation.
+
+For each additional MCT device, collect USB descriptors and endpoints, chip
+markings, resolution, Windows INF mapping, an initialization USB capture,
+EDID/device-info replies, pre/post-init register sweeps, and verified frame,
+cursor, power and brightness behavior. Confirm protocol framing on hardware
+before selecting a T2 profile. Other Trigger generations may need separate
+drivers with only small shared helpers rather than one monolithic driver.
+
+Pen input remains the responsibility of Linux's Wacom/HID driver. Arbitrary
+modes, RGB565, front-buffer writes and more asynchronous USB work are not
+current priorities: the panel has one native mode, modern compositors use
+XRGB8888, front-buffer updates risk tearing, and queued URBs have already been
+measured without a performance gain.
 
 ## Known issues / TODO
 

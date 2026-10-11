@@ -62,13 +62,13 @@
 
 static int lossy;
 module_param(lossy, int, 0644);
-MODULE_PARM_DESC(lossy, "Lossy tolerance (1-8) for updates too big to send losslessly within a frame, refined to lossless once motion stops; 0 = always lossless (default)");
+MODULE_PARM_DESC(lossy, "Maximum lossy tolerance (1-8) for updates too big to send losslessly within a frame, refined to lossless once motion stops; 0 = always lossless (default)");
 
 #define DRIVER_NAME	"mct_t2"
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	12
+#define DRIVER_PATCH	19
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -115,7 +115,10 @@ struct mct_t2 {
 	bool hw_valid[2];
 
 	struct {			/* debugfs statistics */
+		u64 lossy_tol[9];	/* lossy updates by highest tolerance used */
 		u64 updates, lossy_updates, rects, px_damage, px_sent, bytes;
+		u64 over_budget, max_payload;	/* encoded bytes per update */
+		u64 latency[6];			/* damage to flip: <8 <16 <33 <50 <100 >=100 ms */
 		u64 ns_diff, ns_encode, ns_usb;	/* time spent per stage */
 		ktime_t since;
 	} stats;
@@ -131,6 +134,7 @@ struct mct_t2 {
 		struct work_struct work;
 		struct mutex lock;	/* protects shadow + dirty + refine */
 		int refine;		/* lossless updates still owed after lossy ones */
+		ktime_t dirty_since;	/* oldest damage not yet sent, 0 if none */
 		bool dirty;
 	} upd;
 
@@ -295,9 +299,27 @@ static int t2_encode(struct mct_t2 *t2, u8 *src, int dx, int dy, int w, int h, i
 }
 
 /*
- * tol > 0 allows lossy encoding, used only if the lossless result would push
- * this update's total (*sent) past the frame budget. Returns the tolerance
- * actually used through *used.
+ * Smallest tolerance likely to bring an update of need bytes into the frame
+ * budget. Measured on full frames: tol 1 saves 25-50%, tol 2 35-65%, so the
+ * picture stays close to lossless unless the update is far over budget.
+ */
+static int t2_pick_tol(long need, int max)
+{
+	int tol;
+
+	if (need <= T2_FRAME_BUDGET * 4 / 3)
+		tol = 1;
+	else if (need <= T2_FRAME_BUDGET * 2)
+		tol = 2;
+	else
+		tol = max;
+	return min(tol, max);
+}
+
+/*
+ * tol > 0 allows lossy encoding up to that tolerance, used only if the
+ * lossless result would push this update's total (*sent) past the frame
+ * budget. Returns the highest tolerance actually used through *used.
  */
 static int t2_send_rect(struct mct_t2 *t2, u8 *src, u32 base, int dx, int dy, int w, int h,
 			int tol, long *sent, int *used)
@@ -307,8 +329,9 @@ static int t2_send_rect(struct mct_t2 *t2, u8 *src, u32 base, int dx, int dy, in
 	int len = t2_encode(t2, src, dx, dy, w, h, 0);
 
 	if (tol && *sent + len > T2_FRAME_BUDGET) {
+		tol = t2_pick_tol(*sent + len, tol);
 		len = t2_encode(t2, src, dx, dy, w, h, tol);
-		*used = tol;
+		*used = max(*used, tol);
 	}
 	*sent += len;
 	ktime_t t1 = ktime_get();
@@ -453,8 +476,13 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 		return ret;
 
 	t2->stats.updates++;
-	if (used)
+	if (used) {
 		t2->stats.lossy_updates++;
+		t2->stats.lossy_tol[used]++;
+	}
+	if (sent > T2_FRAME_BUDGET)
+		t2->stats.over_budget++;
+	t2->stats.max_payload = max_t(u64, t2->stats.max_payload, sent);
 	*went_lossy = used;
 	t2->front = base;
 	tmp = t2->hw[back];
@@ -508,7 +536,7 @@ static unsigned int t2_pace_us(u8 ep, const u8 *data)
 	return 20000;
 }
 
-static int t2_hw_init(struct mct_t2 *t2)
+static int t2_hw_init_once(struct mct_t2 *t2)
 {
 	const u8 *p = mct_t2_init_seq, *end = p + sizeof(mct_t2_init_seq);
 	int n = 0, ret;
@@ -578,6 +606,150 @@ err:
 	mutex_unlock(&t2->io_lock);
 	drm_err(&t2->dev, "init failed at transfer %d: %d\n", n, ret);
 	return ret;
+}
+
+/*
+ * Recovery for a device left in the middle of a command, e.g. when a
+ * previous driver instance stopped halfway through a frame's payload.
+ * The firmware handles one command at a time, so while it waits for the
+ * rest of a payload it does not answer register reads. Feed it zeros until
+ * a pending read is answered; any overshoot is interpreted as commands, but
+ * the init sequence that follows puts the frame parser back in step.
+ */
+#define T2_RESYNC_MAX	(2 * 1024 * 1024)	/* longer than any payload */
+#define T2_RESYNC_READ_MS	200
+#define T2_RESYNC_POLL_MS	20
+/*
+ * Zero padding rarely matches the pixel count the cut frame still owed (any
+ * RLE run in the lost part breaks it), and the firmware then sits in an
+ * internal timeout of about 30 s before it takes commands again. A USB reset
+ * doesn't help: the stuck chip stops answering control requests as well.
+ */
+#define T2_RESYNC_DEADLINE_MS	45000	/* give up and ask for a replug after this */
+
+/* read a register with a short timeout; io_lock held */
+static int t2_read_reg(struct mct_t2 *t2, u16 reg, u8 *val, int timeout_ms)
+{
+	struct usb_device *udev = t2_udev(t2);
+	const u8 cmd[3] = { 0x05, reg & 0xff, reg >> 8 };
+	int ret, done;
+
+	ret = t2_out(t2, T2_EP_CMD, cmd, sizeof(cmd));
+	if (ret)
+		return ret;
+	ret = usb_bulk_msg(udev, usb_rcvbulkpipe(udev, T2_EP_IN), t2->bounce, 64, &done,
+			   timeout_ms);
+	if (!ret && done < 1)
+		ret = -EIO;
+	if (!ret)
+		*val = t2->bounce[0];
+	return ret;
+}
+
+/* discard replies left over from earlier commands; io_lock held */
+static void t2_drain_replies(struct mct_t2 *t2)
+{
+	struct usb_device *udev = t2_udev(t2);
+	int done, i;
+
+	for (i = 0; i < 16; i++)
+		if (usb_bulk_msg(udev, usb_rcvbulkpipe(udev, T2_EP_IN), t2->bounce, 512, &done, 50))
+			break;
+}
+
+static int t2_resync(struct mct_t2 *t2)
+{
+	struct usb_device *udev = t2_udev(t2);
+	ktime_t deadline;
+	int ret, sent, done;
+	u8 val;
+
+	mutex_lock(&t2->io_lock);
+	t2_drain_replies(t2);
+	ret = t2_read_reg(t2, 0xfeb0, &val, T2_RESYNC_READ_MS);
+	if (!ret)
+		goto out;
+	if (ret != -ETIMEDOUT)
+		goto out;
+
+	drm_warn(&t2->dev, "device busy in the middle of a command, completing it (may take 30 s)\n");
+	deadline = ktime_add_ms(ktime_get(), T2_RESYNC_DEADLINE_MS);
+	for (sent = 0; sent < T2_RESYNC_MAX && ktime_before(ktime_get(), deadline);
+	     sent += T2_CHUNK) {
+		ret = t2_out(t2, T2_EP_FB, NULL, T2_CHUNK);
+		/*
+		 * A chunk can stall once the payload has completed inside it: the
+		 * firmware answers the queued read and then parses the rest of the
+		 * zeros as commands. Look for the reply before giving up; a slow
+		 * chunk alone is not a failure.
+		 */
+		if (ret && ret != -ETIMEDOUT)
+			goto out;
+		/* the read queued above is answered once the payload is complete */
+		ret = usb_bulk_msg(udev, usb_rcvbulkpipe(udev, T2_EP_IN), t2->bounce, 64, &done,
+				   ret ? T2_TIMEOUT : T2_RESYNC_POLL_MS);
+		if (!ret && done >= 1)
+			goto recovered;
+		if (!ret)
+			ret = -EIO;
+		if (ret != -ETIMEDOUT)
+			goto out;
+	}
+	drm_err(&t2->dev, "device does not respond; unplug it to reset\n");
+	ret = -EIO;
+	goto out;
+
+recovered:
+	drm_info(&t2->dev, "device command parser recovered after %d bytes\n",
+		 sent + T2_CHUNK);
+	t2_drain_replies(t2);
+	ret = 0;
+out:
+	mutex_unlock(&t2->io_lock);
+	return ret;
+}
+
+/* registers the init sequence leaves at known values */
+static bool t2_init_took(struct mct_t2 *t2)
+{
+	u8 a = 0, b = 0;
+	int ret_a, ret_b = -EIO;
+
+	mutex_lock(&t2->io_lock);
+	t2_drain_replies(t2);
+	ret_a = t2_read_reg(t2, 0xfeb0, &a, T2_TIMEOUT);
+	if (!ret_a)
+		ret_b = t2_read_reg(t2, T2_REG_PLL_EN, &b, T2_TIMEOUT);
+	mutex_unlock(&t2->io_lock);
+	if (ret_a || ret_b) {
+		drm_warn(&t2->dev, "init check read failed: %d/%d\n", ret_a, ret_b);
+		return false;
+	}
+	if (a != 0x40 || b != 0x01) {
+		drm_warn(&t2->dev, "init check failed (feb0=%02x fcf6=%02x)\n", a, b);
+		return false;
+	}
+	return true;
+}
+
+static int t2_hw_init(struct mct_t2 *t2)
+{
+	int ret, tries;
+
+	ret = t2_resync(t2);
+	if (ret)
+		return ret;
+	for (tries = 0; tries < 2; tries++) {
+		ret = t2_hw_init_once(t2);
+		if (ret)
+			return ret;
+		if (t2_init_took(t2))
+			return 0;
+		if (!tries)
+			drm_warn(&t2->dev, "retrying device init\n");
+	}
+	drm_err(&t2->dev, "device init did not take\n");
+	return -EIO;
 }
 
 /* ------------------------------------------------------------------ */
@@ -717,7 +889,8 @@ static void t2_update_work(struct work_struct *work)
 {
 	struct mct_t2 *t2 = container_of(work, struct mct_t2, upd.work);
 	bool refine, went_lossy = false;
-	int idx, ret;
+	ktime_t damaged;
+	int idx, ret = -ENODEV;
 
 	mutex_lock(&t2->upd.lock);
 	if (!t2->upd.dirty) {
@@ -725,6 +898,8 @@ static void t2_update_work(struct work_struct *work)
 		return;
 	}
 	t2->upd.dirty = false;
+	damaged = t2->upd.dirty_since;
+	t2->upd.dirty_since = 0;
 	refine = t2->upd.refine > 0 && !delayed_work_pending(&t2->refine_work);
 	if (refine && --t2->upd.refine) {
 		t2->upd.dirty = true;	/* second pass for the other buffer */
@@ -742,6 +917,16 @@ static void t2_update_work(struct work_struct *work)
 		drm_dev_exit(idx);
 	}
 	mutex_unlock(&t2->io_lock);
+
+	if (!ret && damaged) {
+		static const int bounds[] = { 8, 16, 33, 50, 100 };
+		s64 ms = ktime_ms_delta(ktime_get(), damaged);
+		int b = 0;
+
+		while (b < ARRAY_SIZE(bounds) && ms >= bounds[b])
+			b++;
+		t2->stats.latency[b]++;
+	}
 
 	if (went_lossy) {
 		/* two lossless passes once motion stops: one per buffer */
@@ -777,6 +962,8 @@ static void t2_mark_dirty(struct mct_t2 *t2, struct drm_framebuffer *fb,
 		       src + y * fb->pitches[0] + dirty->x1 * 4,
 		       drm_rect_width(dirty) * 4);
 	t2->upd.dirty = true;
+	if (!t2->upd.dirty_since)
+		t2->upd.dirty_since = ktime_get();
 	mutex_unlock(&t2->upd.lock);
 
 	queue_work(system_long_wq, &t2->upd.work);
@@ -1128,10 +1315,15 @@ static int t2_stats_show(struct seq_file *m, void *data)
 	struct mct_t2 *t2 = to_t2(entry->dev);
 	u64 ms = max_t(u64, ktime_ms_delta(ktime_get(), t2->stats.since), 1);
 	u64 full = (u64)T2_WIDTH * T2_HEIGHT;
+	int i;
 
 	seq_printf(m, "seconds          %llu\n", ms / 1000);
 	seq_printf(m, "updates          %llu\n", t2->stats.updates);
-	seq_printf(m, "lossy updates    %llu\n", t2->stats.lossy_updates);
+	seq_printf(m, "lossy updates    %llu (by tolerance:", t2->stats.lossy_updates);
+	for (i = 1; i < ARRAY_SIZE(t2->stats.lossy_tol); i++)
+		if (t2->stats.lossy_tol[i])
+			seq_printf(m, " %d:%llu", i, t2->stats.lossy_tol[i]);
+	seq_puts(m, ")\n");
 	seq_printf(m, "rects            %llu\n", t2->stats.rects);
 	seq_printf(m, "pixels damaged   %llu (%llu full frames)\n",
 		   t2->stats.px_damage, div64_u64(t2->stats.px_damage, full));
@@ -1146,6 +1338,11 @@ static int t2_stats_show(struct seq_file *m, void *data)
 		   div64_u64(t2->stats.ns_usb, 1000000));
 	seq_printf(m, "usb MB/s while busy %llu\n",
 		   div64_u64(t2->stats.bytes * 1000, max_t(u64, t2->stats.ns_usb, 1)));
+	seq_printf(m, "over budget      %llu updates (max payload %llu KB)\n",
+		   t2->stats.over_budget, div64_u64(t2->stats.max_payload, 1024));
+	seq_printf(m, "latency ms       <8:%llu <16:%llu <33:%llu <50:%llu <100:%llu >=100:%llu\n",
+		   t2->stats.latency[0], t2->stats.latency[1], t2->stats.latency[2],
+		   t2->stats.latency[3], t2->stats.latency[4], t2->stats.latency[5]);
 	return 0;
 }
 

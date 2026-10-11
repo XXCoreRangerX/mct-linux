@@ -6,8 +6,9 @@ Source: cyrozap's [Protocol-T2.md](https://github.com/cyrozap/mct-usb-display-ad
 
 Commands go to EP `0x03` (control-ish) or `0x02` (framebuffer); replies on
 EP `0x81`. EP `0x04` OUT: `0x05` var-len list (MC8032 10 B, see init doc).
-EP `0x85/0x06`: unused. **OUT/IN are paired**: after a command with a reply,
-read `0x81` before the next OUT or the firmware stalls. Pace ~50 ms.
+EP `0x85/0x06`: not used by the Windows driver; live EP85 polls returned no
+data either idle or mid-frame. **OUT/IN are paired**: after a command with a
+reply, read `0x81` before the next OUT or the firmware stalls. Pace ~50 ms.
 
 ## EP `0x03` commands
 
@@ -21,8 +22,33 @@ read `0x81` before the next OUT or the firmware stalls. Pace ~50 ms.
 | `0x0a` | `0a` + 768 zeros (769 B) | none | clear/reset |
 | `0x1b` | `1b8000a000800000` (8 B) | 512 zeros (idle) | EDID query (zeros until inited?) |
 | `0x1d` | `1d8000ae00000100` (8 B) | 512 B | **device info**: `55aa00ff...`, `07115200`, `MCT`, `DTU-1031X`, **EDID at +0x80** |
+| `0x29` | `29000000` (4 B) | 512 B, first byte used | `CT2Hal::ReadMC8032P1`; live reply starts `0f 00...` |
 | `0x90` | `90 040400 00061a80` (8 B), `90 030100 00` / `90 080100 02` (5 B) | none | mode/pipe setup variants |
 | `0x91` | `91 <arg1> <arg16>` (4 B) | 512 B | ID-ROM query; driver uses `91 00 0200` -> reply starts `03 02 00 00...` |
+
+### Detecting an interrupted framebuffer payload (verified 2026-09-25)
+
+Leaving a `0x13` payload incomplete reproduces the garbage seen after some
+driver swaps. While the EP2 parser waits for the declared compressed length,
+EP3 commands are accepted by USB but not processed: both a `0x05` register
+read and the vendor DLL's `0x29` MC8032-P1 read time out. Their replies appear
+only after the missing EP2 payload bytes arrive. This timeout is the only
+known observable indication that the frame stream is out of step; there is no
+known independently readable parser-status register.
+
+- Two complete idle sweeps of banks FB/FC/FE differed only at volatile
+  `fc57` (`00`/`10`). A stuck-state sweep cannot proceed because its first
+  `0x05` reply is held behind the unfinished payload.
+- Five 100 ms EP85 reads returned no data both idle and mid-payload. The full
+  Windows init capture likewise has no EP6/EP85 traffic; all replies use EP81.
+- Static analysis found no video-memory readback command in `T2Indisp.dll`.
+  It did reveal `0x29`, which is not present in the captured init, but live
+  testing showed that it is serialized behind EP2 just like `0x05`.
+- For a test with 924672 payload bytes missing, a queued `0x05` reply arrived
+  after 938496 bytes of zero padding (47 vendor-sized 19968-byte transfers).
+  Overshoot can be parsed as new commands and garble the following frame, so
+  recovery must drain stale replies, run the normal init to realign the
+  parser, and verify known post-init register values.
 
 ## EP `0x02` framebuffer
 
