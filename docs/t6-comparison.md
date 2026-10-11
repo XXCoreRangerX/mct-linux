@@ -105,7 +105,7 @@ mct_t2's mould; the code is separate (mct_t2.c ~1360 lines, mct_t6.c ~2180).
   and multi-monitor docks. A JPEG mode would be a separate userspace
   project (an EVDI daemon like t2d), not part of mct_t6.
 
-## Feature table (2026-10-11, mct_t6 0.20.0)
+## Feature table (2026-10-11, mct_t6 0.21.0)
 
 | | mct (Linux) | MCT Windows | MCT macOS | MCT Ubuntu (EVDI) |
 |---|---|---|---|---|
@@ -114,7 +114,7 @@ mct_t2's mould; the code is separate (mct_t2.c ~1360 lines, mct_t6.c ~2180).
 | Sizes on the 5600 | up to 3440x1440@60, 3840x2160@30 | EDID modes (60 Hz) | EDID modes, CVT timings | the device table (2048x1152) |
 | Monitors it can't fully drive | reduced blanking, lower rate, 1440p for 4K | | out-of-range fixes | |
 | Partial updates | raw changed rows, tear-free (3 buffers) | JPEG rectangles | JPEG rectangles | JPEG rectangles |
-| Hardware cursor | 64 / 96 px, negative positions | 64 / 96 / 128 px | yes | yes |
+| Hardware cursor | 64 / 96 / 128 px, negative positions | 64 / 96 / 128 px | yes | yes |
 | Gamma | software, any feature level | hardware, level 8+ | | |
 | Rotation | compositor | the OS | the OS | hardware (0x1f, not on the 5600) |
 | Hotplug | events, debounced, re-set mode | events, debounced | events | events, re-init |

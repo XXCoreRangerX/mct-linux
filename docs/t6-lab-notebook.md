@@ -728,3 +728,8 @@ and dark backgrounds, Lab dE against the original):
 2x2 block and free luma per pixel, the plain average already minimises the
 RGB error; the other methods move the error around. The fringes at coloured
 text are NV12 itself. No driver change; full colour at 3440x1440 means 55 Hz.
+
+**128 px cursor (0.21.0):** `t6_cursor_test.py 128` with the upload stopped at
+0x10000 bytes (16-bit offset; the last two pixels never sent) shows a clean
+128 px cursor. Driver: the smallest of 64 / 96 / 128 that holds everything
+visible, 128 cut at 0x10000. Live: pointer, shapes, edges and the tablet fine.
