@@ -234,6 +234,21 @@ file:
 - [`docs/history/`](docs/history): the lab notebooks
 - [`docs/roadmap.md`](docs/roadmap.md): where things stand
 
+## How this was made
+
+This driver was developed with AI coding agents (Anthropic's Claude, through
+Claude Code). They sped up the slow parts of reverse engineering and
+driver work: reading disassembly and USB captures, writing test scripts,
+drafting code and documentation, and chasing down bugs.
+
+Every step was directed, reviewed and tested by a human
+([Filip Piękoś](https://github.com/XXCoreRangerX)) on real hardware: the
+DTU-1031X and the JUA254 with several monitors. Nothing went into the
+driver on an agent's word alone: each protocol finding was checked on the
+devices, and each feature was tried live, watching the screen. The lab
+notes in [`docs/history/`](docs/history) record those tests, including the
+ones that failed.
+
 ## Credits
 
 - [cyrozap's notes](https://github.com/cyrozap/mct-usb-display-adapter-re)
