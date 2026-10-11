@@ -669,3 +669,10 @@ Live through the driver (`tools/t6_modes.sh`): 3840x2160@30 and back to
   recovery attempt (with `40 14`) restarted it.
 So `40 14` is the right last resort after a real transfer error (the
 vendor drivers do the same), at the price of ~3 s without picture.
+
+Hotplug with debounce (0.19.0): monitor power button off/on, picture back
+at the same mode, 3 change events, no errors. **Frame-done events came back
+after the 0x14 restarts:** 1712 of them in the stats, where every run
+before had 0 with the same frame recipe. So something in the chip's state
+after a restart (or after the first cancel) makes it report frame done;
+to be looked into (pacing, buffer reuse).
