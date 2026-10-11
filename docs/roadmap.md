@@ -48,8 +48,8 @@ Later:
   column-aware tolerance).
 - **T6 above 1080p:** done (0.18.0): 2560x1440@60 in 4:4:4, 3440x1440@60
   with reduced blanking in NV12, 3440x1440@50 in 4:4:4. The monitor's own
-  3440x1440@60 timing (319.75 MHz) stays off. Open: memory use (buffers are
-  sized for 3440x1600, ~110 MB of vmalloc; allocate per mode instead).
+  3440x1440@60 timing (319.75 MHz) stays off. Buffers are sized per mode
+  (~41 MB at 1080p, ~99 MB at 3440x1440). Next: 4K30 (3840x2160, NV12).
 - **T6 JPEG** for full-screen motion above the USB limit: not in the kernel
   driver (no in-kernel encoder, would not be accepted upstream). Possible as a
   userspace program (EVDI + encoder, like t2d), optionally using a GPU JPEG
