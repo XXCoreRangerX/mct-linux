@@ -237,7 +237,7 @@ file:
 ## How this was made
 
 This driver was developed with AI coding agents (Anthropic's Claude, through
-Claude Code). They sped up the slow parts of reverse engineering and
+Claude Code). These tools sped up the slow parts of reverse engineering and
 driver work: reading disassembly and USB captures, writing test scripts,
 drafting code and documentation, and chasing down bugs.
 
