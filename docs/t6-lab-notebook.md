@@ -676,3 +676,11 @@ after the 0x14 restarts:** 1712 of them in the stats, where every run
 before had 0 with the same frame recipe. So something in the chip's state
 after a restart (or after the first cancel) makes it report frame done;
 to be looked into (pacing, buffer reuse).
+
+**Windows' mode flag (byte 31 = 2) for 3440 wide** (`t6_clock_sweep.py flag`):
+the MO34WQC2's own 3440x1440@60 timing (319.75 MHz) with flag 2, and with
+flag 2 plus Windows' sync start + 1 / width - 1: black both times. No
+change; reduced blanking stays the way to 60 Hz there.
+Pacing test again after the 0x14 restarts: still 0 frame-done events from
+userspace (pyusb reads with 1 ms timeouts may drop them), while the driver
+counted 1712.

@@ -16,6 +16,7 @@ for step N) until you answer y or n on the terminal; a summary at the end.
           flicker, block moves fine)
   t6_clock_sweep.py color     only the three 4:4:4 steps
   t6_clock_sweep.py 4k        3840x2160@30 (297 MHz, CTA timing) in NV12
+  t6_clock_sweep.py flag      the monitor's 3440x1440@60 timing with Windows' flag 2
 
 Ctrl-C ends it (t6_run.sh rebinds the driver). Run through tools/t6_run.sh.
 """
@@ -37,11 +38,11 @@ def pll(khz):
     raise ValueError
 
 
-def entry(w, h, hz, htot, hs, hsl, vtot, vs, vsl, hpol=1, vpol=0):
-    khz = round(htot * vtot * hz / 1000)
+def entry(w, h, hz, htot, hs, hsl, vtot, vs, vsl, hpol=1, vpol=0, flags=0, khz=None):
+    khz = khz or round(htot * vtot * hz / 1000)
     p, q, n, osel = pll(khz)
     return khz, struct.pack("<IBB8HHHBBBBBB", khz, hz, 0, htot, w, hs, hsl, vtot, h, vs, vsl,
-                            p, q, n, osel, hpol, vpol, 0, 0)
+                            p, q, n, osel, hpol, vpol, 0, flags)
 
 
 def rb(w, h, hz):
@@ -70,6 +71,13 @@ SETS = {
 SETS["color"] = SETS["more"][2:]
 # CTA VIC 95: 3840x2160@30, 297 MHz, +h +v; the MO34WQC2 lists it for HDMI
 SETS["4k"] = [("3840x2160@30, CTA timing", (3840, 2160, 30, 4400, 4016, 88, 2250, 2168, 10, 1, 1), 6)]
+# Windows sets flag byte 2 for widths > 1920 not a multiple of 32 and writes
+# EDID sync start + 1 / width - 1; the MO34WQC2's own 60 Hz timing, 319.75 MHz
+SETS["flag"] = [
+    ("3440x1440@60 monitor timing, flag 2", (3440, 1440, 60, 3600, 3488, 32, 1481, 1443, 10, 1, 0, 2, 319750), 6),
+    ("3440x1440@60 monitor timing, flag 2, sync +1/-1",
+     (3440, 1440, 60, 3600, 3489, 31, 1481, 1444, 9, 1, 0, 2, 319750), 6),
+]
 SET = sys.argv[1] if len(sys.argv) > 1 else "clock"
 QUESTION = {6: "picture?", 11: "clean? (no lines/flicker, block moves fine)"}
 
