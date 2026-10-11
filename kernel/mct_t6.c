@@ -56,15 +56,15 @@
 #include <drm/drm_vblank.h>
 #include <drm/drm_vblank_helper.h>
 
-static bool yuv444 = true;
-module_param(yuv444, bool, 0644);
-MODULE_PARM_DESC(yuv444, "Full colour resolution (YUV 4:4:4, twice the data of 4:2:0 for full-screen changes) where the device can scan it out; 0 = always YUV 4:2:0 (NV12) (default: 1)");
+static int yuv444 = 2;
+module_param(yuv444, int, 0644);
+MODULE_PARM_DESC(yuv444, "Colour resolution: 0 = YUV 4:2:0 (NV12), 1 = full (YUV 4:4:4, twice the data), 2 = full at rest and 4:2:0 during large changes (default); full only where the device can scan it out");
 
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	13
-#define DRIVER_PATCH	1
+#define DRIVER_MINOR	14
+#define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -193,6 +193,9 @@ struct t6_layout {
  */
 #define T6_SCANOUT_MAX	(760ull * 1000 * 1000)	/* bytes per second */
 
+/* yuv444=2: an update changing more than a quarter of the screen is "large" */
+#define T6_SETTLE_MS	150		/* back to 4:4:4 this long after the last one */
+
 /* rows of unchanged pixel pairs still merged into one band */
 #define T6_BAND_GAP	8
 #define T6_MAX_BANDS	16
@@ -263,6 +266,9 @@ struct mct_t6 {
 		bool dirty;
 	} upd;
 
+	struct delayed_work settle_work;	/* back to 4:4:4 after motion */
+	ktime_t last_large;		/* last large update */
+
 	struct urb *ev_urb;		/* interrupt IN, always queued */
 	struct work_struct hpd_work;
 
@@ -276,6 +282,7 @@ struct mct_t6 {
 	struct {			/* debugfs statistics */
 		u64 updates, skipped, px_damage, bytes, ns_conv, ns_usb;
 		u64 rows, bands;		/* image rows and bands sent */
+		u64 to_420;			/* switches to 4:2:0 for motion */
 		u64 ev_done, ev_change, ev_other;	/* interrupt events */
 		u64 no_clips, clips, clip_px, rows_copied;	/* damage clips per commit */
 		u64 copies, ns_copy, ns_copy_max;	/* framebuffer -> shadow, in the commit */
@@ -799,20 +806,11 @@ static int t6_flip(struct mct_t6 *t6, int k)
  * Write what changed into the next of the three frame buffers (never the
  * one on screen), then flip to it. io_lock held.
  */
-static int t6_present(struct mct_t6 *t6)
+static int t6_present(struct mct_t6 *t6, const struct t6_band *bands, int n)
 {
-	struct t6_band bands[T6_MAX_BANDS];
 	int k = t6->buf;
-	int n, i, j, p, r, ret;
+	int i, j, p, r, ret = 0;
 
-	/* a failed transfer may have left any buffer half written */
-	ret = atomic_xchg(&t6->urb_err, 0);
-	if (ret) {
-		drm_err_ratelimited(&t6->dev, "frame transfer error: %d\n", ret);
-		memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
-		ret = 0;
-	}
-	n = t6_diff_bands(t6, k, bands);
 	t6->hw_valid[k] = false;
 	for (i = 0; i < n && !ret; i++)
 		ret = t6_send_band(t6, k, &bands[i]);
@@ -838,12 +836,34 @@ static int t6_present(struct mct_t6 *t6)
 	return 0;
 }
 
+/* motion stopped: send the image again, now in 4:4:4 */
+static void t6_settle_work(struct work_struct *work)
+{
+	struct mct_t6 *t6 = container_of(to_delayed_work(work), struct mct_t6, settle_work);
+
+	mutex_lock(&t6->upd.lock);
+	t6->upd.dirty = true;
+	mutex_unlock(&t6->upd.lock);
+	queue_work(system_long_wq, &t6->upd.work);
+}
+
+static bool t6_large(const struct mct_t6 *t6, const struct t6_band *bands, int n)
+{
+	u64 px = 0;
+	int i;
+
+	for (i = 0; i < n; i++)
+		px += (u64)(bands[i].p1 - bands[i].p0) * 2 * (bands[i].x1 - bands[i].x0);
+	return px * 4 > (u64)t6->width * t6->height;
+}
+
 static void t6_update_work(struct work_struct *work)
 {
 	struct mct_t6 *t6 = container_of(work, struct mct_t6, upd.work);
+	struct t6_band bands[T6_MAX_BANDS];
+	int mode = READ_ONCE(yuv444), n, idx, ret;
+	bool fits, want444, known;
 	ktime_t t0, t1;
-	bool want444;
-	int idx, ret;
 
 	/*
 	 * Take the USB lock first: a commit waits on upd.lock, and must not end
@@ -857,18 +877,41 @@ static void t6_update_work(struct work_struct *work)
 		return;
 	}
 	t6->upd.dirty = false;
-	want444 = READ_ONCE(yuv444) &&
-		  3ull * t6->width * t6->height * t6->refresh <= T6_SCANOUT_MAX;
+	t0 = ktime_get();
+
+	/* a failed transfer may have left any buffer half written */
+	ret = atomic_xchg(&t6->urb_err, 0);
+	if (ret) {
+		drm_err_ratelimited(&t6->dev, "frame transfer error: %d\n", ret);
+		memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
+	}
+
+	fits = 3ull * t6->width * t6->height * t6->refresh <= T6_SCANOUT_MAX;
+	want444 = fits && (mode == 1 || (mode == 2 && ktime_ms_delta(t0, t6->last_large) >=
+					 T6_SETTLE_MS));
 	if (want444 != t6->lay.is444 || !t6->lay.planes)
 		t6_set_layout(t6, want444);
-	t0 = ktime_get();
 	t6_convert(t6);
+	known = t6->hw_valid[t6->buf];
+	n = t6_diff_bands(t6, t6->buf, bands);
+	/* a whole buffer to refill after a switch doesn't count as motion */
+	if (mode == 2 && fits && known && t6_large(t6, bands, n)) {
+		t6->last_large = t0;
+		if (t6->lay.is444) {
+			t6->stats.to_420++;
+			t6_set_layout(t6, false);
+			t6_convert(t6);
+			n = t6_diff_bands(t6, t6->buf, bands);
+		}
+		mod_delayed_work(system_long_wq, &t6->settle_work,
+				 msecs_to_jiffies(T6_SETTLE_MS));
+	}
 	/* commits only wait for the conversion above, never for USB */
 	mutex_unlock(&t6->upd.lock);
 	t1 = ktime_get();
 
 	if (drm_dev_enter(&t6->dev, &idx)) {
-		ret = t6_present(t6);
+		ret = t6_present(t6, bands, n);
 		if (ret)
 			drm_err_ratelimited(&t6->dev, "frame update error: %d\n", ret);
 		else
@@ -992,6 +1035,10 @@ static bool t6_damage_rows(struct mct_t6 *t6, const struct drm_plane_state *stat
 
 static void t6_stop_updates(struct mct_t6 *t6)
 {
+	/* the worker re-arms the settle timer and the timer queues the worker */
+	do {
+		cancel_work_sync(&t6->upd.work);
+	} while (cancel_delayed_work_sync(&t6->settle_work));
 	cancel_work_sync(&t6->upd.work);
 	if (!usb_wait_anchor_empty_timeout(&t6->anchor, T6_TIMEOUT))
 		usb_kill_anchored_urbs(&t6->anchor);
@@ -1628,6 +1675,7 @@ static int t6_stats_show(struct seq_file *m, void *data)
 		   div64_u64(t6->stats.ns_commit, max_t(u64, t6->stats.copies, 1) * 10000) % 100,
 		   div64_u64(t6->stats.ns_commit_max, 1000000),
 		   div64_u64(t6->stats.ns_commit_max, 10000) % 100);
+	seq_printf(m, "motion -> 4:2:0  %llu times\n", t6->stats.to_420);
 	seq_printf(m, "events           %llu frame done, %llu monitor change, %llu other\n",
 		   t6->stats.ev_done, t6->stats.ev_change, t6->stats.ev_other);
 	seq_printf(m, "usb MB/s while busy %llu\n",
@@ -1815,6 +1863,7 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 
 	INIT_WORK(&t6->upd.work, t6_update_work);
 	INIT_WORK(&t6->hpd_work, t6_hpd_work);
+	INIT_DELAYED_WORK(&t6->settle_work, t6_settle_work);
 	for (i = 0; i < 256; i++) {
 		t6->lut[0][i] = i;
 		t6->lut[1][i] = i;

@@ -418,3 +418,16 @@ image (1-pixel coloured lines, red strokes on blue) looked crisper than NV12,
 `yuv444` (default on, runtime writable; switching resends whole frames).
 Development now happens in a worktree (`../mct-t2-linux-t6`) so the main
 checkout, which the dotfiles build, stays on main.
+
+**4:4:4 live (0.13)**: at 1080p144 thin, sparse rainbow vertical lines on a
+still image; at 120 and 60 Hz clean. Scanout reads the buffer from the T6's
+memory every refresh: 4:4:4 1080p144 is ~900 MB/s, 120 Hz ~750 MB/s, NV12
+1080p144 ~450 MB/s. 0.13.1 uses 4:4:4 only up to 760 MB/s. In 4:4:4 window
+moves felt a bit laggy (twice the data per changed area over USB).
+
+**mct_t6 0.14, adaptive colour** (`yuv444=2`, default): 4:4:4 at rest,
+NV12 while updates are large (diff covers more than a quarter of the screen,
+measured only against buffers whose content is known, so refilling after a
+switch doesn't count), back to 4:4:4 150 ms after the last large update
+(timer resends the image). `yuv444=1` forces 4:4:4, `0` NV12; the bandwidth
+guard applies to both 4:4:4 settings.
