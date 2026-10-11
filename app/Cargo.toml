@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com>
+[package]
+name = "mct-app"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-only"
+description = "Companion app for the mct driver: mctctl and MCT Display Manager"
+rust-version = "1.85"
+
+[lib]
+name = "mct"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mctctl"
+path = "src/bin/mctctl.rs"
+
+[[bin]]
+name = "mct-manager"
+path = "src/bin/mct-manager/main.rs"
+required-features = ["gui"]
+
+[features]
+default = ["gui"]
+# the GUI and the tray; without it only the library and mctctl are built
+gui = ["dep:relm4", "dep:ksni"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+relm4 = { version = "0.9", features = ["libadwaita", "gnome_46"], optional = true }
+ksni = { version = "0.3", features = ["blocking"], optional = true }
+
+[profile.release]
+lto = "thin"
+
+[dev-dependencies]
+tempfile = "3"

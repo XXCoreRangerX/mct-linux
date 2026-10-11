@@ -1,0 +1,66 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com>
+#
+# Root part of switching an MCT display between the mct kernel driver and
+# the legacy daemon (wacom-t2d). Run by mct-manager and mctctl through pkexec:
+#
+#   mct-manager-helper bind INTERFACE     bind to mct (loads the module first)
+#   mct-manager-helper unbind INTERFACE   unbind from mct (DTU-1031X only)
+#
+# INTERFACE must be interface 0 of a connected MCT display, e.g. 3-1:1.0.
+
+set -eu
+
+# replaced with absolute paths when packaged
+modprobe=modprobe
+
+sys=/sys/bus/usb
+mct=$sys/drivers/mct
+
+fail() {
+	echo "mct-manager-helper: $*" >&2
+	exit 1
+}
+
+[ $# -eq 2 ] || { echo "usage: mct-manager-helper bind|unbind INTERFACE" >&2; exit 2; }
+verb=$1
+intf=$2
+
+# bus-port[.port...]:config.0 and nothing else
+case $intf in
+*[!0-9.:-]* | *:*:* | *..* | -* | *-) fail "invalid interface: $intf" ;;
+[0-9]*-[0-9]*:[0-9]*.0) ;;
+*) fail "invalid interface: $intf" ;;
+esac
+dev=${intf%%:*}
+
+[ -d "$sys/devices/$intf" ] || fail "no such interface: $intf"
+read -r vendor < "$sys/devices/$dev/idVendor" || fail "cannot read $dev"
+read -r product < "$sys/devices/$dev/idProduct" || fail "cannot read $dev"
+[ "$vendor" = 0711 ] || fail "$intf is not an MCT display"
+case $product in
+5209 | 520d) tablet=1 ;;
+5600 | 5601) tablet=0 ;;
+*) fail "$intf is not an MCT display" ;;
+esac
+
+case $verb in
+bind)
+	[ -d /sys/module/mct ] || $modprobe mct || fail "cannot load the mct module"
+	[ -e "$mct/$intf" ] && exit 0
+	echo "$intf" > "$mct/bind" || fail "binding $intf failed (still used by another driver?)"
+	;;
+unbind)
+	[ "$tablet" = 1 ] || fail "the legacy daemon is for the DTU-1031X only"
+	if [ -e "$mct/$intf" ]; then
+		echo "$intf" > "$mct/unbind" || fail "unbinding $intf failed"
+	fi
+	# wacom-t2d needs evdi; not fatal, the daemon reports it
+	[ -d /sys/module/evdi ] || $modprobe evdi || true
+	;;
+*)
+	echo "usage: mct-manager-helper bind|unbind INTERFACE" >&2
+	exit 2
+	;;
+esac

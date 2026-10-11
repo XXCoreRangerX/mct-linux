@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com>
+[Desktop Entry]
+Type=Application
+Name=MCT Display Manager
+GenericName=USB Display Settings
+Comment=Settings and status for MCT USB displays
+Exec=mct-manager
+Icon=org.mctlinux.Manager
+Terminal=false
+Categories=GTK;Settings;HardwareSettings;
+Keywords=display;monitor;screen;usb;hdmi;trigger;wacom;
+StartupNotify=true

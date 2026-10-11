@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
+<!-- Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com> -->
+<!-- A monitor with a USB plug on its cable. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#99c1f1"/>
+      <stop offset="1" stop-color="#3584e4"/>
+    </linearGradient>
+  </defs>
+  <!-- stand -->
+  <path d="M44 84h24l4 16H40z" fill="#77767b"/>
+  <rect x="30" y="98" width="52" height="8" rx="4" fill="#5e5c64"/>
+  <!-- monitor -->
+  <rect x="6" y="14" width="100" height="72" rx="8" fill="#3d3846"/>
+  <rect x="12" y="20" width="88" height="58" rx="3" fill="url(#screen)"/>
+  <path d="M12 60l30-22 22 16 14-10 22 16v15a3 3 0 0 1-3 3H15a3 3 0 0 1-3-3z" fill="#ffffff" fill-opacity="0.25"/>
+  <!-- cable -->
+  <path d="M106 50h4a6 6 0 0 1 6 6v20" fill="none" stroke="#3d3846" stroke-width="4" stroke-linecap="round"/>
+  <!-- plug: body and metal shell -->
+  <rect x="106" y="74" width="20" height="22" rx="3" fill="#9a9996"/>
+  <rect x="108" y="96" width="16" height="20" rx="1" fill="#deddda" stroke="#77767b" stroke-width="2"/>
+  <rect x="112" y="101" width="3" height="4" fill="#77767b"/>
+  <rect x="117" y="101" width="3" height="4" fill="#77767b"/>
+</svg>

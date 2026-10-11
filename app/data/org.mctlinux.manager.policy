@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
+<!-- Copyright (C) 2026 Filip Piękoś <mail@filippiekos.com> -->
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>mct-linux</vendor>
+  <action id="org.mctlinux.manager.helper">
+    <description>Switch the driver of an MCT USB display</description>
+    <message>Authentication is required to switch the driver of a USB display</message>
+    <icon_name>org.mctlinux.Manager</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <!-- the packaging replaces @helper@ with the helper's absolute path -->
+    <annotate key="org.freedesktop.policykit.exec.path">@helper@</annotate>
+  </action>
+</policyconfig>

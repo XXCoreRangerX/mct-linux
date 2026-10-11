@@ -8,6 +8,7 @@ let
   kmod = pkgs.callPackage ./kmod.nix { inherit (kernelPackages) kernel; };
   evdi = pkgs.callPackage ./evdi.nix { inherit kernelPackages; };
   wacom-t2d = pkgs.callPackage ./wacom-t2d.nix { inherit evdi; };
+  mctApp = pkgs.callPackage ./mct-app.nix { };
   # group video may write these files (the companion app, mctctl)
   mctSettingsPerms = pkgs.writeShellScript "mct-settings-perms" ''
     dir=$1
@@ -84,6 +85,15 @@ in
         own value is in /sys/bus/usb/devices/<interface>/mct/all_modes.
       '';
     };
+    app.enable = lib.mkEnableOption ''
+      MCT Display Manager (mct-manager window, mctctl): per-device
+      information and settings. Users who change settings need to be in
+      group video
+    '';
+    app.tray = lib.mkEnableOption ''
+      the MCT Display Manager tray icon in graphical sessions (needs
+      app.enable and a StatusNotifierItem host such as Waybar or Noctalia)
+    '';
     driver = lib.mkOption {
       type = lib.types.enum [ "kernel" "evdi" ];
       default = "kernel";
@@ -95,6 +105,24 @@ in
   };
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
+    (lib.mkIf cfg.app.enable {
+      environment.systemPackages = [ mctApp ]; # also links its polkit action
+      security.polkit.enable = true;
+    })
+
+    (lib.mkIf (cfg.app.enable && cfg.app.tray) {
+      systemd.user.services.mct-tray = {
+        description = "MCT Display Manager tray";
+        wantedBy = [ "graphical-session.target" ];
+        partOf = [ "graphical-session.target" ];
+        after = [ "graphical-session.target" ];
+        serviceConfig = {
+          ExecStart = "${mctApp}/bin/mct-manager --tray";
+          Restart = "on-failure";
+        };
+      };
+    })
+
     (lib.mkIf cfg.niriFix {
       programs.niri.package = pkgs.niri.overrideAttrs (o: {
         patches = (o.patches or [ ]) ++ [
