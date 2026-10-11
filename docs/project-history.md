@@ -4,7 +4,9 @@ This file preserves the chronological development record and the major
 successful and unsuccessful findings. It was created when the old, untracked
 workspace `HANDOFF.md` was replaced with a current handoff on 2026-09-25. The
 old handoff was read before replacement and its substantive historical details
-are retained here. Git remains the exact source for every tracked code change;
+are retained here. (Commit IDs quoted below are those of the development
+repository; the published history has the same commits under other IDs.)
+Git remains the exact source for every tracked code change;
 the specialized documents linked below contain the byte-level evidence.
 
 ## Before the Git repository: protocol recovery and first light
