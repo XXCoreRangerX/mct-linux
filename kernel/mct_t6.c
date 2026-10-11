@@ -63,7 +63,7 @@ MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at re
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	15
+#define DRIVER_MINOR	16
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -175,8 +175,22 @@ struct t6_rect_header {
 enum t6_kind { T6_NV12, T6_YUV444, T6_RGB24, T6_RGB32 };
 
 static const char *const t6_kind_name[] = { "NV12", "YUV 4:4:4", "RGB24", "RGB32" };
-/* bytes per pixel the device reads per refresh */
-static const unsigned int t6_scan_x2[] = { 3, 6, 6, 8 };	/* times two */
+/*
+ * Scanout reads the frame buffer from the T6's own memory once per refresh,
+ * and the limit depends on the format (1080p on the 5600): YUV 4:4:4 was
+ * clean at 120 Hz (~750 MB/s) and glitched at 144 (~900); RGB24 was fine at
+ * 75 Hz (~470 MB/s), poor at 100 (~620) and bad at 120. NV12 at 144 Hz
+ * (~450 MB/s) is fine. Bytes per second at most, per format:
+ */
+static const u64 t6_scan_max[] = {
+	[T6_NV12] = U64_MAX,
+	[T6_YUV444] = 760000000,
+	[T6_RGB24] = 500000000,
+	[T6_RGB32] = 500000000,
+};
+
+/* bytes per pixel the device reads per refresh, times two */
+static const unsigned int t6_scan_x2[] = { 3, 6, 6, 8 };
 
 /*
  * Image layout. On the host every plane is packed (row length = width x
@@ -196,13 +210,6 @@ struct t6_layout {
 	int pitch;			/* device row pitch in bytes */
 	u32 fmt;
 };
-
-/*
- * Scanout reads the frame buffer from the T6's own memory once per refresh.
- * 4:4:4 at 1080p glitched at 144 Hz (~900 MB/s) and was clean at 120 Hz
- * (~750 MB/s); above this the driver uses NV12 instead.
- */
-#define T6_SCANOUT_MAX	(760ull * 1000 * 1000)	/* bytes per second */
 
 /* format=auto: an update changing more than a quarter of the screen is "large" */
 #define T6_SETTLE_MS	150		/* back to full colour this long after the last one */
@@ -623,9 +630,26 @@ static void t6_set_layout(struct mct_t6 *t6, enum t6_kind kind)
 
 /*
  * Shadow (XRGB8888) to t6->img in the current layout, through the gamma
- * tables. YUV is BT.601 limited range; NV12 takes the chroma of each 2x2
- * block. Modes have even sizes. upd.lock held.
+ * tables. YUV is BT.601 full range (JFIF), as the vendor driver converts it:
+ * limited range came out greyish next to RGB. NV12 takes the chroma of each
+ * 2x2 block. Modes have even sizes. upd.lock held.
  */
+static inline u8 t6_y(int r, int g, int b)
+{
+	return (77 * r + 150 * g + 29 * b + 128) >> 8;
+}
+
+/* chroma of sums of n pixels (n = 1 or 4), clamped */
+static inline u8 t6_u(int r, int g, int b, int shift)
+{
+	return clamp(((-43 * r - 85 * g + 128 * b + (128 << shift)) >> (8 + shift)) + 128, 0, 255);
+}
+
+static inline u8 t6_v(int r, int g, int b, int shift)
+{
+	return clamp(((128 * r - 107 * g - 21 * b + (128 << shift)) >> (8 + shift)) + 128, 0, 255);
+}
+
 static void t6_convert(struct mct_t6 *t6)
 {
 	const u8 *lr = t6->lut[0], *lg = t6->lut[1], *lb = t6->lut[2];
@@ -656,9 +680,9 @@ static void t6_convert(struct mct_t6 *t6)
 		for (i = 0; i < px; i++, s += 4) {
 			int r = lr[s[2]], g = lg[s[1]], b = lb[s[0]];
 
-			py[i] = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
-			pu[i] = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
-			pv[i] = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+			py[i] = t6_y(r, g, b);
+			pu[i] = t6_u(r, g, b, 0);
+			pv[i] = t6_v(r, g, b, 0);
 		}
 		return;
 	}
@@ -681,14 +705,14 @@ static void t6_convert(struct mct_t6 *t6)
 			for (i = 0; i < 4; i++) {
 				int pr = lr[p4[i][2]], pg = lg[p4[i][1]], pb = lb[p4[i][0]];
 
-				*out[i] = ((66 * pr + 129 * pg + 25 * pb + 128) >> 8) + 16;
+				*out[i] = t6_y(pr, pg, pb);
 				r += pr;
 				g += pg;
 				b += pb;
 			}
-			/* chroma of the 2x2 block: sums are 4x, so shift by 10 */
-			uv[0] = ((-38 * r - 74 * g + 112 * b + 512) >> 10) + 128;
-			uv[1] = ((112 * r - 94 * g - 18 * b + 512) >> 10) + 128;
+			/* chroma of the 2x2 block: sums of 4, so shift 2 more */
+			uv[0] = t6_u(r, g, b, 2);
+			uv[1] = t6_v(r, g, b, 2);
 		}
 	}
 }
@@ -923,14 +947,25 @@ static void t6_settle_work(struct work_struct *work)
 	queue_work(system_long_wq, &t6->upd.work);
 }
 
-/* the format= parameter: the full colour format, and whether to adapt */
-static enum t6_kind t6_requested_format(bool *adaptive)
+static bool t6_fits(const struct mct_t6 *t6, enum t6_kind kind)
+{
+	return (u64)t6_scan_x2[kind] * t6->width * t6->height * t6->refresh / 2 <=
+	       t6_scan_max[kind];
+}
+
+/*
+ * The format= parameter: the full colour format to use at rest, and whether
+ * to drop to NV12 during large changes. auto takes the best that fits the
+ * mode: exact RGB, else YUV 4:4:4, else NV12.
+ */
+static enum t6_kind t6_requested_format(const struct mct_t6 *t6, bool *adaptive)
 {
 	static const struct { const char *name; enum t6_kind kind; } names[] = {
 		{ "nv12", T6_NV12 }, { "yuv444", T6_YUV444 },
 		{ "rgb24", T6_RGB24 }, { "rgb32", T6_RGB32 },
 	};
-	enum t6_kind kind = T6_RGB24;
+	enum t6_kind kind = t6_fits(t6, T6_RGB24) ? T6_RGB24 :
+			    t6_fits(t6, T6_YUV444) ? T6_YUV444 : T6_NV12;
 	int i;
 
 	*adaptive = true;
@@ -985,9 +1020,8 @@ static void t6_update_work(struct work_struct *work)
 		memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
 	}
 
-	full = t6_requested_format(&adaptive);
-	fits = (u64)t6_scan_x2[full] * t6->width * t6->height * t6->refresh <=
-	       2 * T6_SCANOUT_MAX;
+	full = t6_requested_format(t6, &adaptive);
+	fits = full != T6_NV12 && t6_fits(t6, full);
 	if (!fits)
 		want = T6_NV12;
 	else if (adaptive && ktime_ms_delta(t0, t6->last_large) < T6_SETTLE_MS)

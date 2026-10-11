@@ -450,3 +450,17 @@ at rest, NV12 during large changes; default), rgb24, rgb32, yuv444, nv12;
 the full colour formats only where the scanout bandwidth allows (otherwise
 NV12). Layouts carry bytes per pixel; packed RGB partial updates are
 session 7 writes with both parts on the same plane (3n rows per write).
+
+**0.15 live (format=auto)**: glitches at 120 Hz ("pretty bad"), at 100 Hz
+"kinda eh", fine at 75 Hz; confirmed with format=rgb24: glitches from 100 Hz,
+75 Hz fine. So RGB24 scanout tops out lower than YUV 4:4:4 at the same
+3 bytes per pixel: ~470 MB/s fine, ~620 MB/s not. Also: switching between
+RGB at rest and NV12 in motion made images "go grey then normal": the YUV
+conversion was BT.601 limited range, the vendor converts full range (JFIF),
+so NV12 had always been slightly washed out.
+
+**mct_t6 0.16**: YUV conversion in full range (max error 1 against JFIF
+floating point); per-format scanout limits (RGB 500 MB/s, YUV 4:4:4
+760 MB/s, NV12 unlimited); auto picks the best full colour format that fits
+the mode (1080p: RGB up to 75 Hz, 4:4:4 at 100-120 Hz, NV12 at 144 Hz) and
+uses NV12 during large changes.
