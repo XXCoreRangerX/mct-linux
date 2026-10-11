@@ -33,7 +33,7 @@ TTY2=4; [ "$NIRI_VT" = 4 ] && TTY2=6
 logf() { printf '%s\n' "$*" >> "$LOG"; }
 say() { printf '%s\n' "$*"; logf "$*"; }
 pause() { read -r -p "$1 [Enter] " _; logf "> $1"; }
-rd() { local v; if read -r v < "$1" 2>/dev/null; then printf '%s' "$v"; else printf '?'; fi; }
+rd() { local v; if read -r v 2>/dev/null < "$1"; then printf '%s' "$v"; else printf '?'; fi; }
 
 # write a sysfs value: directly if the udev rule made it writable, else sudo
 put() {
