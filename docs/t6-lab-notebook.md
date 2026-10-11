@@ -648,3 +648,12 @@ One run showed 0 modes for the 4K profile; a rerun gave the table above
 (snapshot taken while the probe was still running, no kernel messages).
 4K itself (3840x2160@30, 297 MHz, NV12 12.4 MB fits a buffer) is untested:
 needs height 2160 allowed and buffers sized per mode first.
+
+**4K30**: `t6_clock_sweep.py 4k` (3840x2160@30, CTA timing, 297 MHz, NV12
+12.4 MB per buffer) shows on the MO34WQC2 (scaled down by the monitor), so
+the scanout takes 3840-pixel rows. Driver: sizes up to 3840x2160; 4K runs
+in NV12 only (a 4:4:4 frame, 24.9 MB, doesn't fit a 16.8 MB frame buffer),
+and the full colour fallback mode now also checks that a 4:4:4 frame fits.
+Live through the driver (`tools/t6_modes.sh`): 3840x2160@30 and back to
+3440x1440@60 fine. Simulated 4K60 monitor: 2560x1440@60 preferred,
+3840x2160@30 offered.

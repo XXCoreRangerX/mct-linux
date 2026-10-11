@@ -18,7 +18,7 @@ left to do. Percentages are estimates, not a checklist score.
 | Compared to | Estimate | Notes |
 |---|---|---|
 | Vendor drivers, same device | ~90%, ahead in many areas | Missing: JPEG (hardware rotation: the 5600 doesn't have it). Ahead: up to 144 Hz (vendor 60), lossless / full colour at rest, adaptive format, gamma, queued URBs, exact row diffing. |
-| Trigger 6 family | ~70% | Not done: second output, HDMI audio, the chip's JPEG decoder. The 5600 is a single-output "Super Lite". Up to 3440x1440@60 works (NV12; 4:4:4 at 50 Hz). |
+| Trigger 6 family | ~75% | Not done: second output, HDMI audio, the chip's JPEG decoder. The 5600 is a single-output "Super Lite". Up to 3440x1440@60 (NV12; 4:4:4 at 55 Hz) and 4K30 (NV12) work. |
 | Speed headroom | ~15-25% | Hard limits: ~350 MHz pixel clock (1080p144 max, no 1080p240), ~360 MB/s USB, per-format scanout bandwidth. Raw full-screen NV12 1080p ~98 fps. |
 
 ## Work items
@@ -49,7 +49,7 @@ Later:
 - **T6 above 1080p:** done (0.18.0): 2560x1440@60 in 4:4:4, 3440x1440@60
   with reduced blanking in NV12, 3440x1440@50 in 4:4:4. The monitor's own
   3440x1440@60 timing (319.75 MHz) stays off. Buffers are sized per mode
-  (~41 MB at 1080p, ~99 MB at 3440x1440). Next: 4K30 (3840x2160, NV12).
+  (~41 MB at 1080p, ~99 MB at 3440x1440). 4K30 (3840x2160, NV12) works too.
 - **T6 JPEG** for full-screen motion above the USB limit: not in the kernel
   driver (no in-kernel encoder, would not be accepted upstream). Possible as a
   userspace program (EVDI + encoder, like t2d), optionally using a GPU JPEG

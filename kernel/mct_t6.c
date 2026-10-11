@@ -135,8 +135,8 @@ struct t6_mode {
  * drop the signal. So modes from 2560 wide only up to the clocks that
  * worked.
  */
-#define T6_TESTED_W		3440
-#define T6_TESTED_H		1600
+#define T6_TESTED_W		3840	/* 3840x2160@30 (297 MHz, NV12) works too */
+#define T6_TESTED_H		2160
 #define T6_WIDE_W		2560
 #define T6_WIDE_MAX_CLOCK_KHZ	316000
 /* computed refresh rates only for sizes tried with them */
@@ -1448,6 +1448,9 @@ static int t6_add_preferred_fallbacks(struct mct_t6 *t6, struct drm_connector *c
 
 	full_hz = div_u64(t6_scan_max[T6_YUV444] * 2,
 			  (u64)t6_scan_x2[T6_YUV444] * pref->hdisplay * pref->vdisplay);
+	/* a 4:4:4 frame has to fit a frame buffer too (not at 4K) */
+	if (0x30 + t6_frame_bytes(pref->hdisplay, pref->vdisplay, T6_YUV444) > T6_BUF_SIZE)
+		full_hz = 0;
 
 	/* the monitor's rate, else the highest common one below it */
 	for (i = ARRAY_SIZE(t6_extra_hz); i >= -1; i--) {

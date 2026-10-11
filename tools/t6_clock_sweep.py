@@ -15,6 +15,7 @@ for step N) until you answer y or n on the terminal; a summary at the end.
     3-5   3440x1440@52 / 55 / 57 in YUV 4:4:4: clean? (no lines, no
           flicker, block moves fine)
   t6_clock_sweep.py color     only the three 4:4:4 steps
+  t6_clock_sweep.py 4k        3840x2160@30 (297 MHz, CTA timing) in NV12
 
 Ctrl-C ends it (t6_run.sh rebinds the driver). Run through tools/t6_run.sh.
 """
@@ -67,6 +68,8 @@ SETS = {
     ],
 }
 SETS["color"] = SETS["more"][2:]
+# CTA VIC 95: 3840x2160@30, 297 MHz, +h +v; the MO34WQC2 lists it for HDMI
+SETS["4k"] = [("3840x2160@30, CTA timing", (3840, 2160, 30, 4400, 4016, 88, 2250, 2168, 10, 1, 1), 6)]
 SET = sys.argv[1] if len(sys.argv) > 1 else "clock"
 QUESTION = {6: "picture?", 11: "clean? (no lines/flicker, block moves fine)"}
 
