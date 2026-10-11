@@ -593,3 +593,6 @@ a moment, unconfirmed; the driver doesn't use RGB24 there anyway (auto
 picks 4:4:4, forced rgb24 falls back to NV12). Driver 0.18.0 now allows
 modes up to 2560x1600 beyond the chip's table, and computes extra refresh
 rates only for sizes up to 1080p (tried); 3440 wide stays off.
+Live with the driver (mct_t6 0.18.0, niri picked 2560x1440@60 by itself):
+64 s of desktop use, YUV 4:4:4 at rest, 13 switches to NV12 for motion,
+convert 0.70 ms and USB 2.06 ms per update, 471 MB/s while busy.

@@ -18,7 +18,7 @@ left to do. Percentages are estimates, not a checklist score.
 | Compared to | Estimate | Notes |
 |---|---|---|
 | Vendor drivers, same device | ~90%, ahead in many areas | Missing: JPEG (hardware rotation: the 5600 doesn't have it). Ahead: up to 144 Hz (vendor 60), lossless / full colour at rest, adaptive format, gamma, queued URBs, exact row diffing. |
-| Trigger 6 family | ~65% | Not done: second output, HDMI audio, the chip's JPEG decoder. The 5600 is a single-output "Super Lite"; above 1080p untested (3440x1440 monitor coming). |
+| Trigger 6 family | ~70% | Not done: second output, HDMI audio, the chip's JPEG decoder. The 5600 is a single-output "Super Lite". 2560x1440@60 works (4:4:4 at rest); 3440x1440@60 froze the test monitor and stays off. |
 | Speed headroom | ~15-25% | Hard limits: ~350 MHz pixel clock (1080p144 max, no 1080p240), ~360 MB/s USB, per-format scanout bandwidth. Raw full-screen NV12 1080p ~98 fps. |
 
 ## Work items
@@ -46,11 +46,11 @@ Later:
   only one and the driver has it. Optional: start at level 6 like Wacom.
 - **Better T2 lossy mode** (streaks during heavy motion; per-channel or
   column-aware tolerance).
-- **T6 above 1080p:** the driver caps modes at the chip table's largest
-  entry (2048x1152), so 3440x1440 needs: a size limit from buffer room per
-  format instead of the table, formats chosen by what fits (at 3440x1440@60
-  only NV12 fits scanout and RGB32 doesn't fit a buffer), and a userspace
-  test for a scanout line length limit first. Numbers in the notebook.
+- **T6 above 1080p:** done up to 2560x1600 (0.18.0, 2560x1440@60 live in
+  4:4:4). 3440x1440@60 froze the MO34WQC2; whether the cause is the width
+  or the clock is unknown. Retry only on a spare monitor, e.g. 3440x1440 at
+  a lower refresh (50 Hz, 266.58 MHz, the monitor's DP timing) to split
+  the two.
 - **T6 JPEG** for full-screen motion above the USB limit: not in the kernel
   driver (no in-kernel encoder, would not be accepted upstream). Possible as a
   userspace program (EVDI + encoder, like t2d), optionally using a GPU JPEG
