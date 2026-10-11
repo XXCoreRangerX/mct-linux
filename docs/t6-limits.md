@@ -13,7 +13,7 @@ are in [t6-lab-notebook.md](t6-lab-notebook.md).
 | 353 MHz | visible artifacts |
 | 360 MHz and up | no signal |
 
-The device's own mode table stops at 2048x1152@60 (~160 MHz).
+The device's own mode table stops at 2048x1152@60 (197 MHz).
 
 ## Wide modes (`T6_WIDE_W`, `T6_WIDE_MAX_CLOCK_KHZ`, 316 MHz from 2560 wide)
 
@@ -63,6 +63,28 @@ A frame has to fit one with its 0x30 byte header:
 
 The driver picks only formats that fit, at a given mode, both a buffer and
 the scanout limit.
+
+## Mode and device checks
+
+What else decides whether a mode is offered (`t6_mode_entry`,
+`t6_get_modes`, `t6_read_caps`):
+
+- width a multiple of 16, height even, no interlaced modes
+- largest image 3840x2160, or the device table's largest entry if bigger
+  (entries above 4096x2304 are ignored)
+- on a USB 2 link: widths up to 2048 and 0x6400 byte writes
+- computed extra refresh rates (75, 100, 120, 144, 150, 165, 200, 240 Hz)
+  only for sizes up to 1920x1080, within the monitor's range, pixel clock
+  and line rate
+- when the monitor's preferred mode is out of reach: the same size with
+  reduced blanking, the highest rate where 4:4:4 fits, or 2560x1440@60 for
+  16:9 monitors too tall for the adapter
+- no usable EDID: the device table's modes up to 1920x1080, 1080p60
+  preferred
+- probe refuses feature level below 3 (JPEG only) and less than 48 MiB of
+  video memory (the three frame buffers end there)
+- cursor images 64, 96 or 128 px; a 128 px image is sent only up to
+  0x10000 bytes (16-bit offset), its last two pixels never
 
 ## Requests that stall
 

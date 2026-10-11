@@ -129,7 +129,7 @@ Nix packages and protocol documentation.
   repository.
 - The NixOS `uaccess` rule first had no effect: `services.udev.extraRules` lands
   in `99-local.rules`, after `73-seat-late.rules` applies uaccess. It is now
-  shipped as `70-mct-t2.rules`.
+  shipped as `70-mct-t2.rules` (later renamed `70-mct.rules`).
 - `soft_unbind` prevents a normal software unbind from cutting a frame in half.
 - Deep suspend/reset-resume was verified with picture, cursor and backlight
   restored.
@@ -231,6 +231,9 @@ Further status-channel research found:
 
 ## Work intentionally still open
 
+(As of 2026-09-25; since then the counters, adaptive lossy tolerance and the
+recovery regression test were done. The current list is in roadmap.md.)
+
 - Soak-test 0.3.13 across daily use, reload, deliberate interruption,
   unplug/replug, suspend/resume, DPMS, brightness, cursor, console and lossy
   video.
@@ -316,9 +319,11 @@ Git records the exact diffs and parent relationships.
 - `docs/driver-analysis.md`: Windows stack and DLL reverse engineering
 - `docs/device-dtu1031x.md`: hardware topology, EDID and register facts
 - `docs/display-driver.md`: the earlier EVDI implementation
-- `docs/kernel-driver.md`: current native-driver design, tests and roadmap
+- `docs/kernel-driver.md`: the T2 backend's design, tests and roadmap (the
+  shared core: `docs/shared-core.md`; the T6: `docs/t6-limits.md`,
+  `docs/t6-lab-notebook.md`)
 - `docs/capture.md`: Windows VM and usbredir capture procedure
 
-Together with Git, these are the durable historical record. `HANDOFF.md` is a
-current operational summary and may be rewritten again without serving as the
-sole archive.
+Together with Git, these are the durable historical record. `HANDOFF.md` (in
+the lab directory, not in this repository) is a current operational summary
+and may be rewritten again without serving as the sole archive.

@@ -1,7 +1,8 @@
 # mct_t6 compared
 
 How the Trigger 6 driver relates to the T2 driver, to MCT's own drivers and
-to other USB display stacks (state of 2026-10-11, mct_t6 0.17.1). Details
+to other USB display stacks. The sections before the feature table were
+written at mct_t6 0.17.1; the feature table at the end is current. Details
 and measurements are in [t6-lab-notebook.md](t6-lab-notebook.md) and
 [protocol-t6.md](protocol-t6.md).
 
@@ -11,13 +12,14 @@ Same skeleton: a DRM/KMS driver with a primary and a cursor plane, a CRTC
 paced by the vblank timer helpers, shmem GEM objects with a shadow copy, a
 worker that sends updates (the newest image wins), partial updates, a
 hardware cursor, debugfs statistics, suspend/resume. mct_t6 was written in
-mct_t2's mould; the code is separate (mct_t2.c ~1360 lines, mct_t6.c ~2180).
+mct_t2's mould; the code was separate then (mct_t2.c ~1360 lines, mct_t6.c
+~2180); since then both sit on the shared DRM core (shared-core.md).
 
 | | mct_t2 (Wacom DTU-1031X) | mct_t6 (T6 USB Station) |
 |---|---|---|
 | Link | USB 2, ~38 MB/s | USB 3, ~330-400 MB/s |
 | Picture data | own lossless planar RLE; required at that bandwidth | raw pixels (RGB, YUV 4:4:4, NV12); no compression needed |
-| Display | fixed 1024x600 panel, scanned rotated by 180 degrees | any HDMI monitor: EDID, mode table, computed modes up to 1080p144 / 720p240 |
+| Display | fixed 1024x600 panel, scanned rotated by 180 degrees | any HDMI monitor: EDID, mode table, computed modes up to 1080p144 / 720p240 (later up to 3440x1440@60 and 3840x2160@30) |
 | Bring-up | 78-step register init, reverse engineered from captures | none; the firmware brings the chip up, a few requests set the mode |
 | Buffers | two, explicit flip command | three, flip implied by each frame header |
 | Partial updates | rectangles in 1024-pixel units, compressed | row bands limited to the changed columns, raw; two writes per band for 4:4:4 |

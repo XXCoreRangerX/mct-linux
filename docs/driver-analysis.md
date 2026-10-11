@@ -46,5 +46,5 @@ no USB), `WinXP_Target_SiS` (sisusb-era, unrelated).
 
 RE tools: `tools/xref.py` (capstone .pdata+xref map), `tools/vft.py`
 (vftable scan, inconclusive: classes built `/GR-`), `tools/locfunc.py`,
-`tools/funcs.asm` (excerpts). 396 functions, x64, no WDF static imports
+`tools/funcs.asm` (excerpts, not kept). 396 functions, x64, no WDF static imports
 (UMDF binds at runtime).

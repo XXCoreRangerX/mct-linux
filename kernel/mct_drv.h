@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * DRM side shared by the chip backends: one primary plane fed from a shadow
- * copy of the committed image, a 64x64 cursor plane, one CRTC paced by a
- * vblank timer, one connector. The chip code gets the shadow's changed rows
+ * copy of the committed image, a cursor plane (size per chip), one CRTC
+ * paced by a vblank timer, one connector. The chip code gets the shadow's changed rows
  * in its update worker and the cursor as plain pixels, and talks to its
  * device.
  */
@@ -21,7 +21,6 @@ struct seq_file;
 struct usb_interface;
 struct drm_color_lut;
 struct mct_device;
-
 
 struct mct_funcs {
 	/* monitor and modes */

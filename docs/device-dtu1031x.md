@@ -6,11 +6,11 @@ One physical Mini-USB cable -> internal SMSC USB2413 2-port hub:
 
 | USB ID | Mfr/Product | Speed | Class | Driver (Linux) | Role |
 |---|---|---|---|---|---|
-| `0711:520d` | MCT / DTU-1031X | HS 480M | `ff` vendor, 1 iface, 6 bulk EPs | `(none)` | **video (Trigger II T2-285A)** |
+| `0711:520d` | MCT / DTU-1031X | HS 480M | `ff` vendor, 1 iface, 6 bulk EPs | `(none)` (now `mct`) | **video (Trigger II T2-285A)**; also enumerates as `0711:5209` |
 | `056a:032f` | Wacom / DTU-1031X | FS 12M | HID (boot mouse) | `usbhid` + linuxwacom | pen (`wacom-dtu-1031x.tablet` ships) |
 
-Video EPs: OUT `0x02/0x03/0x04/0x06`, IN `0x81/0x85`. No kernel driver binds
-(`Driver=(none)`), `bcdDevice 0.01`, no serial. `0x85/0x06` unused.
+Video EPs: OUT `0x02/0x03/0x04/0x06`, IN `0x81/0x85`. No kernel driver bound
+before mct (`Driver=(none)`), `bcdDevice 0.01`, no serial. `0x85/0x06` unused.
 
 ## Internals (iFixit teardown)
 

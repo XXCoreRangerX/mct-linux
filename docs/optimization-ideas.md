@@ -6,7 +6,8 @@ costs ~26 ms, desktop use sends ~16% of the damaged pixels, encoding is ~9%
 of the time. Already tried without a gain: async URBs with striped encoding,
 larger USB transfers (~3%, and very large ones corrupt frames). Ready on
 branches but not yet tested live: latency histogram and payload counters
-(`counters`), adaptive lossy tolerance (`adaptive-lossy`).
+(`counters`), adaptive lossy tolerance (`adaptive-lossy`). (Both merged
+since, in 0.3.18 and 0.3.19.)
 
 Ideas, roughly by expected payoff:
 

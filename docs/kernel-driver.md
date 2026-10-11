@@ -2,8 +2,18 @@
 
 Since the Trigger 6 work the driver is one module, `mct`, with a backend
 per chip; this file covers the Trigger II backend (DRM driver name `mct_t2`).
-For the Trigger 6 see [protocol-t6.md](protocol-t6.md) and
-[t6-lab-notebook.md](t6-lab-notebook.md).
+For the Trigger 6 see [protocol-t6.md](protocol-t6.md),
+[t6-limits.md](t6-limits.md) and [t6-lab-notebook.md](t6-lab-notebook.md).
+
+> **Current state (2026-10-11, mct_t2 0.3.19):** the planes, CRTC, damage
+> handling and workers now come from the shared core ([shared-core.md](shared-core.md),
+> `kernel/mct_drv.h`); `mct_t2.c` keeps the protocol, init, RLE and lossy
+> encoder, resync, backlight and cursor format. The init is the trimmed one
+> (78 transfers, ~1 s). Updates go into the back buffer and flip
+> ("Update strategy (driver 0.3.6)"). The counters (0.3.18) and adaptive
+> lossy tolerance (0.3.19) are merged. The sections below keep the history
+> in order; parts marked superseded describe earlier versions. Open work is
+> in [roadmap.md](roadmap.md).
 
 `kernel/mct_t2.c` is a DRM/KMS driver for the T2. It replaces EVDI + `t2d`, and
 because it's a normal DRM device with fbdev emulation, the **text console
@@ -19,10 +29,12 @@ Tested on Linux 7.2.6 with niri 26.04:
 
 Modelled on `drivers/gpu/drm/tiny/gm12u320.c` (in-tree USB projector driver).
 
-- USB driver for `0711:520d` interface 0. `probe` runs the init sequence
+- USB driver for `0711:520d` interface 0 (since then also `0711:5209`, and
+  the module is `mct`). `probe` runs the init sequence
   (`kernel/mct_t2_init.h`, generated from `t2d/init.bin` by
-  `tools/gen_init_header.py`): 359 transfers, ~3 s, with 20 ms pacing on EP3/EP4.
-- `drm_simple_display_pipe`, XRGB8888 only, GEM shmem + shadow-plane helpers,
+  `tools/gen_init_header.py`): 359 transfers, ~3 s, with 20 ms pacing on EP3/EP4
+  (since trimmed to 78 transfers, ~1 s, see below).
+- (superseded by the shared core) `drm_simple_display_pipe`, XRGB8888 only, GEM shmem + shadow-plane helpers,
   `drm_client_setup()` for fbdev/fbcon. Connector type `USB`.
 - `drm_plane_enable_fb_damage_clips()` is required. Without it every commit is
   full-screen damage and the display feels choppy.
@@ -30,7 +42,7 @@ Modelled on `drivers/gpu/drm/tiny/gm12u320.c` (in-tree USB projector driver).
   persistent XRGB **shadow image**, union it into a pending rect, then queue a work item.
   Because the shadow is updated every commit, compositors flipping between
   several buffers still only send damage.
-- Worker: pending rect > 1/3 of the screen (or the first frame after enable) -> full frame into
+- (superseded by "Update strategy (driver 0.3.6)") Worker: pending rect > 1/3 of the screen (or the first frame after enable) -> full frame into
   the back buffer + `0x15` flip. Otherwise -> partial `0x13` into the front buffer
   (rotated 180 degrees, 64-px x alignment, `w*h % 1024 == 0`), the same policy as the vendor driver.
 - All USB I/O is synchronous `usb_bulk_msg` through a 64 KiB kmalloc bounce buffer.
@@ -44,7 +56,8 @@ Modelled on `drivers/gpu/drm/tiny/gm12u320.c` (in-tree USB projector driver).
 nix-build nix/kmod-local.nix -o result-kmod        # against <nixpkgs> linuxPackages_latest
 nix build .#mct-kmod                            # against the flake's nixpkgs
 make -C kernel KDIR=/lib/modules/$(uname -r)/build # plain out-of-tree build
-sudo insmod mct.ko                              # binds the tablet automatically
+sudo modprobe mct                               # after make install; binds the tablet automatically
+                                                # (insmod kernel/mct.ko needs the DRM helpers loaded)
 ```
 
 Console on the tablet: `con2fbmap <tty> <fb>` (from `fbset`), or boot with
@@ -99,7 +112,8 @@ already runs at the device's limit. The branch is kept for reference, unmerged.
 NixOS `hardware.mct.lossy`, default 0): each rect is encoded losslessly
 first; only if the update's total would exceed what the device takes in one
 60 Hz frame (~600 KB) is it re-encoded with runs absorbing values within +-N
-(the vendor uses 4). The encoder writes back what the device will show, so the
+(the vendor uses 4). Since 0.3.19 N is the maximum: the tolerance is 1, 2 or
+N depending on how far over budget the update is (backlog item 2). The encoder writes back what the device will show, so the
 buffer copies stay exact; 150 ms after the last lossy update two lossless
 passes (one per buffer) make the picture exact again.
 
@@ -114,7 +128,7 @@ Artifacts: short horizontal streaks during heavy motion (the RLE is row-wise).
 Keep proposed work distinct from the measurements above. In priority order:
 
 1. Frame-latency histogram and payload-size/over-budget counters (0.3.18,
-   not yet measured live). `mct_t2_stats` gained two lines: `over budget`
+   merged; measured in the 2026-10-11 stats: all updates under 16 ms). `mct_t2_stats` gained two lines: `over budget`
    counts updates whose encoded payload exceeded ~600 KB, with the largest
    payload seen, and `latency ms` is a histogram of the time from the first
    damage of an update to its flip (<8, <16, <33, <50, <100, >=100 ms).
@@ -142,7 +156,7 @@ Keep proposed work distinct from the measurements above. In priority order:
    Each tolerance tried costs one more encode (~2.5 ms full screen), so try
    at most two, e.g. 2 then N, and not a full search.
 
-   Branch `adaptive-lossy` (0.3.19, not yet tested live) picks the tolerance
+   Branch `adaptive-lossy` (0.3.19, merged; not tested live with lossy on) picks the tolerance
    from how far the lossless encoding overshoots, with no extra encode: up to
    4/3 of the budget uses 1, up to twice the budget uses 2, anything more the
    `lossy` value, which becomes a maximum. The photo (817K) gets 2 and fits at
@@ -249,6 +263,8 @@ after the display, so the backlight looks the pen up on each access.
 
 ## Development roadmap
 
+(As of 2026-09-25; the current list is in [roadmap.md](roadmap.md).)
+
 Only the Wacom DTU-1031X is presently available for live testing. Make its
 driver reliable and keep unverified family support out of the USB ID table;
 an INF entry or a shared DLL does not prove that another product has compatible
@@ -262,10 +278,11 @@ Near-term work, in recommended order:
    console and optional lossy video. Record failures with the kernel log and
    `mct_t2_stats` rather than adding recovery guesses.
 2. Done: `tools/t2_recovery_test.py` replaces the scratch reproducer
-   `tools/desync_lab.py`, which stays uncommitted.
+   `tools/desync_lab.py`, which is kept out of the repository.
 3. Counters added in 0.3.18 (see the performance backlog). Measure with
    them, then investigate adaptive lossy encoding as described above.
-4. Investigate command `0x0a` as a possible 256 x RGB hardware gamma table.
+4. Investigate command `0x0a` as a possible 256 x RGB hardware gamma table
+   (`tools/gamma_test.py` is written but has not been run yet).
    Its 768-byte size is suggestive, not proof. Test controlled ramps on the
    real panel first; expose a standard DRM gamma LUT only if its semantics and
    persistence across flips, DPMS and resume are verified.
@@ -317,8 +334,8 @@ measured without a performance gain.
   returns early. The stale output stays (niri keeps queueing flips on the
   deleted node, or renders in a tight loop after an unbind), its fds pin the
   module, and the returning device is "unnamed" as a duplicate ("Unknown
-  Unknown Unknown"). A fix (look the node up in niri's own device map) is
-  being proposed upstream.
+  Unknown Unknown"). A fix (look the node up in niri's own device map) is in
+  `nix/niri-device-removed-fix.patch` (NixOS: `hardware.mct.niriFix`).
 - Display managers on a text console (ly, getty) show only on the
   framebuffer their VT is mapped to. fbcon can't mirror a VT, so the tablet
   shows ly only with `consoleMap = "1"`, and then the main monitor won't.

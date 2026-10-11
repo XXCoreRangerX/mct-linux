@@ -6,11 +6,38 @@ API ended up close to the plan below; differences: chips get the shadow's
 changed rows through `mdev->changed` and run their own worker body
 (`funcs->update`), the settle timer is shared (T6 back to full colour, T2
 lossless refinement), and chip-specific setup (DMA device, events) stays in
-the chip's probe. Size: core 670 lines, `mct_t2.c` 1550 -> 1270,
-`mct_t6.c` 2300 -> 1680. Not done yet: the Wacom profile struct in
-`mct_t2.c`.
+the chip's probe. Size at the refactor: core 670 lines, `mct_t2.c`
+1550 -> 1270, `mct_t6.c` 2300 -> 1680 (the T6 grew again with 0.18 to 0.21).
+Not done yet: the Wacom profile struct in `mct_t2.c`.
 
-The design as written before:
+## The API as it is (`kernel/mct_drv.h`)
+
+A chip backend embeds `struct mct_device` (the DRM device, planes, CRTC,
+connector, the shadow image and its locks, workers and commit-side
+statistics) and fills in:
+
+- `struct mct_config`: hooks, min/max image size, connector and encoder
+  type, cursor size (the T2 64 px, the T6 128 px), whether to poll the
+  connector, whether to offer a gamma LUT, the debugfs file name.
+- `struct mct_funcs`: `get_modes`, `mode_valid`, `detect`,
+  `late_register` / `early_unregister` (the T2's backlight), `enable`
+  (may allocate per-mode buffers, updates are stopped), `disable`, `stop`
+  (wait for transfers), `update` (the worker body: send what changed),
+  `gamma`, `cursor_set` (pixels as on screen, position may be negative),
+  `cursor_hide`, `stats`.
+
+The core calls `update` from its worker after commits copied changed rows
+into the shadow (`mdev->changed` marks them), and runs a shared settle
+timer (`mct_settle()`) the chips use to come back after motion. USB probe,
+disconnect, suspend and resume go through `kernel/mct.h`'s `mct_backend`;
+the core has `mct_init`, `mct_register`, `mct_unplug`, `mct_suspend`,
+`mct_resume`, and `mct_shadow_alloc` for chips with a fixed size.
+
+## The design as written before
+
+(Proposed names differ from the code; the T6 rotation in the table below
+was dropped, the 5600 has none, and cursors are per chip, up to 128 px.)
+
 
 Today `mct.ko` is one USB driver with two backends, `mct_t2.c` (1550 lines)
 and `mct_t6.c` (2300), each a full DRM driver of its own. About a third of

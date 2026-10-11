@@ -19,7 +19,7 @@ reply, read `0x81` before the next OUT or the firmware stalls. Pace ~50 ms.
 | `0x04` | `04 <len16> <payload>` | none | var-len list; observed: `(6a,idx)(6b,val)` and `(a3..a7/f3..f7/b1..b5, val)` register-pair programs |
 | `0x16` | `16 <len16=0x20> <32 B pairs>` (35 B) | none | **timing packet**: regs `0x20-0x2f` = width/height-derived + mode params (full template in init doc) |
 | `0x22` | 62 B | none | second mode packet (regs incl. `0xfc`-area mirrors); template TBD from driver |
-| `0x0a` | `0a` + 768 zeros (769 B) | none | clear/reset |
+| `0x0a` | `0a` + 768 zeros (769 B) | none | clear/reset, or a 256x3 gamma/palette table (untested, `tools/gamma_test.py`) |
 | `0x1b` | `1b8000a000800000` (8 B) | 512 zeros (idle) | EDID query (zeros until inited?) |
 | `0x1d` | `1d8000ae00000100` (8 B) | 512 B | **device info**: `55aa00ff...`, `07115200`, `MCT`, `DTU-1031X`, **EDID at +0x80** |
 | `0x29` | `29000000` (4 B) | 512 B, first byte used | `CT2Hal::ReadMC8032P1`; live reply starts `0f 00...` |
@@ -146,7 +146,8 @@ re-encoding it **byte-identically** (`tools/t2rle.py`).
   (251 px) and never emits `NN = 0x30` (writes `30 2f VV VV` instead). Runs of
   1-2 px are written as literals.
 - Windows' encoder is slightly lossy: it merges pixels within +/-4 of the run
-  value into a run. Our encoder is exact (apart from `0x30`->`0x31`).
+  value into a run. Our encoder is exact (apart from `0x30`->`0x31`) unless the
+  driver's optional lossy mode is on (see kernel-driver.md).
 - **Orientation: the panel scans out rotated 180 degrees.** The first pixel in the
   stream is the bottom-right of the visible image. Windows pre-rotates, and we
   reverse the pixel order (`tools/show_image.py::rot180`).
@@ -180,7 +181,9 @@ desktop use is mostly partial updates and much cheaper.
 
 A lossy variant like the vendor's (merge values within +-4 into runs) halves a
 photo's payload (+-2: -36%, +-4: -46%) but leaves visible banding in smooth
-gradients, so the drivers stay lossless. `tools/t2rle.py encode(..., tol=N)`
+gradients, so the drivers stay lossless by default. mct_t2 has an optional
+lossy mode (`lossy=N`) only for updates too big for one frame, refined to
+lossless afterwards (see kernel-driver.md). `tools/t2rle.py encode(..., tol=N)`
 keeps it for experiments.
 
 ## Panel power (verified live 2026-09-24)

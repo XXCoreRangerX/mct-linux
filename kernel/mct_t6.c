@@ -14,11 +14,11 @@
  *    session header's dest is where the data lands (header first, so the
  *    pixels start at dest + 0x30)
  *
- * Frames are converted to NV12, the T6's own surface format, and sent whole
- * into three device buffers in turn. The header's payload length must be
- * exact: the chip switches to a buffer once that many bytes have arrived.
- * A worker does the sending, so commits never
- * wait for USB and the newest image always wins.
+ * The worker converts the shadow image to the surface format in use (exact
+ * RGB or YUV 4:4:4 while the screen is still, NV12 during large changes),
+ * writes the rows that differ from the next of three device frame buffers
+ * as rectangle writes (session type 7), and switches to it with an empty
+ * flip. Commits never wait for USB and the newest image always wins.
  */
 
 #include <linux/debugfs.h>
@@ -137,7 +137,7 @@ struct t6_mode {
  * starts to show artifacts around 350 MHz. Limits are in docs/t6-limits.md.
  */
 #define T6_MAX_CLOCK_KHZ	340000
-/* frame buffers are 0xfffec0 apart; a frame is 0x30 bytes header + NV12 */
+/* frame buffers are 0xfffec0 apart; a frame is a 0x30 byte header + planes */
 #define T6_BUF_SIZE		0xfffec0
 /*
  * Largest image beyond the device's own table, and a lower clock limit for

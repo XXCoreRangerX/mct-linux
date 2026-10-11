@@ -61,20 +61,52 @@ Contents
   tools/    test and research scripts (tools/README.md)
   t2d/      older userspace daemon for the T2 on top of EVDI
   data/, captures/, vm/
-            first probe outputs, one USB capture of the Windows init, the
-            Windows VM setup used for captures (no vendor files)
+            first probe outputs, one USB capture of the Windows init and one
+            encoded test frame, the Windows VM setup used for captures (no
+            vendor files)
+
+Supported devices
+-----------------
+
+  0711:5600  T6 USB Station (Trigger 6, feature level 6)    tested
+  0711:5601  single-output Trigger 6 adapter               untested
+  0711:520d  Wacom DTU-1031X (Trigger II), interface 0      tested
+  0711:5209  the same tablet, which enumerates with either ID
+
+Other Trigger 6 IDs (MCT uses 0711:5600-561f and more) are not matched yet:
+they may have other outputs or features this driver doesn't handle. Other
+Trigger II products need their own init and modes (see above).
 
 Building
 --------
 
-Kernel module, out of tree, against the running kernel's headers:
+Needs Linux 7.2 or later (DRM API) with DRM, DRM_KMS_HELPER,
+DRM_GEM_SHMEM_HELPER, BACKLIGHT_CLASS_DEVICE and USB enabled, and the
+kernel's headers or build tree.
 
     make -C kernel KDIR=/lib/modules/$(uname -r)/build
-    sudo insmod kernel/mct.ko
+    sudo make -C kernel install
+    sudo depmod -a
+    sudo modprobe mct
+
+modprobe also loads the DRM helper modules mct uses; a plain
+`sudo insmod kernel/mct.ko` works for a quick test only once those are
+loaded (otherwise it fails with "Unknown symbol"). To reload after a
+rebuild, unbind the devices (`echo <interface> >
+/sys/bus/usb/drivers/mct/unbind` for each entry there), then
+`rmmod mct` and `modprobe mct`. With Secure Boot, the module has to be
+signed with a key the kernel trusts.
 
 `MCT_T2=n` or `MCT_T6=n` on the make command line leaves a backend out. The
 driver binds to supported devices automatically. The T6 shows up as an
 HDMI-A-n connector, the tablet as USB-n.
+
+The scripts in tools/ open the devices directly; give your user access with
+a udev rule such as
+
+    SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d|5600|5601", TAG+="uaccess"
+
+(the NixOS module installs this one).
 
 NixOS, plain configuration.nix:
 
@@ -82,9 +114,11 @@ NixOS, plain configuration.nix:
     hardware.mct.enable = true;
 
 or with flakes, add this repository as an input and import
-`nixosModules.default`; the package is `packages.<system>.mct-kmod`. The
-module also installs `mct-reload`, which unbinds the devices and loads the
-module again (after a rebuild, without a reboot).
+`nixosModules.default`. The module builds the driver for the system's own
+kernel (`boot.kernelPackages`); the flake's `packages.x86_64-linux.mct-kmod`
+is built for linuxPackages_latest. The module also installs `mct-reload`,
+which unbinds the devices and loads the module again (after a rebuild,
+without a reboot).
 
 Options
 -------
@@ -92,8 +126,10 @@ Options
 Module parameters, also writable at runtime in /sys/module/mct/parameters/:
 
   format    T6 pixel format: auto (default), rgb24, rgb32, yuv444, nv12.
-            Fixed formats are used where the adapter can scan them out at
-            the current mode, NV12 elsewhere.
+            auto uses exact RGB or YUV 4:4:4 while the screen is still and
+            NV12 during large changes. A fixed format stays fixed (no NV12
+            for motion) where the adapter can scan it out at the current
+            mode, NV12 elsewhere. Unknown values mean auto.
   lossy     T2: maximum lossy tolerance (1-8) for updates too big for one
             60 Hz frame, refined to lossless once motion stops. 0 = off
             (default).
@@ -117,7 +153,8 @@ Debugging
     sudo cat /sys/kernel/debug/dri/*/mct_t2_stats
 
 show the mode, the format in use, update rates, bytes sent, timings and
-error counters. The T6 logs its feature level and video memory at probe.
+error counters (docs/debugfs.md explains the fields). The T6 logs its
+feature level and video memory at probe.
 
 Known issues
 ------------
@@ -161,5 +198,6 @@ Trigger 5.
 License
 -------
 
-Code is GPL-2.0 (see LICENSE). The documentation in docs/ is CC BY-SA 4.0,
-as it builds on cyrozap's notes. No vendor code or binaries are included.
+Code is GPL-2.0 (see LICENSE). The documentation in docs/ is CC BY-SA 4.0
+(docs/LICENSE.md), as it builds on cyrozap's notes. No vendor code or
+binaries are included. CHANGELOG.md lists the changes per version.

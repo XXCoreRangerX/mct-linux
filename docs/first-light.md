@@ -14,7 +14,7 @@ and a verbatim Windows RLE frame. All transfers completed OK (no stalls).
    boundary. Windows always sends the 21/36/23-byte header as its own
    transfer, then the payload in chunks. We concatenated header+payload
    into one `write()`, and the firmware silently dropped it.
-   - Also: `tools/gen_trial2.py` dropped the `0x13` headers but still sent
+   - Also: `tools/gen_trial2.py` (script not kept) dropped the `0x13` headers but still sent
      their payloads (as zeros), which desynced EP2 further.
 2. **Missing flip.** Scanout only changes on a `0x15` batch on EP2 that
    rewrites `fcb1..b3` (scanout addr >> 2) and toggles `fb65`/`fcb4`.

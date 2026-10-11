@@ -26,6 +26,8 @@ time; later findings are added, earlier ones are kept.
 
 | File | What's in it |
 |---|---|
+| [t6-driver.md](t6-driver.md) | the Trigger 6 backend: probe, modes, frames, errors and events, cursor |
+| [debugfs.md](debugfs.md) | the statistics files and the T6 test hook |
 | [kernel-driver.md](kernel-driver.md) | the Trigger II backend: design, measurements, lossy mode, recovery, known issues |
 | [display-driver.md](display-driver.md) | the older EVDI + t2d userspace route for the T2 |
 | [optimization-ideas.md](optimization-ideas.md) | T2 speed ideas, tried and not tried |
@@ -46,3 +48,6 @@ time; later findings are added, earlier ones are kept.
 | [t6-lab-notebook.md](t6-lab-notebook.md) | the running log of the Trigger 6 work: every experiment and result |
 | [first-light.md](first-light.md) | the first picture on the DTU-1031X |
 | [project-history.md](project-history.md) | how the project went, from first probes to the kernel driver |
+
+Licence: [LICENSE.md](LICENSE.md) (CC BY-SA 4.0). Changes per version:
+[../CHANGELOG.md](../CHANGELOG.md).

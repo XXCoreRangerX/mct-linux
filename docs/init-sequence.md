@@ -2,7 +2,7 @@
 
 Source: usbmon text capture (bus 6, dev 011, not published), first bulk at
 line ~2629162. Order below = wire order. EP `0x03` unless noted.
-The exact bytes (no truncation) are in `captures/redir2.bin`; `tools/replay.py` replays them and `t2d/init.bin` is extracted from them.
+The exact bytes (no truncation) are in `captures/redir2.bin`; `tools/replay.py` replays them and `t2d/init-full.bin` is extracted from them (`t2d/init.bin` is the trimmed version).
 
 ## Phase 1: probe
 

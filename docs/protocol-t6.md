@@ -1,7 +1,8 @@
 # MCT Trigger 6 (T6) protocol
 
 Worked out from 2026-10-10 on a **T6 USB Station** (USB `0711:5600`, board
-"JUA254H") driving an LG 27GN750 over HDMI. Sources, in the lab directory:
+"JUA254H") driving an LG 27GN750 over HDMI. Sources, in the lab directory
+(not published):
 
 - the [trigger6](https://github.com/JingYenLoh/trigger6) Linux driver and its
   Windows USB capture of a `0711:5601` (`captures/t6-analysis/`,
@@ -25,8 +26,8 @@ Nothing here shares code or framing with the T2.
 | Interface 0 | class 0xff, one altsetting, the only interface on the 5600 |
 | EP 0x02 | bulk OUT, 1024 B packets, bMaxBurst 15: frames and other data (V) |
 | EP 0x81 | bulk IN: unused by all known drivers |
-| EP 0x83 | interrupt IN, 64 B: frame-done and hotplug events (V for frame done) |
-| VRAM | request `0x88` x 1 MiB (5601: 58 MiB) (C) |
+| EP 0x83 | interrupt IN, 64 B: frame-done and hotplug events (V) |
+| VRAM | request `0x88` x 1 MiB (5600: 58 MiB, V) |
 | CPU | Andes NDS32 running uC/OS-II (cyrozap) |
 
 ## Control requests (vendor, recipient device)
@@ -39,7 +40,7 @@ Nothing here shares code or framing with the T2.
 | `40 12` | output | 0 | 32 B out | set mode, one timing entry (V, also custom entries) |
 | `40 31` | 0 | 0 | none | "software ready", after every mode set (V) |
 | `40 03` | output | 1 on / 0 off | none | output on/off (V) |
-| `40 10` / `40 11` | cursor slot | byte offset | <= 512 B out | cursor image, output 0 / 1 (V for 0x10) |
+| `40 10` / `40 11` | cursor slot | byte offset | up to 4096 B out (V) | cursor image, output 0 / 1 (V for 0x10) |
 | `40 05` / `40 07` | cursor slot | 1 show / 0 hide | none | select and show / hide the cursor (V for 0x05) |
 | `40 04` / `40 06` | x | y | none | cursor position, top left of the image (V for 0x04) |
 | `c0 88` | 0 | 0 | 1 B in | VRAM size in MiB (5600: `3a` = 58) |
@@ -118,7 +119,8 @@ command once its data length has arrived (V: a frame sent slowly over 3 s
 appears at once). The data length must be exact; 48 bytes too many make the
 chip wait for bytes of the next frame.
 
-**Raw NV12 full frame** (V, what mct_t6 uses for the first frame):
+**Raw NV12 full frame** (V; used by early mct_t6 versions, the driver now
+sends rectangle writes and empty flips only):
 address = fb, plane 0 (Y) = fb + 0x30, plane 1 (interleaved CbCr) = plane 0 +
 pitch * height, plane 2 = plane 0, pitches = width (align 16), target =
 source = 6, data = Y then CbCr rows. BT.601 limited range works; the vendor
@@ -133,7 +135,9 @@ length 48) shows a frame buffer that is already filled.
 **Raw BGR24** (trigger6's layout, V): address 0x30, plane 0 = plane 1 = 0x60,
 pitch 0 = width * 3, target = source = 9. Writing into the visible buffer
 tears; even into separate buffers it switches without vsync, so tears show.
-NV12 flips are tear-free.
+NV12 flips are tear-free. (Superseded: with the exact data length and pitch
+align32(w) * 3, BGR24 and RGB32 flips are tear-free too, see the notebook;
+the driver's layouts are in `t6_set_layout`.)
 
 JPEG (vendor drivers, C): JPEG data goes to a ring from VRAM - 0xA00000
 (0x3000000 on 58 MiB) and is decoded into an NV12 frame buffer; payload padded
@@ -152,7 +156,8 @@ u32 0, 0
 ```
 
 Data: height rows of Y (width bytes each), then height / 2 rows of CbCr. One
-header per write, no fragments (mct_t6 keeps each write under 0x19000 bytes).
+header per write, no fragments (mct_t6 keeps each write under 0x19000 bytes,
+0x6400 on a USB 2 link).
 Writes into a hidden frame buffer don't show until a flip to it (V). Partial
 update: write what changed into the next frame buffer, then an empty flip
 (V, 325 fps of a moving block from Python).
@@ -160,18 +165,21 @@ update: write what changed into the next frame buffer, then an empty flip
 ### Interrupt events (EP 0x83, 64 bytes)
 
 Byte 0x13: 0x04 frame done (fence ID at 0x0c, V), 0x01 / 0x02 monitor change
-on output 0 / 1, 0x08 JPEG error, 0x10 redraw request (C). Not locked to
-vblank.
+on output 0 / 1 (V for output 0), 0x08 JPEG error, 0x10 redraw request (C;
+mct resends picture and cursor). Frame done is not locked to vblank (0.1 to
+10 ms after the data, V); whether it comes at all varied between runs.
 
 ## Cursor
 
 Image: 8-byte header `{u16 kind (1 = ARGB with alpha, 2 = mask), u16 width,
 u16 height, u16 pitch}` then B, G, R, A pixels, 64, 96 or 128 square, sent in
-512-byte pieces with `40 10` (wIndex = byte offset). 5 slots per output
+pieces of up to 4096 bytes with `40 10` (wIndex = byte offset; the vendor
+uses 512). wIndex is 16 bits, so a 128 px image (65,544 bytes) can only be
+sent up to 0x10000: its last two pixels are never sent, which works (V). 5 slots per output
 (output 1 from slot 5). `40 05` with a slot selects and shows it; uploading
 into the slot on screen can leave the cursor scrambled, so upload into
 another slot and select it (V). Position `40 04`: top left of the image,
-wValue x, wIndex y; negative values as v - 1 (C).
+wValue x, wIndex y; negative values as v - 1 (V).
 
 ## Throughput (5600, measured)
 
