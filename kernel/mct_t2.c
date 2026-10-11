@@ -1171,6 +1171,7 @@ static const struct drm_driver t2_drm_driver = {
 	.fops = &t2_fops,
 	DRM_GEM_SHMEM_DRIVER_OPS,
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
+	MCT_COMPAT_DRIVER_OPS
 };
 
 /* sysfs (docs/driver/companion-app.md) */

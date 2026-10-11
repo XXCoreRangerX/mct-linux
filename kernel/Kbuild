@@ -5,8 +5,36 @@ MCT_T2 ?= y
 MCT_T6 ?= y
 
 obj-m += mct.o
-mct-y := mct_main.o mct_drv.o
+mct-y := mct_main.o mct_drv.o mct_compat.o
 mct-$(MCT_T2) += mct_t2.o
 mct-$(MCT_T6) += mct_t6.o
 ccflags-$(MCT_T2) += -DMCT_HAVE_T2
 ccflags-$(MCT_T6) += -DMCT_HAVE_T6
+
+# Kernels older than the driver's API (7.2): each interface the kernel's
+# headers lack sets a flag for mct_compat.h. Nothing is set on 7.2.
+mct_inc := $(srctree)/include
+mct_has = $(shell grep -qs '$(2)' $(mct_inc)/$(1) && echo y)
+ifneq ($(call mct_has,drm/drm_atomic.h,struct drm_atomic_commit {),y)
+ccflags-y += -DMCT_COMPAT_ATOMIC_STATE
+endif
+ifeq ($(wildcard $(mct_inc)/drm/drm_vblank_helper.h),)
+ccflags-y += -DMCT_COMPAT_NO_VBLANK_HELPER
+endif
+ifneq ($(call mct_has,drm/drm_fbdev_shmem.h,DRM_FBDEV_SHMEM_DRIVER_OPS),y)
+ccflags-y += -DMCT_COMPAT_NO_FBDEV_SHMEM_OPS
+else ifeq ($(wildcard $(mct_inc)/drm/clients/drm_client_setup.h),)
+ccflags-y += -DMCT_COMPAT_CLIENT_SETUP_OLD_PATH
+endif
+ifneq ($(call mct_has,drm/drm_device.h,drm_dev_set_dma_dev),y)
+ifneq ($(call mct_has,drm/drm_drv.h,drm_dev_set_dma_dev),y)
+ccflags-y += -DMCT_COMPAT_NO_DMA_DEV
+endif
+endif
+ifneq ($(call mct_has,linux/hrtimer.h,void hrtimer_setup),y)
+ccflags-y += -DMCT_COMPAT_NO_HRTIMER_SETUP
+endif
+ifeq ($(shell grep -A1 -s 'mode_valid..struct drm_connector \*connector' \
+	$(mct_inc)/drm/drm_modeset_helper_vtables.h | grep -c 'const struct drm_display_mode'),0)
+ccflags-y += -DMCT_COMPAT_MODE_VALID_NONCONST
+endif

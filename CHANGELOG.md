@@ -11,6 +11,12 @@ the package from here on).
 
 Driver:
 
+- Linux 6.12 LTS and later: `kernel/mct_compat.h` maps the 7.2 DRM API
+  onto older kernels where `Kbuild` finds it missing (atomic state rename,
+  vblank timer, fbdev setup, buffer import DMA device, const `mode_valid`).
+  Built in CI for 6.12, 6.18 and the latest kernel; tested on 6.12 in a VM
+  with the JUA254 passed through (modes, console, mode set, 120 Hz vblank
+  and page flips, unload). Nothing changes on 7.2.
 - mct_t6 0.22.0: no modes above the monitor's native size unless
   `all_modes=1`.
 - mct_t6 0.23.0 / mct_t2 0.3.20: every setting per device in sysfs

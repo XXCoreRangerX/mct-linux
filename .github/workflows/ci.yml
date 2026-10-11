@@ -9,12 +9,16 @@ on:
 
 jobs:
   kernel:
-    name: Kernel module (Linux 7.2+, Nix)
+    name: Kernel module (${{ matrix.package }})
+    strategy:
+      matrix:
+        # latest (7.2+), and the oldest kernels mct_compat.h covers
+        package: [mct-kmod, mct-kmod-6_18, mct-kmod-6_12]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
-      - run: nix build .#mct-kmod -L
+      - run: nix build ".#${{ matrix.package }}" -L
 
   app:
     name: App (build and tests)

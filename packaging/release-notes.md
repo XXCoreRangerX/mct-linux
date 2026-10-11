@@ -1,7 +1,7 @@
 
 ## Installing
 
-**Driver** (Linux 7.2 or later, with DKMS):
+**Driver** (Linux 6.12 or later, with DKMS; mainly tested on 7.2):
 
 ```sh
 sudo tar -C /usr/src -xzf mct-dkms-@VERSION@.tar.gz

@@ -15,7 +15,6 @@
 #include <linux/usb.h>
 #include <linux/vmalloc.h>
 
-#include <drm/clients/drm_client_setup.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_atomic_state_helper.h>
@@ -34,7 +33,6 @@
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
 #include <drm/drm_vblank.h>
-#include <drm/drm_vblank_helper.h>
 
 #include "mct_drv.h"
 
@@ -461,7 +459,7 @@ static int mct_conn_get_modes(struct drm_connector *connector)
 }
 
 static enum drm_mode_status mct_conn_mode_valid(struct drm_connector *connector,
-						const struct drm_display_mode *mode)
+						MCT_CONN_MODE_CONST struct drm_display_mode *mode)
 {
 	return to_mct(connector->dev)->funcs->mode_valid(to_mct(connector->dev), mode);
 }

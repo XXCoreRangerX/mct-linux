@@ -17,8 +17,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
-      # the tarball is only published if the module builds
-      - run: nix build .#mct-kmod -L
+      # the tarball is only published if the module builds on every kernel
+      - run: nix build .#mct-kmod .#mct-kmod-6_18 .#mct-kmod-6_12 -L
       - run: packaging/make-release.sh driver "${GITHUB_REF_NAME#v}"
       - uses: actions/upload-artifact@v7
         with:

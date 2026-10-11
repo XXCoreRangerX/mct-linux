@@ -16,6 +16,9 @@
         inherit evdi;
         wacom-t2d = pkgs.callPackage ./nix/wacom-t2d.nix { inherit evdi; };
         mct-kmod = pkgs.callPackage ./nix/kmod.nix { inherit (kernelPackages) kernel; };
+        # build checks for the older kernels kernel/mct_compat.h covers
+        mct-kmod-6_12 = pkgs.callPackage ./nix/kmod.nix { inherit (pkgs.linuxPackages_6_12) kernel; };
+        mct-kmod-6_18 = pkgs.callPackage ./nix/kmod.nix { inherit (pkgs.linuxPackages_6_18) kernel; };
         mct-app = pkgs.callPackage ./nix/mct-app.nix { };
         default = self.packages.${system}.mct-kmod;
       };

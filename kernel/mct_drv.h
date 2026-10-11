@@ -19,6 +19,8 @@
 #include <drm/drm_encoder.h>
 #include <drm/drm_plane.h>
 
+#include "mct_compat.h"
+
 struct seq_file;
 struct usb_interface;
 struct drm_color_lut;
@@ -80,6 +82,7 @@ struct mct_device {
 	struct drm_encoder encoder;
 	struct drm_connector conn;
 	const struct mct_funcs *funcs;
+	struct mct_compat compat;	/* older kernels only, see mct_compat.h */
 
 	struct mutex lock;		/* the fields below, up to work */
 	u8 *shadow;			/* XRGB8888 image as committed by userspace */

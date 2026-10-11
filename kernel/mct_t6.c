@@ -2378,6 +2378,7 @@ static const struct drm_driver t6_drm_driver = {
 	 */
 	DRM_GEM_SHMEM_DRIVER_OPS,
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
+	MCT_COMPAT_DRIVER_OPS
 };
 
 static const struct mct_funcs t6_funcs = {

@@ -66,8 +66,9 @@ drivers' disassembly and testing on real hardware.
 | | Feature | Notes |
 |---|---|---|
 | ✅ | Wayland and X11 compositors | |
-| ✅ | Linux 7.2 and later | |
-| ❌ | Linux older than 7.2 | the driver uses newer DRM helpers |
+| ✅ | Linux 7.2 and later | mainly developed and tested on 7.2 |
+| ✅ | Linux 6.12 LTS to 7.1 | through a compatibility layer; built in CI for 6.12 and 6.18, tested on 6.12 in a VM with the JUA254 |
+| ❌ | Linux older than 6.12 | |
 | ✅ | Desktop app and command line tool | MCT Display Manager, `mctctl` |
 
 ## Features
@@ -120,13 +121,13 @@ Other Trigger II products need their own init and modes (see above).
 | [`packaging/`](packaging) | release files: DKMS config, udev rules, the app's install script, the release build script (run by [`.github/workflows/`](.github/workflows) on a version tag) |
 | [`docs/`](docs) | protocol references, limits, driver notes, lab notes ([index](docs/README.md)) |
 | [`tools/`](tools) | test and research scripts ([index](tools/README.md)) |
-| [`wacom-t2d/`](wacom-t2d) | legacy: the DTU-1031X as a userspace daemon on top of EVDI, for kernels older than 7.2 and for protocol work; also holds the tablet's init sequence the kernel driver is built from |
+| [`wacom-t2d/`](wacom-t2d) | legacy: the DTU-1031X as a userspace daemon on top of EVDI, for kernels older than 6.12 and for protocol work; also holds the tablet's init sequence the kernel driver is built from |
 | `data/`, `captures/`, `vm/` | first probe outputs, an encoded test frame, how the Windows VM for the captures was run (the captures themselves and the vendor files are not published) |
 
 ## Installing from a release
 
 Each [release](https://github.com/XXCoreRangerX/mct-linux/releases) has the
-driver as DKMS source (built on your machine for every installed kernel, 7.2
+driver as DKMS source (built on your machine for every installed kernel, 6.12
 or later) and MCT Display Manager with `mctctl` for x86_64 and aarch64:
 
 ```sh
@@ -143,7 +144,7 @@ The app needs GTK 4.14 and libadwaita 1.5 or later (Ubuntu 24.04, Fedora
 
 ## Building
 
-Needs Linux 7.2 or later (DRM API) with `DRM`, `DRM_KMS_HELPER`,
+Needs Linux 6.12 or later with `DRM`, `DRM_KMS_HELPER`,
 `DRM_GEM_SHMEM_HELPER`, `BACKLIGHT_CLASS_DEVICE` and `USB` enabled, and the
 kernel's headers or build tree.
 
@@ -153,6 +154,12 @@ sudo make -C kernel install
 sudo depmod -a
 sudo modprobe mct
 ```
+
+The driver is written for the DRM API of Linux 7.2 and mainly tested there.
+On 6.12 to 7.1, `kernel/Kbuild` detects which newer interfaces the kernel
+lacks and `kernel/mct_compat.h` maps them onto the older ones (the renamed
+atomic state, the vblank timer helpers, the fbdev setup, the DMA device for
+buffer imports). On 7.2 and later none of it is used.
 
 `modprobe` also loads the DRM helper modules mct uses; a plain
 `sudo insmod kernel/mct.ko` works for a quick test only once those are

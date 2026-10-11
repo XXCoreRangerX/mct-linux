@@ -771,3 +771,21 @@ Graphics", index 3 is 0x5640 "USB Audio Device". The 5600 enumerates with
 no audio interface, so the chip has the audio function but this board
 doesn't expose it on USB (the 5601 in the capture reported 0x5621 for its
 display function). Reading `b1` at probe caused no problems.
+
+**Older kernels (2026-10-11).** Built against 6.18.53 and 6.12.111: 6.18
+lacks only the 7.2 rename of `struct drm_atomic_state` to
+`drm_atomic_commit`; 6.12 also lacks the vblank timer helpers, the
+`drm_client_setup` fbdev path for shmem, `drm_dev_set_dma_dev`,
+`hrtimer_setup` and the const `mode_valid` argument. `kernel/mct_compat.h`
+covers them, selected by header checks in `Kbuild` (the vblank helper turned
+up in 6.18.53 although it is not in v6.18, so versions would have been
+wrong). Tested in a NixOS VM (QEMU, the JUA254 passed through with
+`guest-reset=off`, the LG 27GN750 on HDMI), 6.12.111 against 7.2.7 as the
+reference, same script: probe and sysfs identical; EDID modes (36, up to
+1080p144); fbdev `fb1`; `vbltest` 119.99-120.02 Hz on 6.12 (the compat
+hrtimer) vs 120.00 on 7.2; `modetest -v` page flips 119.5-120.4 Hz vs
+119.98-120.02, ~1600 updates in 15 s on both; clean `rmmod`, no warnings.
+`vbltest` and `modetest` exit at once when stdin is /dev/null (a systemd
+service): feed them `sleep 30 |`. QEMU resets the device when it lets go
+of it (each VM exit): the T6 came back on the host every time.
+
