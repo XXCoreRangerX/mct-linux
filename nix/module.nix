@@ -95,8 +95,11 @@ in
               [ -e "$intf" ] && basename "$intf" > /sys/bus/usb/drivers/mct/unbind
             done
             sleep 2
-            rmmod mct || { echo "mct still in use (compositor holding the old device?)" >&2; exit 1; }
-            modprobe mct
+            if [ -d /sys/module/mct ]; then
+              rmmod mct || { echo "mct still in use (compositor holding the old device?)" >&2; exit 1; }
+            fi
+            # current system, not the booted one, so a rebuild applies without a reboot
+            modprobe -d /run/current-system/kernel-modules mct
             echo "mct reloaded"
           '')
       ];
