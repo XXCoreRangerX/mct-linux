@@ -388,3 +388,7 @@ apply the DRM gamma LUT in software during the NV12 conversion.
 0x83, byte 0x13 bits 0/1 -> connector check): unplugging and replugging the
 LG's HDMI cable was noticed by niri "pretty much instantly" both ways (the
 10 s polling stays as a fallback).
+
+**Software gamma** (mct_t6 0.11: DRM GAMMA_LUT, 256 entries, applied per
+pixel during the NV12 conversion): Noctalia's night light works on the LG,
+no noticeable slowdown.
