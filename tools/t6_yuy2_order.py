@@ -1,7 +1,8 @@
+import os
 import sys, time
-sys.path.insert(0, "tools")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.argv = ["x"]
-src = open("tools/t6_yuy2_hunt.py").read().split("t = t6dev.T6()")[0]
+src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "t6_yuy2_hunt.py")).read().split("t = t6dev.T6()")[0]
 exec(src)
 t = t6dev.T6()
 t.set_mode(t.find_mode(W, H, 60)); t.cout(0x31, 0, 0); t.output(True); time.sleep(1.5)

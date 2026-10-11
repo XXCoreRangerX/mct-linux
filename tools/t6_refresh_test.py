@@ -1,7 +1,8 @@
 """Custom refresh test: build a mode entry with the PLL fields MCT's formula gives."""
+import os
 import sys, struct, time, math
 import numpy as np
-sys.path.insert(0, "tools")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import t6dev
 W, H = (int(v) for v in sys.argv[2].split('x')) if len(sys.argv) > 2 else (1920, 1080)
 BASE = 40.0          # MHz; b0 index 0 = 1 -> "Super Lite" platform

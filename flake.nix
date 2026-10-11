@@ -15,7 +15,6 @@
         inherit evdi;
         t2d = pkgs.callPackage ./nix/t2d.nix { inherit evdi; };
         mct-kmod = pkgs.callPackage ./nix/kmod.nix { inherit (kernelPackages) kernel; };
-        mct-t2-kmod = self.packages.${system}.mct-kmod; # old name
         default = self.packages.${system}.t2d;
       };
 

@@ -7,7 +7,7 @@ then binds the driver again and checks the kernel log and the DRM connector:
 the driver must recover (or find the device idle), initialize and connect.
 
 The interface is always rebound on exit, including on errors and Ctrl-C.
-Needs write access to /sys/bus/usb/drivers/mct_t2/{bind,unbind} and to the
+Needs write access to /sys/bus/usb/drivers/mct/{bind,unbind} and to the
 device node (e.g. the NixOS module's uaccess rule plus a chmod of bind/unbind).
 
 Usage: t2_recovery_test.py [--cycles N] [--clean] [--intf 6-3.1:1.0]
@@ -19,7 +19,7 @@ import argparse, glob, os, random, subprocess, sys, time
 import t2dev
 import t2rle
 
-DRV = "/sys/bus/usb/drivers/mct_t2"
+DRV = "/sys/bus/usb/drivers/mct"
 
 
 def bound(intf):

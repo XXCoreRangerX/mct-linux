@@ -1,4 +1,9 @@
-# Native kernel driver: `mct_t2` (2026-09-24)
+# Kernel driver, Trigger II backend (`mct_t2.c`, 2026-09-24)
+
+Since the Trigger 6 work the driver is one module, `mct`, with a backend
+per chip; this file covers the Trigger II backend (DRM driver name `mct_t2`).
+For the Trigger 6 see [protocol-t6.md](protocol-t6.md) and
+[t6-lab-notebook.md](t6-lab-notebook.md).
 
 `kernel/mct_t2.c` is a DRM/KMS driver for the T2. It replaces EVDI + `t2d`, and
 because it's a normal DRM device with fbdev emulation, the **text console
@@ -37,14 +42,14 @@ Modelled on `drivers/gpu/drm/tiny/gm12u320.c` (in-tree USB projector driver).
 
 ```bash
 nix-build nix/kmod-local.nix -o result-kmod        # against <nixpkgs> linuxPackages_latest
-nix build .#mct-t2-kmod                            # against the flake's nixpkgs
+nix build .#mct-kmod                            # against the flake's nixpkgs
 make -C kernel KDIR=/lib/modules/$(uname -r)/build # plain out-of-tree build
-sudo insmod mct_t2.ko                              # binds the tablet automatically
+sudo insmod mct.ko                              # binds the tablet automatically
 ```
 
 Console on the tablet: `con2fbmap <tty> <fb>` (from `fbset`), or boot with
 `fbcon=map:<digits>` (one fb index per console).
-The NixOS option `hardware.mct-t2.consoleMap` sets the latter. fbcon applies the
+The NixOS option `hardware.mct.consoleMap` sets the latter. fbcon applies the
 boot map when the tablet's framebuffer registers, which happens after the GPU's, so
 the mapped consoles move over as soon as the driver has probed.
 
@@ -90,8 +95,8 @@ already runs at the device's limit. The branch is kept for reference, unmerged.
 
 ## Optional lossy mode (driver 0.3.9)
 
-`lossy=N` (module parameter, runtime-writable in `/sys/module/mct_t2/parameters/`,
-NixOS `hardware.mct-t2.lossy`, default 0): each rect is encoded losslessly
+`lossy=N` (module parameter, runtime-writable in `/sys/module/mct/parameters/`,
+NixOS `hardware.mct.lossy`, default 0): each rect is encoded losslessly
 first; only if the update's total would exceed what the device takes in one
 60 Hz frame (~600 KB) is it re-encoded with runs absorbing values within +-N
 (the vendor uses 4). The encoder writes back what the device will show, so the
@@ -193,8 +198,8 @@ a desktop brightness slider, or brightness keys.
 
 ## Updating the module without a reboot
 
-`mct-t2-reload` (installed by the NixOS module) unbinds the tablet, unloads
-`mct_t2` and loads the module of the current system generation. This needs a
+`mct-reload` (installed by the NixOS module) unbinds the devices, unloads
+`mct` and loads the module of the current system generation. This needs a
 compositor that closes removed DRM devices (niri needs `niriFix`).
 
 Since 0.3.13, probe and resume also recover a T2 left halfway through a
@@ -301,7 +306,7 @@ measured without a performance gain.
     (backlight 0, `fcf6`), retuning the PLL (`f4` 2d -> 28 for 2.5 s and back),
     or replaying the PLL, timing, mode or buffer parts of the init.
   - Fixed by another full init, which is again random. After a bad load,
-    `mct-t2-reload`, a replug or a suspend/resume cycle gives another try.
+    `mct-reload`, a replug or a suspend/resume cycle gives another try.
   - A USB reset of the chip is not a way out: in the stuck resync case it
     stopped answering control requests, and only a port power cycle or
     replug brought it back.

@@ -2,9 +2,10 @@
 """Does this T6 apply gamma tables (requests 0x1d / 0x1c)? The vendor driver
 only uses them from feature level 8 (0xb0 index 4); the 5600 reports 6.
 Shows the test card, then: all tables inverted, one table inverted, off."""
+import os
 import sys, struct, time
 import numpy as np
-sys.path.insert(0, "tools")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import t6dev
 
 W, H = 1920, 1080

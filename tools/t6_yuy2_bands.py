@@ -1,7 +1,8 @@
+import os
 import sys, time
-sys.path.insert(0, "tools")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np
-src = open("tools/t6_yuy2_hunt.py").read().split("t = t6dev.T6()")[0]
+src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "t6_yuy2_hunt.py")).read().split("t = t6dev.T6()")[0]
 sys.argv = ["x"]
 exec(src)
 img = np.zeros((H, W, 3), np.uint8)

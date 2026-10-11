@@ -47,7 +47,7 @@ nix build .#t2d && ./result/bin/t2d    # full init + EVDI loop  (-n: skip init, 
 ./result/bin/t2d -t pattern            # USB-only test: pattern + partial rect, no EVDI
 ```
 
-NixOS: `nixosModules.default` with `hardware.mct-t2.enable = true;` loads the patched
+NixOS: `nixosModules.default` with `hardware.mct.enable = true;` loads the patched
 EVDI with `initial_device_count=1`, adds a udev `uaccess` rule (which also starts the
 user service on plug), and runs `t2d` as a systemd user service with `Restart=always`.
 

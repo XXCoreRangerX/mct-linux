@@ -7,7 +7,7 @@ init, shows a test pattern (grey ramp plus red, green and blue ramps) and then
 sends a few tables, one per Enter press. Watch the panel and note what each
 step does. The driver is bound again on exit, which re-runs the normal init.
 
-Needs write access to /sys/bus/usb/drivers/mct_t2/{bind,unbind} and to the
+Needs write access to /sys/bus/usb/drivers/mct/{bind,unbind} and to the
 device node, same as t2_recovery_test.py.
 
 Usage: gamma_test.py [--intf 6-3.1:1.0]
@@ -16,7 +16,7 @@ import argparse, os, sys, time
 
 import t2dev
 
-DRV = "/sys/bus/usb/drivers/mct_t2"
+DRV = "/sys/bus/usb/drivers/mct"
 W, H = t2dev.W, t2dev.H
 
 ident = bytes(range(256))

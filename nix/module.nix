@@ -9,11 +9,6 @@ let
   t2d = pkgs.callPackage ./t2d.nix { inherit evdi; };
 in
 {
-  # the old option names (from when only the Trigger II was supported) keep working
-  imports = map (o: lib.mkRenamedOptionModule [ "hardware" "mct-t2" o ] [ "hardware" "mct" o ]) [
-    "enable" "consoleMap" "niriFix" "lossy" "format" "driver"
-  ];
-
   options.hardware.mct = {
     enable = lib.mkEnableOption "support for USB displays with MCT Trigger chips";
     consoleMap = lib.mkOption {
@@ -92,9 +87,8 @@ in
       boot.extraModulePackages = [ kmod ];
       boot.extraModprobeConfig = "options mct lossy=${toString cfg.lossy} format=${cfg.format}";
       # swap in the module of the current generation without rebooting
-      environment.systemPackages =
-        let
-          reload = pkgs.writeShellScriptBin "mct-reload" ''
+      environment.systemPackages = [
+        (pkgs.writeShellScriptBin "mct-reload" ''
             set -eu
             [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
             for intf in /sys/bus/usb/drivers/mct/*:*; do
@@ -104,13 +98,8 @@ in
             rmmod mct || { echo "mct still in use (compositor holding the old device?)" >&2; exit 1; }
             modprobe mct
             echo "mct reloaded"
-          '';
-        in
-        [
-          reload
-          # the old name
-          (pkgs.writeShellScriptBin "mct-t2-reload" ''exec ${reload}/bin/mct-reload "$@"'')
-        ];
+          '')
+      ];
       boot.kernelParams = lib.optional (cfg.consoleMap != null) "fbcon=map:${cfg.consoleMap}";
       # the USB aliases autoload mct when a supported device appears
       # raw device access for the logged-in user (tools/, after unbinding the driver).
