@@ -2,6 +2,7 @@
 """Large modes on the T6, with the Gigabyte MO34WQC2's own timings:
   2560   2560x1440@60, 241.5 MHz (default)
   3440   3440x1440@60, 319.75 MHz: this one froze the monitor, don't
+  3440-50  3440x1440@50, 266.58 MHz (the monitor's DP timing): width or clock?
 Does the chip scan out rows this long, and in which formats?
 
 Picture: dark blue, five coloured columns spread over the full width (red at
@@ -16,11 +17,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import t6dev
 
 MODES = {  # clock kHz, htotal, hsync start, len, vtotal, vsync start, len
-    "2560": (2560, 241500, 2720, 2608, 32, 1481, 1443, 5),
-    "3440": (3440, 319750, 3600, 3488, 32, 1481, 1443, 10),
+    "2560": (2560, 241500, 2720, 2608, 32, 1481, 1443, 5, 60),
+    "3440": (3440, 319750, 3600, 3488, 32, 1481, 1443, 10, 60),
+    "3440-50": (3440, 266580, 3600, 3488, 32, 1481, 1443, 5, 50),
 }
-W, CLK, HTOT, HS, HSL, VTOT, VS, VSL = MODES[sys.argv[1] if len(sys.argv) > 1 else "2560"]
-H, HZ = 1440, 60
+W, CLK, HTOT, HS, HSL, VTOT, VS, VSL, HZ = MODES[sys.argv[1] if len(sys.argv) > 1 else "2560"]
+H = 1440
 FB = (0x0, 0xFFFEC0, 0x1FFFD80)
 BASE = 40.0                                   # MHz, "Super Lite"
 
@@ -111,7 +113,10 @@ try:
     pic = picture()
     n = 16
     moving = [block(i, n) for i in range(n)] + [block(i, n) for i in range(n - 2, 0, -1)]
-    for step, (name, fmt) in enumerate((("NV12", 6), ("YUV 4:4:4", 11), ("RGB24", 9)), 1):
+    fmts = (("NV12", 6), ("YUV 4:4:4", 11), ("RGB24", 9))
+    if W > 2560:
+        fmts = fmts[:2]          # RGB24 needs ~1 GB/s of scanout here
+    for step, (name, fmt) in enumerate(fmts, 1):
         print(f"\nSTEP {step}a: {name}, picture", flush=True)
         frame(t, FB[0], *encode(pic, fmt)[:2], fmt, encode(pic, fmt)[2])
         time.sleep(5)

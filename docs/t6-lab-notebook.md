@@ -596,3 +596,22 @@ rates only for sizes up to 1080p (tried); 3440 wide stays off.
 Live with the driver (mct_t6 0.18.0, niri picked 2560x1440@60 by itself):
 64 s of desktop use, YUV 4:4:4 at rest, 13 switches to NV12 for motion,
 convert 0.70 ms and USB 2.06 ms per update, 471 MB/s while busy.
+
+**3440x1440: 50 Hz, then 60 Hz with reduced blanking.**
+- `t6_wide_test.py 3440-50` (the monitor's DP timing at 50 Hz, 266.58
+  MHz): NV12 and 4:4:4 fine. A second try of the 60 Hz EDID timing
+  (319.75 MHz): black again, without a hang this time.
+- `tools/t6_clock_sweep.py` (interactive, step number as squares on
+  screen): 3440x1440@55 (293.2 MHz) and @57 (303.9 MHz) with the monitor's
+  timing, **3440x1440@60 with reduced blanking (3520 x 1481, 312.8 MHz)**
+  and 2560x1440@80 with the driver's reduced blanking (316.0 MHz): all show.
+  So not the width and not a clock ceiling below 316 MHz on this monitor;
+  only its own 60 Hz timing (wide blanking, 319.75 MHz) fails. Why exactly
+  is open (clock just above what works, or that timing).
+- Driver (0.18.0): wide modes (> 2560) up to 316 MHz; when the preferred
+  mode can't be driven, the same size and rate with the driver's reduced
+  blanking is added as preferred, plus the monitor's timing at 50 Hz
+  (room for 4:4:4). Frame buffer room is checked per format (RGB32 doesn't
+  fit at 3440x1440). Live: niri picked 3440x1440@60 by itself, NV12 (4:4:4
+  needs ~890 MB/s there), convert 1.54 ms, USB 4.01 ms per update, 461 MB/s
+  while busy.

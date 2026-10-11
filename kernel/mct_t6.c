@@ -127,12 +127,17 @@ struct t6_mode {
 /* frame buffers are 0xfffec0 apart; a frame is 0x30 bytes header + NV12 */
 #define T6_BUF_SIZE		0xfffec0
 /*
- * Sizes beyond the device's own table that were tried on the 5600: 2560x1440
- * at 60 Hz works in all formats. 3440x1440@60 (319.75 MHz) froze a
- * monitor's controller, so wider modes stay off unless the table has them.
+ * Sizes beyond the device's own table that were tried on the 5600 (with a
+ * Gigabyte MO34WQC2 on HDMI): 2560x1440 at 60 and 80 Hz, 3440x1440 at 50 to
+ * 57 Hz with the monitor's timing and at 60 Hz with reduced blanking (312.8
+ * MHz) work. The monitor's own 60 Hz timing (319.75 MHz) gave a black
+ * screen, once with the monitor hanging. So wide modes only up to the
+ * clocks that worked.
  */
-#define T6_TESTED_W		2560
+#define T6_TESTED_W		3440
 #define T6_TESTED_H		1600
+#define T6_WIDE_W		2560
+#define T6_WIDE_MAX_CLOCK_KHZ	316000
 /* computed refresh rates only for sizes tried with them */
 #define T6_EXTRA_MAX_W		1920
 #define T6_EXTRA_MAX_H		1080
@@ -485,11 +490,14 @@ static int t6_mode_entry(struct mct_t6 *t6, const struct drm_display_mode *mode,
 
 	if (mode->clock > T6_MAX_CLOCK_KHZ || mode->flags & DRM_MODE_FLAG_INTERLACE)
 		return -ERANGE;
+	if (mode->hdisplay > T6_WIDE_W && mode->clock > T6_WIDE_MAX_CLOCK_KHZ)
+		return -ERANGE;
 	/* the NV12 rows are sent unpadded; the vendor driver needs width % 16 too */
 	if (mode->hdisplay % 16 || mode->vdisplay % 2)
 		return -ERANGE;
+	/* NV12 has to fit a frame buffer; the other formats are used where they fit */
 	if (mode->hdisplay > t6->max_w || mode->vdisplay > t6->max_h ||
-	    0x30 + 4ull * round_up(mode->hdisplay, 32) * mode->vdisplay > T6_BUF_SIZE)
+	    0x30 + 3ull * mode->hdisplay * mode->vdisplay / 2 > T6_BUF_SIZE)
 		return -ERANGE;
 
 	memset(m, 0, sizeof(*m));
@@ -946,10 +954,27 @@ static int t6_present(struct mct_t6 *t6, const struct t6_band *bands, int n)
 	return 0;
 }
 
+/* bytes of one frame in device memory */
+static u64 t6_frame_bytes(int w, int h, enum t6_kind kind)
+{
+	switch (kind) {
+	case T6_NV12:
+		return 3ull * w * h / 2;
+	case T6_YUV444:
+	case T6_RGB24:
+		return 3ull * round_up(w, 32) * h;
+	default:
+		return 4ull * w * h;
+	}
+}
+
+/* the format's frame fits a buffer and its scanout the measured bandwidth */
 static bool t6_fits(const struct mct_t6 *t6, enum t6_kind kind)
 {
-	return (u64)t6_scan_x2[kind] * t6->base.width * t6->base.height * t6->base.refresh / 2 <=
-	       t6_scan_max[kind];
+	int w = t6->base.width, h = t6->base.height;
+
+	return 0x30 + t6_frame_bytes(w, h, kind) <= T6_BUF_SIZE &&
+	       (u64)t6_scan_x2[kind] * w * h * t6->base.refresh / 2 <= t6_scan_max[kind];
 }
 
 /*
@@ -1338,6 +1363,63 @@ static int t6_add_extra_modes(struct drm_connector *connector, int w, int h)
 	return count;
 }
 
+/*
+ * When the T6 can't drive the monitor's preferred mode (3440x1440@60 on a
+ * MO34WQC2 needs 319.75 MHz with its own blanking), offer instead: the same
+ * size and rate with reduced blanking, marked preferred, and the monitor's
+ * timing at 50 (or 48) Hz within its range, which leaves room for the full
+ * colour formats.
+ */
+static int t6_add_preferred_fallbacks(struct mct_t6 *t6, struct drm_connector *connector)
+{
+	static const int rates[] = { 50, 48 };
+	int min_hz = connector->display_info.monitor_range.min_vfreq;
+	struct drm_display_mode *pref = NULL, *mode;
+	bool have_pref = false;
+	struct t6_mode m;
+	int i, hz, count = 0;
+
+	list_for_each_entry(mode, &connector->probed_modes, head) {
+		if (mode->type & DRM_MODE_TYPE_PREFERRED) {
+			pref = mode;
+			break;
+		}
+	}
+	if (!pref || !t6_mode_entry(t6, pref, &m) || pref->flags & DRM_MODE_FLAG_INTERLACE)
+		return 0;
+	hz = drm_mode_vrefresh(pref);
+
+	mode = t6_rb_mode(connector->dev, pref->hdisplay, pref->vdisplay, hz);
+	if (mode && !t6_mode_entry(t6, mode, &m)) {
+		mode->type |= DRM_MODE_TYPE_PREFERRED;
+		drm_mode_probed_add(connector, mode);
+		have_pref = true;
+		count++;
+	} else if (mode) {
+		drm_mode_destroy(connector->dev, mode);
+	}
+
+	for (i = 0; i < ARRAY_SIZE(rates); i++) {
+		if (rates[i] >= hz || rates[i] < min_hz)
+			continue;
+		mode = drm_mode_duplicate(connector->dev, pref);
+		if (!mode)
+			break;
+		mode->clock = DIV_ROUND_CLOSEST_ULL((u64)mode->htotal * mode->vtotal * rates[i],
+						    1000);
+		mode->type = DRM_MODE_TYPE_DRIVER | (have_pref ? 0 : DRM_MODE_TYPE_PREFERRED);
+		drm_mode_set_name(mode);
+		if (t6_mode_entry(t6, mode, &m)) {
+			drm_mode_destroy(connector->dev, mode);
+			continue;
+		}
+		drm_mode_probed_add(connector, mode);
+		count++;
+		break;
+	}
+	return count;
+}
+
 static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector)
 {
 	struct mct_t6 *t6 = to_t6(mdev);
@@ -1363,6 +1445,7 @@ static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector
 		count += t6_add_extra_modes(connector, w, h);
 	if (has_720p && (w != 1280 || h != 720))
 		count += t6_add_extra_modes(connector, 1280, 720);
+	count += t6_add_preferred_fallbacks(t6, connector);
 	return count;
 }
 
