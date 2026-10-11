@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# DKMS: builds the mct module for every installed kernel (7.2 or later).
+PACKAGE_NAME="mct"
+PACKAGE_VERSION="@VERSION@"
+MAKE[0]="make -C kernel KDIR=${kernel_source_dir}"
+CLEAN="make -C kernel KDIR=${kernel_source_dir} clean"
+BUILT_MODULE_NAME[0]="mct"
+BUILT_MODULE_LOCATION[0]="kernel/"
+DEST_MODULE_LOCATION[0]="/updates/dkms"
+BUILD_EXCLUSIVE_KERNEL="^(7\.([2-9]|[1-9][0-9])|([8-9]|[1-9][0-9]+)\.)"
+AUTOINSTALL="yes"

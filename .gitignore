@@ -21,3 +21,4 @@ kernel/.*.cmd
 kernel/Module.symvers
 kernel/modules.order
 .checkpatch-camelcase.*
+dist/

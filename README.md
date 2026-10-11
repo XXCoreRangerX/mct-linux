@@ -76,10 +76,29 @@ Other Trigger II products need their own init and modes (see above).
 | [`kernel/`](kernel) | the driver, module `mct`: a shared DRM core (`mct_drv.c`) and a backend per chip (`mct_t2.c`, `mct_t6.c`) |
 | [`app/`](app) | MCT Display Manager (GTK 4 window and tray icon) and `mctctl` (command line) |
 | [`nix/`](nix) | flake package and NixOS module, two optional niri patches |
+| [`packaging/`](packaging) | release files: DKMS config, udev rules, the app's install script, the release build script (run by [`.github/workflows/`](.github/workflows) on a version tag) |
 | [`docs/`](docs) | protocol references, limits, driver notes, lab notes ([index](docs/README.md)) |
 | [`tools/`](tools) | test and research scripts ([index](tools/README.md)) |
 | [`wacom-t2d/`](wacom-t2d) | legacy: the DTU-1031X as a userspace daemon on top of EVDI, for kernels older than 7.2 and for protocol work; also holds the tablet's init sequence the kernel driver is built from |
 | `data/`, `captures/`, `vm/` | first probe outputs, an encoded test frame, how the Windows VM for the captures was run (the captures themselves and the vendor files are not published) |
+
+## Installing from a release
+
+Each [release](https://github.com/XXCoreRangerX/mct-linux/releases) has the
+driver as DKMS source (built on your machine for every installed kernel, 7.2
+or later) and MCT Display Manager with `mctctl` for x86_64 and aarch64:
+
+```sh
+sudo tar -C /usr/src -xzf mct-dkms-VERSION.tar.gz
+sudo dkms install mct/VERSION
+sudo modprobe mct
+
+tar -xzf mct-app-VERSION-x86_64.tar.gz && cd mct-app-VERSION-x86_64
+sudo ./install.sh        # app, polkit policy, udev rules; --uninstall removes them
+```
+
+The app needs GTK 4.14 and libadwaita 1.5 or later (Ubuntu 24.04, Fedora
+40, Arch and newer).
 
 ## Building
 

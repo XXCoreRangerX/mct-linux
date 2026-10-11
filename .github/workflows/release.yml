@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# On a tag vX.Y.Z: the DKMS source tarball, the app for x86_64 and aarch64,
+# checksums, and a GitHub release with the CHANGELOG section of that version.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  driver:
+    name: Driver (DKMS source)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      # the tarball is only published if the module builds
+      - run: nix build .#mct-kmod -L
+      - run: packaging/make-release.sh driver "${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: driver
+          path: dist/*
+
+  app:
+    name: App (${{ matrix.runner }})
+    strategy:
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - working-directory: app
+        run: cargo test --locked
+      - run: packaging/make-release.sh app "${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ matrix.runner }}
+          path: dist/*
+
+  release:
+    needs: [driver, app]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums and notes
+        run: |
+          ver=${GITHUB_REF_NAME#v}
+          (cd dist && sha256sum -- *.tar.gz > SHA256SUMS)
+          awk -v v="$ver" '/^## /{p = index($0, "## " v) == 1; next} p' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
+          cat packaging/release-notes.md >> notes.md
+          sed -i "s/@VERSION@/$ver/g" notes.md
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "mct-linux ${GITHUB_REF_NAME#v}" --notes-file notes.md

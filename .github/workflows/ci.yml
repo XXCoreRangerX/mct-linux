@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Builds the module and builds and tests the app on every push to a branch
+# (not on pull requests; tags run release.yml instead).
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+
+jobs:
+  kernel:
+    name: Kernel module (Linux 7.2+, Nix)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - run: nix build .#mct-kmod -L
+
+  app:
+    name: App (build and tests)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - working-directory: app
+        run: cargo test --locked
+      - working-directory: app
+        run: cargo build --release --locked

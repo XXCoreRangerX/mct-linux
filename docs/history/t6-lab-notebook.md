@@ -761,3 +761,13 @@ with VT switches, USB unplug/replug of the tablet (back after 8 s) and
 the T6 (3 s) during motion with sysfs readers running (reads failed
 cleanly, none slow), niri DPMS off/on, the monitor's power button,
 suspend/resume. Log kept in the lab directory (captures/edge-tests/).
+
+**Device information (mct_t6 0.26.0 / 0.27.0, 2026-10-11).** Read at probe
+and shown in sysfs: platform 1 ("Super Lite"), boot code `16062899`, image
+code `17091401` (both look like BCD dates: 2016-06-28 and 2017-09-14),
+board "JUA254H" (j5create JUA254), no serial (8 zero bytes). Function
+descriptors (`b1`): index 0 is function 0x5620 "Trigger 6 External
+Graphics", index 3 is 0x5640 "USB Audio Device". The 5600 enumerates with
+no audio interface, so the chip has the audio function but this board
+doesn't expose it on USB (the 5601 in the capture reported 0x5621 for its
+display function). Reading `b1` at probe caused no problems.
