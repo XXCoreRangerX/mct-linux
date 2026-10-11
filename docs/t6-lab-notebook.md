@@ -494,3 +494,21 @@ changed are copied and converted. Imported GPU buffers keep the plain copy
 0.17.1 stats (46 s light use, 1080p120 auto): **65 rows changed per
 commit** (was 1037), convert + diff **0.26 ms** per update (was 2.45), USB
 1.49 ms and ~0.64 MB per update, framebuffer copy 0.29 ms. No stale areas.
+
+**YUY2 / surface format 0, investigated** (`tools/t6_yuy2_hunt.py` and the
+`tools/t6_yuy2_*.py` scripts; the LG stands rotated, so the user's "bottom"
+is the right side of the panel):
+- Byte order: packed Y0 U Y1 V is right (variant with Y in the odd bytes,
+  and NV16/NV61 planar layouts, came out inverted/broken; YVYU swaps red
+  and blue).
+- At 1920 wide only about the first 60% of each row (~1150 px, ~2300 bytes)
+  scans out right; beyond that the panel shows stale line buffer data, seen
+  as content smeared along the full panel height (moving block). Not
+  changed by plane 1 / pitch 1 settings, by the pitch field (ignored for
+  this format), or by writing the frame with session 7 writes instead of
+  the flip's payload.
+- At 1024x768 (2048 bytes per row) the rows are fine, but motion tears
+  badly, also across rows: flips of this format are not synchronised.
+Conclusion: format 0 is not usable for scanout (the vendor only uses it
+internally as a JPEG 4:2:2 decode target). Formats in the driver: auto,
+rgb24, rgb32, yuv444, nv12.
