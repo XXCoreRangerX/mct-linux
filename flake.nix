@@ -1,5 +1,5 @@
 {
-  description = "Linux support for MCT Trigger II (T2) USB displays (Wacom DTU-1031X)";
+  description = "Linux support for MCT Trigger USB displays (Trigger II, Trigger 6)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -14,7 +14,8 @@
       packages.${system} = {
         inherit evdi;
         t2d = pkgs.callPackage ./nix/t2d.nix { inherit evdi; };
-        mct-t2-kmod = pkgs.callPackage ./nix/kmod.nix { inherit (kernelPackages) kernel; };
+        mct-kmod = pkgs.callPackage ./nix/kmod.nix { inherit (kernelPackages) kernel; };
+        mct-t2-kmod = self.packages.${system}.mct-kmod; # old name
         default = self.packages.${system}.t2d;
       };
 

@@ -1,16 +1,21 @@
-# NixOS module: MCT Trigger II USB display (Wacom DTU-1031X) as a real monitor.
+# NixOS module: USB displays with MCT Trigger chips (Trigger II, Trigger 6) as real monitors.
 { self }:
 { config, lib, pkgs, ... }:
 let
-  cfg = config.hardware.mct-t2;
+  cfg = config.hardware.mct;
   kernelPackages = config.boot.kernelPackages;
   kmod = pkgs.callPackage ./kmod.nix { inherit (kernelPackages) kernel; };
   evdi = pkgs.callPackage ./evdi.nix { inherit kernelPackages; };
   t2d = pkgs.callPackage ./t2d.nix { inherit evdi; };
 in
 {
-  options.hardware.mct-t2 = {
-    enable = lib.mkEnableOption "MCT Trigger II USB display support";
+  # the old option names (from when only the Trigger II was supported) keep working
+  imports = map (o: lib.mkRenamedOptionModule [ "hardware" "mct-t2" o ] [ "hardware" "mct" o ]) [
+    "enable" "consoleMap" "niriFix" "lossy" "format" "driver"
+  ];
+
+  options.hardware.mct = {
+    enable = lib.mkEnableOption "support for USB displays with MCT Trigger chips";
     consoleMap = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
       default = null;
@@ -111,7 +116,7 @@ in
       # raw device access for the logged-in user (tools/, after unbinding the driver).
       # uaccess must be tagged before 73-seat-late.rules, so not via extraRules (99-local).
       services.udev.packages = [
-        (pkgs.writeTextDir "etc/udev/rules.d/70-mct-t2.rules" ''
+        (pkgs.writeTextDir "etc/udev/rules.d/70-mct.rules" ''
           SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d|5600|5601", TAG+="uaccess"
         '')
       ];

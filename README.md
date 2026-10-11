@@ -1,5 +1,5 @@
-mct-t2-linux
-============
+mct-linux
+=========
 
 Linux support for USB displays built on MCT (Magic Control Technology)
 Trigger chips:
@@ -47,28 +47,28 @@ a USB-n connector, a T6 as HDMI-A-n. To put a text console on it, map a VT to it
 
 NixOS, plain configuration.nix:
 
-    imports = [ /path/to/mct-t2-linux/nix/nixos.nix ];
-    hardware.mct-t2.enable = true;
+    imports = [ /path/to/mct-linux/nix/nixos.nix ];
+    hardware.mct.enable = true;
 
 or with flakes, add this repository as an input and use
-`nixosModules.default` with the same option. `hardware.mct-t2.driver =
+`nixosModules.default` with the same option. `hardware.mct.driver =
 "evdi"` selects the EVDI + t2d setup instead of the kernel driver.
 
-`hardware.mct-t2.consoleMap = "01";` adds fbcon=map:01 to the kernel command
+`hardware.mct.consoleMap = "01";` adds fbcon=map:01 to the kernel command
 line, which puts every second VT (tty2, tty4, ...) on the tablet once its
 framebuffer appears (assuming the GPU is fb0 and the tablet fb1).
 
-`hardware.mct-t2.niriFix = true;` builds niri with two patches: it drops a
+`hardware.mct.niriFix = true;` builds niri with two patches: it drops a
 USB display's output properly when it is unplugged (niri 26.04 leaves a
 stale output behind), and it renders display-only devices into their own
 system-memory buffers instead of the GPU's VRAM, which the driver reads ~10x
 faster.
 
-`hardware.mct-t2.lossy = 4;` lets T2 updates too big for one 60 Hz frame go
+`hardware.mct.lossy = 4;` lets T2 updates too big for one 60 Hz frame go
 lossy (heavy video, photo scrolling); the picture is refined to lossless once
 motion stops. Off by default.
 
-`hardware.mct-t2.format` picks the pixel format for T6 adapters: "auto"
+`hardware.mct.format` picks the pixel format for T6 adapters: "auto"
 (default: exact RGB, or YUV 4:4:4 where RGB exceeds the adapter's memory
 bandwidth, while the screen is still, NV12 during large changes), or fixed
 "rgb24", "rgb32", "yuv444", "nv12". Both settings can be changed at runtime
