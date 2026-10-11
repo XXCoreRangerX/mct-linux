@@ -267,6 +267,7 @@ struct mct_t6 {
 	u8 lut[3][256];			/* gamma, R G B, applied in software */
 	struct t6_layout lay;		/* of img and hw, set by the worker */
 	u8 *hw[3];			/* NV12 image each frame buffer holds */
+	size_t img_size;		/* of img and hw[], for the current mode */
 	bool hw_valid[3];
 	unsigned int buf;		/* next frame buffer to write */
 	u32 seq;
@@ -1236,14 +1237,42 @@ static void t6_gamma(struct mct_device *mdev, const struct drm_color_lut *lut)
 		mct_kick(mdev);
 }
 
-static void t6_enable(struct mct_device *mdev, const struct drm_display_mode *mode)
+/*
+ * img and hw[] for a w x h mode: up to 4 bytes per pixel in any layout.
+ * Called with updates stopped; kept while the size stays the same.
+ */
+static int t6_alloc_images(struct mct_t6 *t6, int w, int h)
+{
+	size_t size = (size_t)w * h * 4;
+	int i;
+
+	if (size == t6->img_size)
+		return 0;
+	kvfree(t6->img);
+	t6->img = kvmalloc(size, GFP_KERNEL);
+	for (i = 0; i < ARRAY_SIZE(t6->hw); i++) {
+		kvfree(t6->hw[i]);
+		t6->hw[i] = kvmalloc(size, GFP_KERNEL);
+	}
+	t6->img_size = size;
+	if (t6->img && t6->hw[0] && t6->hw[1] && t6->hw[2])
+		return 0;
+	t6->img_size = 0;	/* try again next time */
+	return -ENOMEM;
+}
+
+static int t6_enable(struct mct_device *mdev, const struct drm_display_mode *mode)
 {
 	struct mct_t6 *t6 = to_t6(mdev);
 	struct t6_mode m;
-	int idx;
+	int idx, ret;
 
-	if (t6_mode_entry(t6, mode, &m))
-		return;
+	ret = t6_mode_entry(t6, mode, &m);
+	if (ret)
+		return ret;
+	ret = t6_alloc_images(t6, mode->hdisplay, mode->vdisplay);
+	if (ret)
+		return ret;
 	if (drm_dev_enter(&mdev->dev, &idx)) {
 		if (t6_set_mode(t6, &m) || t6_ready(t6) || t6_set_output(t6, true))
 			drm_err(&mdev->dev, "could not set mode %dx%d\n",
@@ -1258,6 +1287,7 @@ static void t6_enable(struct mct_device *mdev, const struct drm_display_mode *mo
 	t6->lay.planes = 0;		/* the worker sets it up for the new size */
 	t6->buf = 0;
 	mutex_unlock(&mdev->lock);
+	return 0;
 }
 
 static void t6_disable(struct mct_device *mdev)
@@ -1691,7 +1721,6 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	};
 	struct mct_t6 *t6;
 	struct drm_device *dev;
-	size_t px;
 	int ret, i;
 
 	BUILD_BUG_ON(sizeof(struct t6_mode) != 32);
@@ -1731,19 +1760,13 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 		return ret;
 	}
 
-	px = (size_t)t6->max_w * t6->max_h;
-	t6->img = kvmalloc(px * 4, GFP_KERNEL);
-	t6->hw[0] = kvmalloc(px * 4, GFP_KERNEL);
-	t6->hw[1] = kvmalloc(px * 4, GFP_KERNEL);
-	t6->hw[2] = kvmalloc(px * 4, GFP_KERNEL);
 	t6->stale[0] = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
 	t6->stale[1] = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
 	t6->stale[2] = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
 	ret = drmm_add_action_or_reset(dev, t6_release, NULL);
 	if (ret)
 		return ret;
-	if (!t6->stale[0] || !t6->stale[1] || !t6->stale[2] || !t6->img ||
-	    !t6->hw[0] || !t6->hw[1] || !t6->hw[2])
+	if (!t6->stale[0] || !t6->stale[1] || !t6->stale[2])
 		return -ENOMEM;
 
 	cfg.max_w = t6->max_w;

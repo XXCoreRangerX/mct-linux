@@ -372,20 +372,42 @@ static void mct_crtc_atomic_flush(struct drm_crtc *crtc, struct drm_atomic_commi
 	drm_crtc_vblank_atomic_flush(crtc, state);
 }
 
+/*
+ * The shadow is sized for the current mode: allocated when the CRTC goes on
+ * (updates are stopped then), kept while the size stays the same.
+ */
+int mct_shadow_alloc(struct mct_device *mdev, int w, int h)
+{
+	size_t size = (size_t)w * h * 4;
+
+	if (size == mdev->shadow_size)
+		return 0;
+	kvfree(mdev->shadow);
+	mdev->shadow = kvzalloc(size, GFP_KERNEL);
+	mdev->shadow_size = mdev->shadow ? size : 0;
+	return mdev->shadow ? 0 : -ENOMEM;
+}
+
 static void mct_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commit *state)
 {
 	struct mct_device *mdev = to_mct(crtc->dev);
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
 	const struct drm_display_mode *mode = &crtc_state->mode;
 
-	mdev->funcs->enable(mdev, mode);
+	/* if this fails (no memory) the display stays dark, the rest works */
+	if (mct_shadow_alloc(mdev, mode->hdisplay, mode->vdisplay) ||
+	    mdev->funcs->enable(mdev, mode)) {
+		drm_err(&mdev->dev, "could not set up %dx%d\n", mode->hdisplay, mode->vdisplay);
+		goto out;
+	}
 	mutex_lock(&mdev->lock);
 	mdev->shadow_valid = false;
 	mdev->refresh = drm_mode_vrefresh(mode);
 	mdev->width = mode->hdisplay;
 	mdev->height = mode->vdisplay;
-	memset(mdev->shadow, 0, (size_t)mdev->width * mdev->height * 4);
+	memset(mdev->shadow, 0, mdev->shadow_size);
 	mutex_unlock(&mdev->lock);
+out:
 	drm_crtc_vblank_on(crtc);
 }
 
@@ -561,14 +583,13 @@ int mct_init(struct mct_device *mdev, const struct mct_config *cfg)
 	INIT_WORK(&mdev->work, mct_update_work);
 	INIT_DELAYED_WORK(&mdev->settle_work, mct_settle_work);
 
-	mdev->shadow = kvzalloc((size_t)cfg->max_w * cfg->max_h * 4, GFP_KERNEL);
 	ret = drmm_add_action_or_reset(dev, mct_release, NULL);
 	if (ret)
 		return ret;
 	mdev->rowmask = drmm_kzalloc(dev, rows, GFP_KERNEL);
 	mdev->changed = drmm_kzalloc(dev, rows, GFP_KERNEL);
 	mdev->cur = drmm_kzalloc(dev, MCT_CUR * MCT_CUR_PITCH, GFP_KERNEL);
-	if (!mdev->shadow || !mdev->rowmask || !mdev->changed || !mdev->cur)
+	if (!mdev->rowmask || !mdev->changed || !mdev->cur)
 		return -ENOMEM;
 
 	ret = drmm_mode_config_init(dev);

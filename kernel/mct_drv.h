@@ -34,8 +34,12 @@ struct mct_funcs {
 	int (*late_register)(struct mct_device *mdev);		/* optional */
 	void (*early_unregister)(struct mct_device *mdev);	/* optional */
 
-	/* display on in this mode / off; updates are stopped before disable */
-	void (*enable)(struct mct_device *mdev, const struct drm_display_mode *mode);
+	/*
+	 * Display on in this mode / off. Updates are stopped before disable and
+	 * while enable runs, so enable can (re)allocate per-mode buffers;
+	 * returns -ENOMEM if it couldn't.
+	 */
+	int (*enable)(struct mct_device *mdev, const struct drm_display_mode *mode);
 	void (*disable)(struct mct_device *mdev);
 	/* wait for transfers in flight when updates stop (optional) */
 	void (*stop)(struct mct_device *mdev);
@@ -75,6 +79,7 @@ struct mct_device {
 
 	struct mutex lock;		/* the fields below, up to work */
 	u8 *shadow;			/* XRGB8888 image as committed by userspace */
+	size_t shadow_size;		/* allocated for the current mode */
 	bool shadow_valid;		/* holds a whole committed image */
 	u8 *rowmask;			/* rows to copy from the framebuffer */
 	u8 *changed;			/* shadow rows changed, cleared by the chip code */
@@ -100,6 +105,8 @@ struct mct_device {
 #define to_mct(d) container_of(d, struct mct_device, dev)
 
 int mct_init(struct mct_device *mdev, const struct mct_config *cfg);
+/* shadow for a w x h image; done at enable, or earlier for a fixed size */
+int mct_shadow_alloc(struct mct_device *mdev, int w, int h);
 int mct_register(struct mct_device *mdev, struct usb_interface *intf);
 void mct_unplug(struct mct_device *mdev);
 int mct_suspend(struct mct_device *mdev);

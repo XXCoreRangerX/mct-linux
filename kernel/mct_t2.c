@@ -1030,7 +1030,7 @@ static void t2_cursor_set(struct mct_device *mdev, const u8 *bgra, int x, int y)
 /* ------------------------------------------------------------------ */
 /* display on/off, modes					      */
 
-static void t2_enable(struct mct_device *mdev, const struct drm_display_mode *mode)
+static int t2_enable(struct mct_device *mdev, const struct drm_display_mode *mode)
 {
 	struct mct_t2 *t2 = to_t2(mdev);
 	int idx;
@@ -1040,6 +1040,7 @@ static void t2_enable(struct mct_device *mdev, const struct drm_display_mode *mo
 		t2_update_panel_power(t2);
 		drm_dev_exit(idx);
 	}
+	return 0;
 }
 
 static void t2_disable(struct mct_device *mdev)
@@ -1214,8 +1215,11 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	    !t2->enc || !t2->snap || !t2->hw[0] || !t2->hw[1])
 		return -ENOMEM;
 
-	/* the init sends the (blank) shadow, so the core goes first */
+	/* the init sends the (blank) shadow, so it exists from the start */
 	ret = mct_init(&t2->base, &cfg);
+	if (ret)
+		return ret;
+	ret = mct_shadow_alloc(&t2->base, T2_WIDTH, T2_HEIGHT);
 	if (ret)
 		return ret;
 	ret = t2_hw_init(t2);
