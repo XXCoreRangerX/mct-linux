@@ -464,3 +464,5 @@ floating point); per-format scanout limits (RGB 500 MB/s, YUV 4:4:4
 760 MB/s, NV12 unlimited); auto picks the best full colour format that fits
 the mode (1080p: RGB up to 75 Hz, 4:4:4 at 100-120 Hz, NV12 at 144 Hz) and
 uses NV12 during large changes.
+0.16 live at 1080p120 (auto: YUV 4:4:4 at rest, NV12 in motion): "works
+great", smooth, no grey flash on switches, colours look richer.
