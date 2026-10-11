@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Run the trimmed init (t2d/init.bin) from cold up to step N, pausing so the
 backlight state can be observed. Usage: backlight_bisect.py N  (resumes from a state file)."""
-import json, os, sys, time, t2dev
+import json, os, sys, tempfile, time, t2dev
 
-STATE = "/tmp/bl_state.json"
+STATE = os.environ.get("BL_STATE", os.path.join(tempfile.gettempdir(), "bl_state.json"))
 recs = t2dev.load_init()
 upto = int(sys.argv[1])
 done = json.load(open(STATE))["done"] if os.path.exists(STATE) and "--fresh" not in sys.argv else 0

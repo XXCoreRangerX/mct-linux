@@ -30,9 +30,8 @@ drop off the bus until a power cycle).
   Nothing above 60 Hz or above 1080p. DRM state: `captures/t6-device/drm_info-t6.txt`.
 - Host: NixOS, linux-cachyos 7.2.7, niri 26.04 (with our device-removal
   patch), two AMD GPUs (RX 9070 primary, iGPU), Mesa via nixpkgs.
-- Build: kernel modules are built against the dotfiles flake's kernel
-  (`builtins.getFlake "git+file:///path/to/system-flake"`, then
-  `config.boot.kernelPackages.kernel`); `nix/kmod-local.nix` still targets
+- Build: kernel modules are built against the host's own NixOS kernel
+  (the system flake's `config.boot.kernelPackages.kernel`); `nix/kmod-local.nix` still targets
   `linuxPackages_latest` and doesn't match the CachyOS kernel.
 
 ## 2026-10-10
@@ -417,7 +416,7 @@ image (1-pixel coloured lines, red strokes on blue) looked crisper than NV12,
 **mct_t6 0.13**: image layout abstraction (NV12 or 4:4:4), module parameter
 `yuv444` (default on, runtime writable; switching resends whole frames).
 Development now happens in a worktree (`../mct-t2-linux-t6`) so the main
-checkout, which the dotfiles build, stays on main.
+checkout, which the system configuration builds, stays on main.
 
 **4:4:4 live (0.13)**: at 1080p144 thin, sparse rainbow vertical lines on a
 still image; at 120 and 60 Hz clean. Scanout reads the buffer from the T6's
