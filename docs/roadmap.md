@@ -1,4 +1,4 @@
-# Roadmap and status (2026-10-11)
+# Roadmap and status (2026-10-11, mct_t6 0.20.0)
 
 Where the driver stands against the vendor drivers and the chips, and what is
 left to do. Percentages are estimates, not a checklist score.
@@ -9,7 +9,7 @@ left to do. Percentages are estimates, not a checklist score.
 
 | Compared to | Estimate | Notes |
 |---|---|---|
-| Wacom/MCT Windows and macOS driver | ~95% | Display, cursor, backlight, suspend, replug all there. Ahead: tear-free updates, exact diffing, lossless by default (lossy opt-in), recovery from a stuck parser. Missing: the display settings of the Wacom control panel (not mapped yet). |
+| Wacom/MCT Windows and macOS driver | ~100% of what they offer | Display, cursor, backlight (the only display setting Wacom's control panel has for this model), suspend, replug. Ahead: tear-free updates, exact diffing, lossless by default (lossy opt-in), recovery from a stuck parser. |
 | Trigger II chip in general | ~60% (rough) | Only what Wacom's init uses is known: one fixed 1024x600 panel, one pixel format. Generic T2 dongles (any monitor, mode setting, EDID) need a plain T2 to work on. |
 | Speed headroom | ~5-10% | USB 2 link ~40 MB/s, driver at ~38 MB/s. Queued URBs measured without gain; encoding is 2.3 ms per update. |
 
@@ -17,8 +17,8 @@ left to do. Percentages are estimates, not a checklist score.
 
 | Compared to | Estimate | Notes |
 |---|---|---|
-| Vendor drivers, same device | ~90%, ahead in many areas | Missing: JPEG (hardware rotation: the 5600 doesn't have it). Ahead: up to 144 Hz (vendor 60), lossless / full colour at rest, adaptive format, gamma, queued URBs, exact row diffing. |
-| Trigger 6 family | ~75% | Not done: second output, HDMI audio, the chip's JPEG decoder. The 5600 is a single-output "Super Lite". Up to 3440x1440@60 (NV12; 4:4:4 at 55 Hz) and 4K30 (NV12) work. |
+| Vendor drivers, same device | ~95%, ahead in most areas | Missing: JPEG (only matters for full-screen motion and USB 2). Same: error recovery, debounced hotplug, capability checks, USB 2 handling, cursor up to 96 px. Ahead: up to 144 Hz and 3440x1440@60 / 4K30 (vendor 60 Hz, table modes), lossless / full colour at rest, adaptive format, gamma on any feature level, exact row diffing. |
+| Trigger 6 family | ~80% | Not done: second output, HDMI audio, the chip's JPEG decoder. The 5600 is a single-output "Super Lite". Up to 3440x1440@60 (NV12; 4:4:4 at 55 Hz) and 4K30 (NV12) work. |
 | Speed headroom | ~15-25% | Hard limits: ~350 MHz pixel clock (1080p144 max, no 1080p240), ~360 MB/s USB, per-format scanout bandwidth. Raw full-screen NV12 1080p ~98 fps. |
 
 ## Work items

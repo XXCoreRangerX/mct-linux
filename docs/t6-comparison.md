@@ -104,3 +104,23 @@ mct_t2's mould; the code is separate (mct_t2.c ~1360 lines, mct_t6.c ~2180).
   artifacts. It matters for the vendor because they also serve USB 2 hosts
   and multi-monitor docks. A JPEG mode would be a separate userspace
   project (an EVDI daemon like t2d), not part of mct_t6.
+
+## Feature table (2026-10-11, mct_t6 0.20.0)
+
+| | mct (Linux) | MCT Windows | MCT macOS | MCT Ubuntu (EVDI) |
+|---|---|---|---|---|
+| Frames | raw: exact RGB / YUV 4:4:4 at rest, NV12 in motion | JPEG (q95), lossless idle refresh | JPEG | JPEG, raw NV12/I420 |
+| Refresh | up to 144 Hz (1080p), 60 Hz at 3440x1440 | 60 Hz | 60 Hz | 60 Hz |
+| Sizes on the 5600 | up to 3440x1440@60, 3840x2160@30 | EDID modes (60 Hz) | EDID modes, CVT timings | the device table (2048x1152) |
+| Monitors it can't fully drive | reduced blanking, lower rate, 1440p for 4K | | out-of-range fixes | |
+| Partial updates | raw changed rows, tear-free (3 buffers) | JPEG rectangles | JPEG rectangles | JPEG rectangles |
+| Hardware cursor | 64 / 96 px, negative positions | 64 / 96 / 128 px | yes | yes |
+| Gamma | software, any feature level | hardware, level 8+ | | |
+| Rotation | compositor | the OS | the OS | hardware (0x1f, not on the 5600) |
+| Hotplug | events, debounced, re-set mode | events, debounced | events | events, re-init |
+| Transfer errors | cancel (restarts the 5600), resend | cancel | clear stall, retry | cancel |
+| Capability checks | feature level, VRAM, DISP flags | yes | yes | yes |
+| USB 2 link | smaller writes, modes up to 2048 wide | same | smaller packets | JPEG |
+| HDMI audio, second output | no (5600 has neither) | yes | yes | yes |
+| Suspend / DPMS | yes | yes | yes | |
+
