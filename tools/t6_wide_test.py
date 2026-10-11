@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Wide modes on the T6: 3440x1440@60 (the Gigabyte MO34WQC2's own timing,
-319.75 MHz). Does the chip scan out rows this long, and in which formats?
+"""Large modes on the T6, with the Gigabyte MO34WQC2's own timings:
+  2560   2560x1440@60, 241.5 MHz (default)
+  3440   3440x1440@60, 319.75 MHz: this one froze the monitor, don't
+Does the chip scan out rows this long, and in which formats?
 
 Picture: dark blue, five coloured columns spread over the full width (red at
 the left edge, then yellow, green, cyan, magenta at the right edge), thin
@@ -13,17 +15,24 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import t6dev
 
-W, H, HZ = 3440, 1440, 60
+MODES = {  # clock kHz, htotal, hsync start, len, vtotal, vsync start, len
+    "2560": (2560, 241500, 2720, 2608, 32, 1481, 1443, 5),
+    "3440": (3440, 319750, 3600, 3488, 32, 1481, 1443, 10),
+}
+W, CLK, HTOT, HS, HSL, VTOT, VS, VSL = MODES[sys.argv[1] if len(sys.argv) > 1 else "2560"]
+H, HZ = 1440, 60
 FB = (0x0, 0xFFFEC0, 0x1FFFD80)
 BASE = 40.0                                   # MHz, "Super Lite"
 
 
 def pll(f_mhz):
+    """integer math like the driver: f in kHz, base 40000 kHz"""
+    f = round(f_mhz * 1000)
     for i, x in enumerate((4, 8, 16, 32)):
-        if f_mhz * x >= 800:
-            v = f_mhz * x / BASE
-            n = int(v)
-            return int((v - n) * 1000), 1000, n, (3, 1, 2, 0)[i]
+        if f * x >= 800000:
+            vco = f * x
+            n = vco // 40000
+            return (vco - n * 40000) * 1000 // 40000, 1000, n, (3, 1, 2, 0)[i]
     raise ValueError
 
 
@@ -95,9 +104,9 @@ def frame(t, fb, payload, pitch, fmt, offs):
 
 t = t6dev.T6()
 try:
-    m = entry(319750, HZ, 3600, 3488, 32, 1481, 1443, 10, 1, 0)
+    m = entry(CLK, HZ, HTOT, HS, HSL, VTOT, VS, VSL, 1, 0)
     t.cout(0x12, t.out, 0, m); t.cout(0x31, 0, 0); t.output(True)
-    print(f"mode set: {W}x{H}@{HZ}, 319.75 MHz", flush=True)
+    print(f"mode set: {W}x{H}@{HZ}, {CLK / 1000} MHz", flush=True)
     time.sleep(3)
     pic = picture()
     n = 16

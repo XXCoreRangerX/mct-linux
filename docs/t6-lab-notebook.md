@@ -585,3 +585,11 @@ after a replug). No picture, so the formats were never seen. Likely the
 T6's HDMI transmitter misbehaves at this clock/width (MCT's own table
 stops at 2048x1152). Not retried. Next, only with a spare monitor:
 2560x1440@60 (241.5 MHz), closer to the proven 1080p144 (333 MHz).
+
+**2560x1440@60 on the MO34WQC2 (241.5 MHz): works.** `tools/t6_wide_test.py
+2560`: NV12 and YUV 4:4:4 pictures and full-width motion fine. RGB24
+(~660 MB/s scanout, over the 500 MB/s seen at 1080p) maybe blacked out for
+a moment, unconfirmed; the driver doesn't use RGB24 there anyway (auto
+picks 4:4:4, forced rgb24 falls back to NV12). Driver 0.18.0 now allows
+modes up to 2560x1600 beyond the chip's table, and computes extra refresh
+rates only for sizes up to 1080p (tried); 3440 wide stays off.

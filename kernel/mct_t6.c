@@ -48,8 +48,8 @@ MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at re
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	17
-#define DRIVER_PATCH	1
+#define DRIVER_MINOR	18
+#define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -126,6 +126,16 @@ struct t6_mode {
 #define T6_MAX_CLOCK_KHZ	340000
 /* frame buffers are 0xfffec0 apart; a frame is 0x30 bytes header + NV12 */
 #define T6_BUF_SIZE		0xfffec0
+/*
+ * Sizes beyond the device's own table that were tried on the 5600: 2560x1440
+ * at 60 Hz works in all formats. 3440x1440@60 (319.75 MHz) froze a
+ * monitor's controller, so wider modes stay off unless the table has them.
+ */
+#define T6_TESTED_W		2560
+#define T6_TESTED_H		1600
+/* computed refresh rates only for sizes tried with them */
+#define T6_EXTRA_MAX_W		1920
+#define T6_EXTRA_MAX_H		1080
 
 /* extra refresh rates offered for the monitor's own sizes, within its range */
 static const int t6_extra_hz[] = { 75, 100, 120, 144, 150, 165, 200, 240 };
@@ -460,6 +470,8 @@ static int t6_read_modes(struct mct_t6 *t6)
 		t6->max_w = max(t6->max_w, w);
 		t6->max_h = max(t6->max_h, h);
 	}
+	t6->max_w = max(t6->max_w, T6_TESTED_W);
+	t6->max_h = max(t6->max_h, T6_TESTED_H);
 	return t6->nmodes ? 0 : -ENODEV;
 }
 
@@ -1347,7 +1359,7 @@ static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector
 		if (mode->hdisplay == 1280 && mode->vdisplay == 720)
 			has_720p = true;
 	}
-	if (w)
+	if (w && w <= T6_EXTRA_MAX_W && h <= T6_EXTRA_MAX_H)
 		count += t6_add_extra_modes(connector, w, h);
 	if (has_720p && (w != 1280 || h != 720))
 		count += t6_add_extra_modes(connector, 1280, 720);
