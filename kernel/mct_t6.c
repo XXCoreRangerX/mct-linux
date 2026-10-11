@@ -21,6 +21,8 @@
  * wait for USB and the newest image always wins.
  */
 
+#include <linux/debugfs.h>
+#include <linux/delay.h>
 #include <linux/module.h>
 #include <linux/seq_file.h>
 #include <linux/unaligned.h>
@@ -48,7 +50,7 @@ MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at re
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	18
+#define DRIVER_MINOR	19
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -57,6 +59,10 @@ MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at re
 #define T6_EV_CHANGE0	0x01		/* monitor change on output 0 */
 #define T6_EV_CHANGE1	0x02		/* ... output 1 */
 #define T6_EV_DONE	0x04		/* frame done, fence ID at 0x0c */
+#define T6_EV_REDRAW	0x10		/* the device lost the picture: send it all */
+
+#define T6_HPD_MS	300		/* monitor status re-read interval after a change */
+#define T6_HPD_SAME	3		/* equal readings before a change counts */
 
 #define T6_REQ_EDID	0x80
 #define T6_REQ_STATUS	0x87
@@ -64,6 +70,7 @@ MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at re
 #define T6_REQ_SETMODE	0x12
 #define T6_REQ_OUTPUT	0x03
 #define T6_REQ_READY	0x31		/* "software ready", after a mode set */
+#define T6_REQ_CANCEL	0x14		/* drop a bulk transfer cut off halfway */
 /* hardware cursor, per output: position, show/hide, image upload */
 #define T6_REQ_CUR_POS(o)	((o) ? 0x06 : 0x04)
 #define T6_REQ_CUR_SHOW(o)	((o) ? 0x07 : 0x05)
@@ -264,12 +271,23 @@ struct mct_t6 {
 	ktime_t last_large;		/* last large update */
 
 	struct urb *ev_urb;		/* interrupt IN, always queued */
-	struct work_struct hpd_work;
+	struct delayed_work ev_retry;	/* resubmit it after an error */
+	int ev_fails;			/* errors in a row */
+	struct delayed_work hpd_work;	/* monitor status, debounced */
+	int hpd_last, hpd_same;		/* last reading and how often in a row */
+	int hpd_state;			/* reported status: 1 connected, 0 not, -1 unknown */
+	bool hpd_events;		/* the device sends change events */
+	struct work_struct redraw_work;
+	atomic_t redraw;		/* resend everything with the next update */
+	atomic_t inject;		/* debugfs: break the next update on purpose */
+	struct t6_mode mode_entry;	/* the mode set at the last enable */
 
 	struct {
+		struct mutex lock;	/* cursor state: plane updates and redraws */
 		u8 *img;		/* header + image being built */
 		u8 *shown;		/* last uploaded */
 		int slot;		/* 0 or 1: which of our two slots is in use */
+		int x, y;		/* last position sent */
 		bool uploaded, visible;
 	} cur;
 
@@ -277,7 +295,8 @@ struct mct_t6 {
 		u64 updates, bytes, ns_conv, ns_usb;
 		u64 rows, bands;		/* image rows and bands sent */
 		u64 to_420;			/* switches to 4:2:0 for motion */
-		u64 ev_done, ev_change, ev_other;	/* interrupt events */
+		u64 ev_done, ev_change, ev_redraw, ev_other;	/* interrupt events */
+		u64 ev_errors, recoveries;
 	} stats;
 };
 
@@ -912,6 +931,55 @@ static int t6_flip(struct mct_t6 *t6, int k)
 }
 
 /*
+ * A bulk transfer failed or got stuck: the device may be waiting for the
+ * rest of a cut off session and would take the next headers as its data.
+ * Drop what is queued, clear a stall, cancel the session on the device
+ * (as the vendor driver does after a failed write) and send whole frames
+ * again. io_lock held.
+ */
+static void t6_recover(struct mct_t6 *t6, int err)
+{
+	struct usb_device *udev = t6_udev(t6);
+
+	usb_kill_anchored_urbs(&t6->anchor);
+	if (err == -EPIPE)
+		usb_clear_halt(udev, usb_sndbulkpipe(udev, T6_EP_OUT));
+	t6_ctrl_out(t6, T6_REQ_CANCEL, 0, 0, 0);
+	memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
+	t6->stats.recoveries++;
+	drm_err_ratelimited(&t6->base.dev, "frame transfer error %d, transfer cancelled\n", err);
+}
+
+/*
+ * Test hook (debugfs mct_t6_inject): announce a 64 KiB rectangle write
+ * into frame buffer k, send only 256 bytes of it and fail the update.
+ */
+static int t6_inject_cut(struct mct_t6 *t6, int k)
+{
+	struct t6_rect_header r = { };
+	struct t6_urb *u;
+	int ret;
+
+	r.type = cpu_to_le32(7);
+	r.len = cpu_to_le32(0x10000);
+	r.y_addr = cpu_to_le32(t6_bufs[k] + 0x30);
+	r.uv_addr = cpu_to_le32(t6_bufs[k] + 0x30 + 0x8000);
+	r.y_pitch = cpu_to_le16(0x100);
+	r.uv_pitch = cpu_to_le16(0x100);
+	r.width = cpu_to_le16(0x100);
+	r.height = cpu_to_le16(0xaa);
+	ret = t6_bulk(t6, &r, sizeof(r));
+	if (ret)
+		return ret;
+	u = t6_urb_get(t6);
+	if (!u)
+		return -ETIMEDOUT;
+	memset(u->buf, 0x80, 0x100);
+	ret = t6_urb_send(t6, u, 0x100);
+	return ret ?: -EIO;
+}
+
+/*
  * Write what changed into the next of the three frame buffers (never the
  * one on screen), then flip to it. io_lock held.
  */
@@ -921,6 +989,8 @@ static int t6_present(struct mct_t6 *t6, const struct t6_band *bands, int n)
 	int i, j, p, r, ret = 0;
 
 	t6->hw_valid[k] = false;
+	if (atomic_xchg(&t6->inject, 0))
+		return t6_inject_cut(t6, k);
 	for (i = 0; i < n && !ret; i++)
 		ret = t6_send_band(t6, k, &bands[i]);
 	if (!ret)
@@ -1032,10 +1102,10 @@ static void t6_update(struct mct_device *mdev)
 
 	/* a failed transfer may have left any buffer half written */
 	ret = atomic_xchg(&t6->urb_err, 0);
-	if (ret) {
-		drm_err_ratelimited(&t6->base.dev, "frame transfer error: %d\n", ret);
+	if (ret)
+		t6_recover(t6, ret);
+	if (atomic_xchg(&t6->redraw, 0))
 		memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
-	}
 
 	full = t6_requested_format(t6, &adaptive);
 	fits = full != T6_NV12 && t6_fits(t6, full);
@@ -1067,10 +1137,13 @@ static void t6_update(struct mct_device *mdev)
 
 	if (drm_dev_enter(&t6->base.dev, &idx)) {
 		ret = t6_present(t6, bands, n);
-		if (ret && ret != -ENODEV && ret != -ESHUTDOWN)	/* unplugged */
-			drm_err_ratelimited(&t6->base.dev, "frame update error: %d\n", ret);
-		else
+		if (ret && ret != -ENODEV && ret != -ESHUTDOWN) {	/* not unplugged */
+			t6_recover(t6, ret);
+			/* the whole image again in a moment, without hammering a dead device */
+			mct_settle(&t6->base, 100);
+		} else if (!ret) {
 			t6->stats.updates++;
+		}
 		drm_dev_exit(idx);
 	}
 	t6->stats.ns_conv += ktime_to_ns(ktime_sub(t1, t0));
@@ -1151,12 +1224,18 @@ static int t6_cursor_move(struct mct_t6 *t6, int x, int y)
 	mutex_lock(&t6->io_lock);
 	ret = t6_ctrl_out(t6, T6_REQ_CUR_POS(t6->output), x, y, 0);
 	mutex_unlock(&t6->io_lock);
+	t6->cur.x = x;
+	t6->cur.y = y;
 	return ret < 0 ? ret : 0;
 }
 
 static void t6_cursor_hide(struct mct_device *mdev)
 {
-	t6_cursor_show(to_t6(mdev), false);
+	struct mct_t6 *t6 = to_t6(mdev);
+
+	mutex_lock(&t6->cur.lock);
+	t6_cursor_show(t6, false);
+	mutex_unlock(&t6->cur.lock);
 }
 
 static void t6_cursor_set(struct mct_device *mdev, const u8 *bgra, int x, int y)
@@ -1173,9 +1252,10 @@ static void t6_cursor_set(struct mct_device *mdev, const u8 *bgra, int x, int y)
 	sy = max(-y, 0);
 	x = max(x, 0);
 	y = max(y, 0);
+	mutex_lock(&t6->cur.lock);
 	if (sx >= T6_CUR || sy >= T6_CUR) {
 		t6_cursor_show(t6, false);
-		return;
+		goto out;
 	}
 
 	/* header {kind 1 = ARGB with alpha, w, h, pitch}, then B, G, R, A pixels */
@@ -1193,8 +1273,10 @@ static void t6_cursor_set(struct mct_device *mdev, const u8 *bgra, int x, int y)
 	t6_cursor_move(t6, x, y);
 	if (!t6->cur.uploaded || memcmp(t6->cur.img, t6->cur.shown, T6_CUR_BYTES))
 		if (t6_cursor_upload(t6))
-			return;
+			goto out;
 	t6_cursor_show(t6, true);
+out:
+	mutex_unlock(&t6->cur.lock);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1263,6 +1345,8 @@ static int t6_enable(struct mct_device *mdev, const struct drm_display_mode *mod
 	ret = t6_alloc_images(t6, mode->hdisplay, mode->vdisplay);
 	if (ret)
 		return ret;
+	t6->mode_entry = m;
+	msleep(50);	/* after output off, before the new mode, as the vendor driver does */
 	if (drm_dev_enter(&mdev->dev, &idx)) {
 		if (t6_set_mode(t6, &m) || t6_ready(t6) || t6_set_output(t6, true))
 			drm_err(&mdev->dev, "could not set mode %dx%d\n",
@@ -1483,6 +1567,51 @@ static int t6_add_preferred_fallbacks(struct mct_t6 *t6, struct drm_connector *c
 	return count + t6_add_smaller_preferred(t6, connector, pref, have_pref);
 }
 
+/*
+ * No usable EDID (some KVMs and switches): the device's own table up to
+ * 1920x1080, 1080p60 preferred, as the vendor drivers fall back to,
+ * instead of the 1024x768 DRM would offer.
+ */
+static int t6_add_table_modes(struct mct_t6 *t6, struct drm_connector *connector)
+{
+	struct drm_display_mode *mode;
+	struct t6_mode m;
+	int i, count = 0;
+
+	for (i = 0; i < t6->nmodes; i++) {
+		const struct t6_mode *e = &t6->modes[i];
+		int w = le16_to_cpu(e->hdisplay), h = le16_to_cpu(e->vdisplay);
+
+		if (!w || !h || w > 1920 || h > 1080)
+			continue;
+		mode = drm_mode_create(connector->dev);
+		if (!mode)
+			break;
+		mode->clock = le32_to_cpu(e->clock_khz);
+		mode->hdisplay = w;
+		mode->hsync_start = le16_to_cpu(e->hsync_start);
+		mode->hsync_end = mode->hsync_start + le16_to_cpu(e->hsync_len);
+		mode->htotal = le16_to_cpu(e->htotal);
+		mode->vdisplay = h;
+		mode->vsync_start = le16_to_cpu(e->vsync_start);
+		mode->vsync_end = mode->vsync_start + le16_to_cpu(e->vsync_len);
+		mode->vtotal = le16_to_cpu(e->vtotal);
+		mode->flags = (e->hsync_pol ? DRM_MODE_FLAG_PHSYNC : DRM_MODE_FLAG_NHSYNC) |
+			      (e->vsync_pol ? DRM_MODE_FLAG_PVSYNC : DRM_MODE_FLAG_NVSYNC);
+		mode->type = DRM_MODE_TYPE_DRIVER;
+		drm_mode_set_name(mode);
+		if (t6_mode_entry(t6, mode, &m) || drm_mode_validate_driver(connector->dev, mode)) {
+			drm_mode_destroy(connector->dev, mode);
+			continue;
+		}
+		if (w == 1920 && h == 1080 && drm_mode_vrefresh(mode) == 60)
+			mode->type |= DRM_MODE_TYPE_PREFERRED;
+		drm_mode_probed_add(connector, mode);
+		count++;
+	}
+	return count;
+}
+
 static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector)
 {
 	struct mct_t6 *t6 = to_t6(mdev);
@@ -1495,6 +1624,8 @@ static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector
 	drm_edid_connector_update(connector, edid);
 	count = drm_edid_connector_add_modes(connector);
 	drm_edid_free(edid);
+	if (!count)
+		return t6_add_table_modes(t6, connector);
 
 	list_for_each_entry(mode, &connector->probed_modes, head) {
 		if (mode->type & DRM_MODE_TYPE_PREFERRED && !w) {
@@ -1523,21 +1654,94 @@ static enum drm_mode_status t6_mode_valid(struct mct_device *mdev,
 static int t6_detect(struct mct_device *mdev)
 {
 	struct mct_t6 *t6 = to_t6(mdev);
-	int ret = t6_output_status(t6, t6->output);
+	int ret = t6->hpd_state;
 
+	/* with change events, the debounced state; else ask (polling) */
+	if (!t6->hpd_events || ret < 0)
+		ret = t6_output_status(t6, t6->output);
 	if (ret < 0)
 		return connector_status_unknown;
+	if (t6->hpd_events)
+		t6->hpd_state = ret;
 	return ret == 1 ? connector_status_connected : connector_status_disconnected;
 }
 
 /* ------------------------------------------------------------------ */
 /* interrupt events						      */
 
+/*
+ * After a monitor change event, read the status until it reads the same
+ * T6_HPD_SAME times in a row (monitors toggle it while they switch modes
+ * or wake up), then report. A monitor that is (back) on gets the mode and
+ * the whole picture again, and userspace re-probes in any case, so a swap
+ * to another monitor is seen too.
+ */
 static void t6_hpd_work(struct work_struct *work)
 {
-	struct mct_t6 *t6 = container_of(work, struct mct_t6, hpd_work);
+	struct mct_t6 *t6 = container_of(to_delayed_work(work), struct mct_t6, hpd_work);
+	int idx, st;
 
-	drm_helper_hpd_irq_event(&t6->base.dev);
+	if (!drm_dev_enter(&t6->base.dev, &idx))
+		return;
+	st = t6_output_status(t6, t6->output);
+	if (st >= 0 && st == t6->hpd_last) {
+		t6->hpd_same++;
+	} else {
+		t6->hpd_last = st;
+		t6->hpd_same = 1;
+	}
+	if (st < 0 || t6->hpd_same < T6_HPD_SAME) {
+		schedule_delayed_work(&t6->hpd_work, msecs_to_jiffies(T6_HPD_MS));
+		goto out;
+	}
+	t6->hpd_state = st;
+	if (st == 1 && READ_ONCE(t6->base.width)) {
+		mutex_lock(&t6->io_lock);
+		memcpy(t6->ctrl, &t6->mode_entry, sizeof(t6->mode_entry));
+		if (t6_ctrl_out(t6, T6_REQ_SETMODE, t6->output, 0, sizeof(t6->mode_entry)) >= 0)
+			t6_ctrl_out(t6, T6_REQ_READY, 0, 0, 0);
+		t6_ctrl_out(t6, T6_REQ_OUTPUT, t6->output, 1, 0);
+		mutex_unlock(&t6->io_lock);
+		schedule_work(&t6->redraw_work);
+	}
+	drm_kms_helper_hotplug_event(&t6->base.dev);
+out:
+	drm_dev_exit(idx);
+}
+
+/* resend the picture and the cursor: the device asked, or got a new mode */
+static void t6_redraw_work(struct work_struct *work)
+{
+	struct mct_t6 *t6 = container_of(work, struct mct_t6, redraw_work);
+	int idx;
+
+	if (!drm_dev_enter(&t6->base.dev, &idx))
+		return;
+	atomic_set(&t6->redraw, 1);
+	mutex_lock(&t6->base.lock);
+	t6->base.dirty = true;
+	mutex_unlock(&t6->base.lock);
+	mct_kick(&t6->base);
+	mutex_lock(&t6->cur.lock);
+	if (t6->cur.visible && !t6_cursor_upload(t6))
+		t6_cursor_move(t6, t6->cur.x, t6->cur.y);
+	mutex_unlock(&t6->cur.lock);
+	drm_dev_exit(idx);
+}
+
+/* after an error on the event endpoint: clear a stall, queue the transfer again */
+static void t6_ev_retry(struct work_struct *work)
+{
+	struct mct_t6 *t6 = container_of(to_delayed_work(work), struct mct_t6, ev_retry);
+	int idx;
+
+	if (!drm_dev_enter(&t6->base.dev, &idx))
+		return;
+	if (t6->ev_urb->status == -EPIPE)
+		usb_clear_halt(t6_udev(t6), t6->ev_urb->pipe);
+	if (usb_submit_urb(t6->ev_urb, GFP_KERNEL))
+		drm_warn(&t6->base.dev, "monitor change events stopped\n");
+	drm_dev_exit(idx);
 }
 
 static void t6_event_complete(struct urb *urb)
@@ -1547,28 +1751,36 @@ static void t6_event_complete(struct urb *urb)
 
 	switch (urb->status) {
 	case 0:
+		t6->ev_fails = 0;
 		break;
 	case -ENOENT:
 	case -ECONNRESET:
 	case -ESHUTDOWN:
-	case -EPROTO:
-	case -EILSEQ:
-	case -EPIPE:
-		return;		/* killed, gone or broken: don't spin */
+	case -ENODEV:
+		return;		/* killed or gone */
 	default:
-		goto resubmit;
+		/* stall or line errors: try again later, slower each time */
+		t6->stats.ev_errors++;
+		if (t6->ev_fails < 10)
+			schedule_delayed_work(&t6->ev_retry,
+					      msecs_to_jiffies(100 << min(t6->ev_fails++, 5)));
+		return;
 	}
 	if (urb->actual_length > 0x13) {
 		if (ev[0x13] & T6_EV_DONE)
 			t6->stats.ev_done++;
 		if (ev[0x13] & (T6_EV_CHANGE0 | T6_EV_CHANGE1)) {
 			t6->stats.ev_change++;
-			schedule_work(&t6->hpd_work);
+			t6->hpd_same = 0;
+			mod_delayed_work(system_wq, &t6->hpd_work, msecs_to_jiffies(T6_HPD_MS));
 		}
-		if (!(ev[0x13] & (T6_EV_DONE | T6_EV_CHANGE0 | T6_EV_CHANGE1)))
+		if (ev[0x13] & T6_EV_REDRAW) {
+			t6->stats.ev_redraw++;
+			schedule_work(&t6->redraw_work);
+		}
+		if (!(ev[0x13] & (T6_EV_DONE | T6_EV_CHANGE0 | T6_EV_CHANGE1 | T6_EV_REDRAW)))
 			t6->stats.ev_other++;
 	}
-resubmit:
 	usb_submit_urb(urb, GFP_ATOMIC);
 }
 
@@ -1616,11 +1828,32 @@ static void t6_stats(struct mct_device *mdev, struct seq_file *m)
 		   div64_u64(t6->stats.ns_usb, n * 1000000),
 		   div64_u64(t6->stats.ns_usb, n * 10000) % 100);
 	seq_printf(m, "motion -> NV12   %llu times\n", t6->stats.to_420);
-	seq_printf(m, "events           %llu frame done, %llu monitor change, %llu other\n",
-		   t6->stats.ev_done, t6->stats.ev_change, t6->stats.ev_other);
+	seq_printf(m, "events           %llu frame done, %llu monitor change, %llu redraw, %llu other, %llu errors\n",
+		   t6->stats.ev_done, t6->stats.ev_change, t6->stats.ev_redraw,
+		   t6->stats.ev_other, t6->stats.ev_errors);
+	seq_printf(m, "recoveries       %llu\n", t6->stats.recoveries);
 	seq_printf(m, "usb MB/s while busy %llu\n",
 		   div64_u64(t6->stats.bytes * 1000, max_t(u64, t6->stats.ns_usb, 1)));
 }
+
+static ssize_t t6_inject_write(struct file *file, const char __user *buf, size_t len,
+			       loff_t *pos)
+{
+	struct mct_t6 *t6 = file->private_data;
+
+	atomic_set(&t6->inject, 1);
+	mutex_lock(&t6->base.lock);
+	t6->base.dirty = true;
+	mutex_unlock(&t6->base.lock);
+	mct_kick(&t6->base);
+	return len;
+}
+
+static const struct file_operations t6_inject_fops = {
+	.owner = THIS_MODULE,
+	.open = simple_open,
+	.write = t6_inject_write,
+};
 
 /* ------------------------------------------------------------------ */
 /* driver							      */
@@ -1726,7 +1959,12 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 		return PTR_ERR(t6);
 	dev = &t6->base.dev;
 
-	INIT_WORK(&t6->hpd_work, t6_hpd_work);
+	INIT_DELAYED_WORK(&t6->hpd_work, t6_hpd_work);
+	INIT_DELAYED_WORK(&t6->ev_retry, t6_ev_retry);
+	INIT_WORK(&t6->redraw_work, t6_redraw_work);
+	mutex_init(&t6->cur.lock);
+	t6->hpd_state = -1;
+	t6->hpd_last = -1;
 	for (i = 0; i < 256; i++) {
 		t6->lut[0][i] = i;
 		t6->lut[1][i] = i;
@@ -1772,17 +2010,29 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	ret = mct_register(&t6->base, interface);
 	if (ret)
 		return ret;
-	if (usb_submit_urb(t6->ev_urb, GFP_KERNEL))
+	t6->hpd_events = !usb_submit_urb(t6->ev_urb, GFP_KERNEL);
+	if (!t6->hpd_events)
 		drm_warn(dev, "no monitor change events, polling only\n");
+	if (!IS_ERR_OR_NULL(dev->debugfs_root))
+		debugfs_create_file("mct_t6_inject", 0200, dev->debugfs_root, t6,
+				    &t6_inject_fops);
 	return 0;
+}
+
+/* no more events or event work, also none queued from a pending retry */
+static void t6_stop_events(struct mct_t6 *t6)
+{
+	usb_poison_urb(t6->ev_urb);
+	cancel_delayed_work_sync(&t6->ev_retry);
+	cancel_delayed_work_sync(&t6->hpd_work);
+	cancel_work_sync(&t6->redraw_work);
 }
 
 static void t6_usb_disconnect(struct usb_interface *interface)
 {
 	struct mct_t6 *t6 = to_t6(to_mct(usb_get_intfdata(interface)));
 
-	usb_kill_urb(t6->ev_urb);
-	cancel_work_sync(&t6->hpd_work);
+	t6_stop_events(t6);
 	mct_unplug(&t6->base);
 }
 
@@ -1792,8 +2042,7 @@ static int t6_suspend(struct usb_interface *interface, pm_message_t message)
 	int ret;
 
 	ret = mct_suspend(&t6->base);
-	usb_kill_urb(t6->ev_urb);
-	cancel_work_sync(&t6->hpd_work);
+	t6_stop_events(t6);
 	return ret;
 }
 
@@ -1801,7 +2050,11 @@ static int t6_resume(struct usb_interface *interface)
 {
 	struct mct_t6 *t6 = to_t6(to_mct(usb_get_intfdata(interface)));
 
-	usb_submit_urb(t6->ev_urb, GFP_KERNEL);
+	t6->hpd_state = -1;	/* the monitor may have changed meanwhile */
+	t6->ev_fails = 0;
+	usb_unpoison_urb(t6->ev_urb);
+	if (t6->hpd_events)
+		usb_submit_urb(t6->ev_urb, GFP_KERNEL);
 	return mct_resume(&t6->base);
 }
 
