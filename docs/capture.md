@@ -31,7 +31,8 @@
 
 ## Captures in this repo
 
-- `captures/redir2.bin`: full usbredir capture of the Windows driver's init and
+- `captures/redir2.bin` (development repository only, not in the public one):
+  full usbredir capture of the Windows driver's init and
   first (black) frames. Source of `t2d/init-full.bin` (`tools/gen_init_blob.py`),
   which `tools/gen_init_min.py` trims to `t2d/init.bin`.
 - `captures/frame1_rle.bin`: one captured black `0x13` frame (encoder test vector).
@@ -56,5 +57,6 @@ python3 tools/parse_redir.py captures/redirN.bin   # per-EP streams
 `tools/redir_ops.py` loads a capture as ordered per-transfer OUT ops (keeps
 transfer boundaries, which the firmware requires) + `frames()` for `0x13`.
 Killing usbredirserver drops the tablet out of scanout; power-cycle + re-init after.
-VM login (from `vm/autounattend.xml`): `mct` / `(password not published)`. `vm/runvm.sh` exposes a QMP
+VM login: user `mct` with the password set in `vm/autounattend.xml`
+(development repository only). `vm/runvm.sh` exposes a QMP
 socket (`vm/qmp.sock`) for scripting (`send-key`, `screendump`, `device_add`).

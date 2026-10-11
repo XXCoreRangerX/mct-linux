@@ -18,7 +18,7 @@ Legacy groups also present: `WinXP_Target_T2_Disp` (t2exgrp/t2mrgrp),
 `T2-5_XDDM_*_UtilDLL` (`MTrigger2.exe` tray UI, display settings only,
 no USB), `WinXP_Target_SiS` (sisusb-era, unrelated).
 
-## T2Indisp.dll internals (from `t2umdf!` debug strings, `data/t2umdf_strings.txt`)
+## T2Indisp.dll internals (from `t2umdf!` debug strings, `data/t2umdf_strings.txt`, development repository only)
 
 - `CT2Hal`: `ProbeUsb` (WDF USB), `ProbeFirmware` (HW version gate),
   `PowerUp` (DDR, DVO driving, display power), `Read/WritePipe` (bulk EPs),

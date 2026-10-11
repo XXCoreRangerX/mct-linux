@@ -59,11 +59,13 @@ Contents
   nix/      flake package and NixOS module, two optional niri patches
   docs/     protocol references, limits, lab notes (docs/README.md)
   tools/    test and research scripts (tools/README.md)
-  t2d/      older userspace daemon for the T2 on top of EVDI
   data/, captures/, vm/
-            first probe outputs, one USB capture of the Windows init and one
-            encoded test frame, the Windows VM setup used for captures (no
-            vendor files)
+            first probe outputs, an encoded test frame, how the Windows VM
+            for the captures was run (the captures themselves and the vendor
+            files are not published)
+  t2d/      legacy: the T2 as a userspace daemon on top of EVDI, for
+            kernels older than 7.2 and for protocol work; also holds the
+            T2 init sequence the kernel driver is built from
 
 Supported devices
 -----------------

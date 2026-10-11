@@ -44,7 +44,7 @@ docstring first; the interactive ones wait for a y/n answer per step.**
 |---|---|
 | `t2dev.py` | small pyusb toolkit for live T2 experiments |
 | `t2rle.py` | the T2's planar RLE codec |
-| `replay.py`, `show_image.py` | replay the Windows init, then show an image |
+| `replay.py`, `show_image.py` | replay the Windows init, then show an image (`replay.py`, `gen_init_blob.py` and `timeline.py` need `captures/redir2.bin`, which is only in the development repository) |
 | `gen_init_blob.py`, `gen_init_min.py`, `gen_init_header.py`, `init_trim.py` | extract, trim and convert the init sequence (`t2d/init.bin`, `kernel/mct_t2_init.h`) |
 | `backlight_bisect.py` | find which init step turns the backlight on |
 | `cursor_test.py` | hardware cursor experiments |
