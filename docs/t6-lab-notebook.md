@@ -626,3 +626,25 @@ convert 0.70 ms and USB 2.06 ms per update, 471 MB/s while busy.
   limit is ~820 MB/s, not 760. Driver: 4:4:4 up to 820 MB/s; the extra
   mode next to the reduced blanking 60 Hz one is now the monitor's timing
   at the highest rate 4:4:4 fits (3440x1440@55, was 50).
+
+**Other monitors, simulated** (`tools/edid_gen.py` makes EDID 1.4 blocks for
+typical monitors, `tools/t6_edid_sim.sh` feeds them to the T6 connector via
+DRM's `edid_override` with the output off in niri and saves what the
+driver offers, `captures/t6-edid-sim/`). Driver 0.18.0 after two fixes
+(fastest common reduced blanking rate below the monitor's when its own is
+too fast; 2560x1440@60 preferred for 16:9 monitors too tall for the T6):
+
+| profile | preferred | also |
+|---|---|---|
+| 1440p 144 / 120 Hz | 2560x1440@74, 4:4:4 (~310 MHz) | 2560x1440@60 |
+| 1440p 60 Hz | 2560x1440@60 | |
+| 4K 60 Hz | 2560x1440@60 (reduced blanking) | 1920x1440@60 etc. |
+| 1080p 240 Hz | 1920x1080@131, 4:4:4 | 144 / 120 / 100 Hz reduced blanking (NV12 above ~130) |
+| 3440x1440 100 Hz | 3440x1440@55, 4:4:4 | 3440x1440@60 reduced blanking, @50 |
+| 2560x1080 75 Hz | 2560x1080@75 | |
+| MO34WQC2 (real) | 3440x1440@60 reduced blanking | @55 4:4:4 |
+
+One run showed 0 modes for the 4K profile; a rerun gave the table above
+(snapshot taken while the probe was still running, no kernel messages).
+4K itself (3840x2160@30, 297 MHz, NV12 12.4 MB fits a buffer) is untested:
+needs height 2160 allowed and buffers sized per mode first.

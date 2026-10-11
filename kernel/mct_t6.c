@@ -131,8 +131,9 @@ struct t6_mode {
  * Gigabyte MO34WQC2 on HDMI): 2560x1440 at 60 and 80 Hz, 3440x1440 at 50 to
  * 57 Hz with the monitor's timing and at 60 Hz with reduced blanking (312.8
  * MHz) work. The monitor's own 60 Hz timing (319.75 MHz) gave a black
- * screen, once with the monitor hanging. So wide modes only up to the
- * clocks that worked.
+ * screen, once with the monitor hanging, and 3440x1440@64 (334 MHz) made it
+ * drop the signal. So modes from 2560 wide only up to the clocks that
+ * worked.
  */
 #define T6_TESTED_W		3440
 #define T6_TESTED_H		1600
@@ -491,7 +492,7 @@ static int t6_mode_entry(struct mct_t6 *t6, const struct drm_display_mode *mode,
 
 	if (mode->clock > T6_MAX_CLOCK_KHZ || mode->flags & DRM_MODE_FLAG_INTERLACE)
 		return -ERANGE;
-	if (mode->hdisplay > T6_WIDE_W && mode->clock > T6_WIDE_MAX_CLOCK_KHZ)
+	if (mode->hdisplay >= T6_WIDE_W && mode->clock > T6_WIDE_MAX_CLOCK_KHZ)
 		return -ERANGE;
 	/* the NV12 rows are sent unpadded; the vendor driver needs width % 16 too */
 	if (mode->hdisplay % 16 || mode->vdisplay % 2)
@@ -1365,11 +1366,37 @@ static int t6_add_extra_modes(struct drm_connector *connector, int w, int h)
 }
 
 /*
+ * Nothing at the monitor's own size (a 4K monitor is too tall for the T6
+ * here): offer 2560x1440@60 for 16:9 panels as preferred, so the largest
+ * mode left (often a 4:3 one) doesn't get picked.
+ */
+static int t6_add_smaller_preferred(struct mct_t6 *t6, struct drm_connector *connector,
+				    const struct drm_display_mode *pref, bool have_pref)
+{
+	struct drm_display_mode *mode;
+	struct t6_mode m;
+
+	if (have_pref || pref->hdisplay * 9 != pref->vdisplay * 16 || pref->hdisplay <= 2560)
+		return 0;
+	mode = t6_rb_mode(connector->dev, 2560, 1440, 60);
+	if (!mode)
+		return 0;
+	if (t6_mode_entry(t6, mode, &m)) {
+		drm_mode_destroy(connector->dev, mode);
+		return 0;
+	}
+	mode->type |= DRM_MODE_TYPE_PREFERRED;
+	drm_mode_probed_add(connector, mode);
+	return 1;
+}
+
+/*
  * When the T6 can't drive the monitor's preferred mode (3440x1440@60 on a
- * MO34WQC2 needs 319.75 MHz with its own blanking), offer instead: the same
- * size and rate with reduced blanking, marked preferred, and the monitor's
- * timing at the highest rate where YUV 4:4:4 still fits the scanout (55 Hz
- * there), if the monitor's range allows it.
+ * MO34WQC2 needs 319.75 MHz with its own blanking), offer instead: the
+ * same size with reduced blanking at the highest refresh up to the
+ * monitor's that the T6 drives (preferred if it is the monitor's own rate),
+ * and the monitor's timing at the highest rate where YUV 4:4:4 still fits
+ * the scanout (55 Hz at 3440x1440), if the monitor's range allows it.
  */
 static int t6_add_preferred_fallbacks(struct mct_t6 *t6, struct drm_connector *connector)
 {
@@ -1377,7 +1404,7 @@ static int t6_add_preferred_fallbacks(struct mct_t6 *t6, struct drm_connector *c
 	struct drm_display_mode *pref = NULL, *mode;
 	bool have_pref = false;
 	struct t6_mode m;
-	int hz, full_hz, count = 0;
+	int i, hz, rb_hz, full_hz, count = 0;
 
 	list_for_each_entry(mode, &connector->probed_modes, head) {
 		if (mode->type & DRM_MODE_TYPE_PREFERRED) {
@@ -1389,34 +1416,49 @@ static int t6_add_preferred_fallbacks(struct mct_t6 *t6, struct drm_connector *c
 		return 0;
 	hz = drm_mode_vrefresh(pref);
 
-	mode = t6_rb_mode(connector->dev, pref->hdisplay, pref->vdisplay, hz);
-	if (mode && !t6_mode_entry(t6, mode, &m)) {
-		mode->type |= DRM_MODE_TYPE_PREFERRED;
-		drm_mode_probed_add(connector, mode);
-		have_pref = true;
-		count++;
-	} else if (mode) {
-		drm_mode_destroy(connector->dev, mode);
-	}
-
 	full_hz = div_u64(t6_scan_max[T6_YUV444] * 2,
 			  (u64)t6_scan_x2[T6_YUV444] * pref->hdisplay * pref->vdisplay);
-	full_hz = min(full_hz, hz - 1);
-	if (full_hz < max(min_hz, 24))
-		return count;
-	mode = drm_mode_duplicate(connector->dev, pref);
-	if (!mode)
-		return count;
-	mode->clock = DIV_ROUND_CLOSEST_ULL((u64)mode->htotal * mode->vtotal * full_hz, 1000);
-	mode->type = DRM_MODE_TYPE_DRIVER | (have_pref ? 0 : DRM_MODE_TYPE_PREFERRED);
-	drm_mode_set_name(mode);
-	if (t6_mode_entry(t6, mode, &m)) {
-		drm_mode_destroy(connector->dev, mode);
-		return count;
+
+	/* the monitor's rate, else the highest common one below it */
+	for (i = ARRAY_SIZE(t6_extra_hz); i >= -1; i--) {
+		rb_hz = i == ARRAY_SIZE(t6_extra_hz) ? hz : i >= 0 ? t6_extra_hz[i] : 60;
+		/* not worth it within a few Hz of the full colour mode */
+		if (rb_hz > hz || rb_hz <= full_hz + 4 || rb_hz < min_hz)
+			continue;
+		if (t6_has_mode(connector, pref->hdisplay, pref->vdisplay, rb_hz))
+			break;
+		mode = t6_rb_mode(connector->dev, pref->hdisplay, pref->vdisplay, rb_hz);
+		if (!mode)
+			break;
+		if (t6_mode_entry(t6, mode, &m)) {
+			drm_mode_destroy(connector->dev, mode);
+			continue;
+		}
+		if (rb_hz == hz) {
+			mode->type |= DRM_MODE_TYPE_PREFERRED;
+			have_pref = true;
+		}
+		drm_mode_probed_add(connector, mode);
+		count++;
+		break;
 	}
-	drm_mode_probed_add(connector, mode);
-	count++;
-	return count;
+
+	full_hz = min(full_hz, hz - 1);
+	mode = full_hz >= max(min_hz, 24) ? drm_mode_duplicate(connector->dev, pref) : NULL;
+	if (mode) {
+		mode->clock = DIV_ROUND_CLOSEST_ULL((u64)mode->htotal * mode->vtotal * full_hz,
+						    1000);
+		mode->type = DRM_MODE_TYPE_DRIVER | (have_pref ? 0 : DRM_MODE_TYPE_PREFERRED);
+		drm_mode_set_name(mode);
+		if (t6_mode_entry(t6, mode, &m)) {
+			drm_mode_destroy(connector->dev, mode);
+		} else {
+			drm_mode_probed_add(connector, mode);
+			have_pref = true;
+			count++;
+		}
+	}
+	return count + t6_add_smaller_preferred(t6, connector, pref, have_pref);
 }
 
 static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector)
