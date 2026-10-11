@@ -56,12 +56,12 @@ Later:
   limit is 760 MB/s). The monitor's own 3440x1440@60 timing (319.75 MHz)
   stays off. Buffers are sized per mode
   (~41 MB at 1080p, ~99 MB at 3440x1440). 4K30 (3840x2160, NV12) works too.
-- **Modes above the monitor's native size** (e.g. 3840x2160 on a 1080p
-  monitor that accepts 4K and scales it down): listed from the EDID, useless
-  over the adapter (30 Hz, NV12, downscaled). Consider hiding them.
+- ~~Modes above the monitor's native size~~: hidden since mct_t6 0.22.0,
+  `all_modes=1` (NixOS `hardware.mct.allModes`) shows them; tested.
 - **Userspace companion app** (like DisplayLink Manager or the vendors'
   tray apps): settings in one place (format/auto mode, T2 lossy, brightness,
-  modes), and optional extras the kernel driver can't carry:
+  "show all modes" = all_modes plus a re-probe, modes), and optional extras
+  the kernel driver can't carry:
   - **T6 JPEG** for full-screen motion above the USB limit. The chip only
     decodes; the host has to encode, which can't live in the kernel driver
     (no in-kernel JPEG encoder, CPU heavy, wouldn't be accepted upstream).
