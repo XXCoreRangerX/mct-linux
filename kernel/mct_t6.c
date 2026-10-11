@@ -27,34 +27,16 @@
 #include <linux/usb.h>
 #include <linux/vmalloc.h>
 
-#include <drm/clients/drm_client_setup.h>
-#include <drm/drm_atomic.h>
-#include <drm/drm_atomic_helper.h>
-#include <drm/drm_atomic_state_helper.h>
-#include <drm/drm_cache.h>
 #include <drm/drm_color_mgmt.h>
 #include <drm/drm_connector.h>
-#include <drm/drm_crtc.h>
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_damage_helper.h>
-#include <drm/drm_debugfs.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
-#include <drm/drm_encoder.h>
 #include <drm/drm_fbdev_shmem.h>
 #include <drm/drm_file.h>
-#include <drm/drm_fourcc.h>
-#include <drm/drm_framebuffer.h>
-#include <drm/drm_gem_atomic_helper.h>
-#include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_managed.h>
-#include <drm/drm_modeset_helper_vtables.h>
-#include <drm/drm_plane.h>
 #include <drm/drm_print.h>
 #include <drm/drm_probe_helper.h>
-#include <drm/drm_vblank.h>
-#include <drm/drm_vblank_helper.h>
 
 #include "mct.h"
 #include "mct_drv.h"
@@ -616,7 +598,7 @@ static void t6_set_layout(struct mct_t6 *t6, enum t6_kind kind)
  * Shadow (XRGB8888) to t6->img in the current layout, through the gamma
  * tables. YUV is BT.601 full range (JFIF), as the vendor driver converts it:
  * limited range came out greyish next to RGB. NV12 takes the chroma of each
- * 2x2 block. Modes have even sizes. upd.lock held.
+ * 2x2 block. Modes have even sizes. base.lock held.
  */
 static inline u8 t6_y(int r, int g, int b)
 {
@@ -705,7 +687,7 @@ static void t6_convert_pair(struct mct_t6 *t6, int y)
 
 /*
  * Convert the rows changed since the last conversion (t6->base.changed) and mark
- * them stale in every frame buffer. upd.lock held.
+ * them stale in every frame buffer. base.lock held.
  */
 static void t6_convert(struct mct_t6 *t6)
 {
@@ -1005,7 +987,7 @@ static void t6_update(struct mct_device *mdev)
 	ktime_t t0, t1;
 
 	/*
-	 * Take the USB lock first: a commit waits on upd.lock, and must not end
+	 * Take the USB lock first: a commit waits on base.lock, and must not end
 	 * up waiting behind a cursor upload or connector poll on io_lock.
 	 */
 	mutex_lock(&t6->io_lock);

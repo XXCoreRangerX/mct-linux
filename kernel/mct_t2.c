@@ -38,35 +38,17 @@
 #include <linux/unaligned.h>
 #include <linux/vmalloc.h>
 
-#include <drm/clients/drm_client_setup.h>
-#include <drm/drm_atomic.h>
-#include <drm/drm_atomic_helper.h>
-#include <drm/drm_atomic_state_helper.h>
 #include <drm/drm_connector.h>
-#include <drm/drm_crtc.h>
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_debugfs.h>
-#include <drm/drm_damage_helper.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
-#include <drm/drm_encoder.h>
 #include <drm/drm_fbdev_shmem.h>
 #include <drm/drm_file.h>
-#include <drm/drm_fourcc.h>
-#include <drm/drm_framebuffer.h>
-#include <drm/drm_gem_atomic_helper.h>
-#include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_gem_shmem_helper.h>
-#include <drm/drm_ioctl.h>
 #include <drm/drm_managed.h>
-#include <drm/drm_modeset_helper_vtables.h>
-#include <drm/drm_plane.h>
 #include <drm/drm_print.h>
-#include <drm/drm_probe_helper.h>
-#include <drm/drm_vblank.h>
-#include <drm/drm_vblank_helper.h>
 
 #include "mct.h"
+#include "mct_drv.h"
 #include "mct_t2_init.h"
 
 static int lossy;
@@ -95,7 +77,7 @@ MODULE_PARM_DESC(lossy, "Maximum lossy tolerance (1-8) for updates too big to se
 #define T2_ENC_MAX	(T2_WIDTH * (T2_HEIGHT + 16) * 3 + 4096)
 #define T2_TIMEOUT	2000
 
-#define T2_CUR		64			/* hardware cursor is 64x64 */
+#define T2_CUR		MCT_CUR			/* hardware cursor is 64x64 */
 #define T2_CUR_BYTES	(T2_CUR * T2_CUR * 4)
 
 /* rows of unchanged pixels that still get merged into one update rect */
@@ -108,28 +90,21 @@ MODULE_PARM_DESC(lossy, "Maximum lossy tolerance (1-8) for updates too big to se
 #define T2_FRAME_BUDGET	(600 * 1024)
 
 struct mct_t2 {
-	struct drm_device dev;
-	struct drm_plane primary;
-	struct drm_plane cursor;
-	struct drm_crtc crtc;
-	struct drm_encoder encoder;
-	struct drm_connector conn;
+	struct mct_device base;		/* DRM side, see mct_drv.h */
 
 	struct mutex io_lock;		/* EP2 command sequences + bounce */
 	u8 *bounce;			/* DMA-able transfer buffer */
 	u8 *enc;			/* RLE output */
-	u8 *shadow;			/* XRGB8888 image as committed by userspace */
 	u8 *snap;			/* shadow snapshot being sent */
 	u8 *hw[2];			/* what device buffers A and B hold */
 	bool hw_valid[2];
 
 	struct {			/* debugfs statistics */
 		u64 lossy_tol[9];	/* lossy updates by highest tolerance used */
-		u64 updates, lossy_updates, rects, px_damage, px_sent, bytes;
+		u64 updates, lossy_updates, rects, px_sent, bytes;
 		u64 over_budget, max_payload;	/* encoded bytes per update */
 		u64 latency[6];			/* damage to flip: <8 <16 <33 <50 <100 >=100 ms */
 		u64 ns_diff, ns_encode, ns_usb;	/* time spent per stage */
-		ktime_t since;
 	} stats;
 	const struct drm_edid *edid;	/* read from the device at init */
 	struct backlight_device *bl;
@@ -137,15 +112,7 @@ struct mct_t2 {
 	bool crtc_on, bl_off;
 	u32 front;			/* framebuffer address currently scanned out */
 
-	struct delayed_work refine_work;
-
-	struct {
-		struct work_struct work;
-		struct mutex lock;	/* protects shadow + dirty + refine */
-		int refine;		/* lossless updates still owed after lossy ones */
-		ktime_t dirty_since;	/* oldest damage not yet sent, 0 if none */
-		bool dirty;
-	} upd;
+	int refine;			/* lossless updates still owed, under base.lock */
 
 	struct {
 		u8 *buf;		/* DMA-able: position packets */
@@ -155,11 +122,11 @@ struct mct_t2 {
 	} cur;
 };
 
-#define to_t2(__dev) container_of(__dev, struct mct_t2, dev)
+#define to_t2(m) container_of(m, struct mct_t2, base)
 
 static struct usb_device *t2_udev(struct mct_t2 *t2)
 {
-	return interface_to_usbdev(to_usb_interface(t2->dev.dev));
+	return interface_to_usbdev(to_usb_interface(t2->base.dev.dev));
 }
 
 /* ------------------------------------------------------------------ */
@@ -579,12 +546,12 @@ static int t2_hw_init_once(struct mct_t2 *t2)
 			long sent = 0;
 			int used = 0;
 
-			ret = t2_send_rect(t2, t2->shadow, T2_FB_A, 0, 0, T2_WIDTH, T2_HEIGHT, 0,
+			ret = t2_send_rect(t2, t2->base.shadow, T2_FB_A, 0, 0, T2_WIDTH, T2_HEIGHT, 0,
 					   &sent, &used);
 			if (ret)
 				goto err;
 			t2->front = T2_FB_A;
-			memcpy(t2->hw[0], t2->shadow, T2_WIDTH * T2_HEIGHT * 4);
+			memcpy(t2->hw[0], t2->base.shadow, T2_WIDTH * T2_HEIGHT * 4);
 			t2->hw_valid[0] = true;
 			t2->hw_valid[1] = false;
 		}
@@ -609,11 +576,11 @@ static int t2_hw_init_once(struct mct_t2 *t2)
 	t2->cur.uploaded = false;
 	t2->cur.sized = false;
 	t2->cur.visible = false;
-	drm_dbg(&t2->dev, "init: %d transfers\n", n);
+	drm_dbg(&t2->base.dev, "init: %d transfers\n", n);
 	return 0;
 err:
 	mutex_unlock(&t2->io_lock);
-	drm_err(&t2->dev, "init failed at transfer %d: %d\n", n, ret);
+	drm_err(&t2->base.dev, "init failed at transfer %d: %d\n", n, ret);
 	return ret;
 }
 
@@ -681,7 +648,7 @@ static int t2_resync(struct mct_t2 *t2)
 	if (ret != -ETIMEDOUT)
 		goto out;
 
-	drm_warn(&t2->dev, "device busy in the middle of a command, completing it (may take 30 s)\n");
+	drm_warn(&t2->base.dev, "device busy in the middle of a command, completing it (may take 30 s)\n");
 	deadline = ktime_add_ms(ktime_get(), T2_RESYNC_DEADLINE_MS);
 	for (sent = 0; sent < T2_RESYNC_MAX && ktime_before(ktime_get(), deadline);
 	     sent += T2_CHUNK) {
@@ -704,12 +671,12 @@ static int t2_resync(struct mct_t2 *t2)
 		if (ret != -ETIMEDOUT)
 			goto out;
 	}
-	drm_err(&t2->dev, "device does not respond; unplug it to reset\n");
+	drm_err(&t2->base.dev, "device does not respond; unplug it to reset\n");
 	ret = -EIO;
 	goto out;
 
 recovered:
-	drm_info(&t2->dev, "device command parser recovered after %d bytes\n",
+	drm_info(&t2->base.dev, "device command parser recovered after %d bytes\n",
 		 sent + T2_CHUNK);
 	t2_drain_replies(t2);
 	ret = 0;
@@ -731,11 +698,11 @@ static bool t2_init_took(struct mct_t2 *t2)
 		ret_b = t2_read_reg(t2, T2_REG_PLL_EN, &b, T2_TIMEOUT);
 	mutex_unlock(&t2->io_lock);
 	if (ret_a || ret_b) {
-		drm_warn(&t2->dev, "init check read failed: %d/%d\n", ret_a, ret_b);
+		drm_warn(&t2->base.dev, "init check read failed: %d/%d\n", ret_a, ret_b);
 		return false;
 	}
 	if (a != 0x40 || b != 0x01) {
-		drm_warn(&t2->dev, "init check failed (feb0=%02x fcf6=%02x)\n", a, b);
+		drm_warn(&t2->base.dev, "init check failed (feb0=%02x fcf6=%02x)\n", a, b);
 		return false;
 	}
 	return true;
@@ -755,9 +722,9 @@ static int t2_hw_init(struct mct_t2 *t2)
 		if (t2_init_took(t2))
 			return 0;
 		if (!tries)
-			drm_warn(&t2->dev, "retrying device init\n");
+			drm_warn(&t2->base.dev, "retrying device init\n");
 	}
-	drm_err(&t2->dev, "device init did not take\n");
+	drm_err(&t2->base.dev, "device init did not take\n");
 	return -EIO;
 }
 
@@ -875,10 +842,10 @@ static int t2_backlight_register(struct mct_t2 *t2)
 	 */
 	if (!t2_bl_xfer(t2, false, &level))
 		props.brightness = min_t(int, level, T2_BL_LEVELS - 1) + 1;
-	snprintf(name, sizeof(name), "mct_t2-%d", t2->dev.primary->index);
-	bd = backlight_device_register(name, t2->conn.kdev, t2, &t2_bl_ops, &props);
+	snprintf(name, sizeof(name), "mct_t2-%d", t2->base.dev.primary->index);
+	bd = backlight_device_register(name, t2->base.conn.kdev, t2, &t2_bl_ops, &props);
 	if (IS_ERR(bd)) {
-		drm_warn(&t2->dev, "backlight registration failed: %ld\n", PTR_ERR(bd));
+		drm_warn(&t2->base.dev, "backlight registration failed: %ld\n", PTR_ERR(bd));
 		return 0;	/* not fatal */
 	}
 	t2->bl = bd;
@@ -894,35 +861,35 @@ static void t2_backlight_unregister(struct mct_t2 *t2)
 /* ------------------------------------------------------------------ */
 /* frame updates						      */
 
-static void t2_update_work(struct work_struct *work)
+static void t2_update(struct mct_device *mdev)
 {
-	struct mct_t2 *t2 = container_of(work, struct mct_t2, upd.work);
+	struct mct_t2 *t2 = to_t2(mdev);
 	bool refine, went_lossy = false;
 	ktime_t damaged;
 	int idx, ret = -ENODEV;
 
-	mutex_lock(&t2->upd.lock);
-	if (!t2->upd.dirty) {
-		mutex_unlock(&t2->upd.lock);
+	mutex_lock(&t2->base.lock);
+	if (!t2->base.dirty) {
+		mutex_unlock(&t2->base.lock);
 		return;
 	}
-	t2->upd.dirty = false;
-	damaged = t2->upd.dirty_since;
-	t2->upd.dirty_since = 0;
-	refine = t2->upd.refine > 0 && !delayed_work_pending(&t2->refine_work);
-	if (refine && --t2->upd.refine) {
-		t2->upd.dirty = true;	/* second pass for the other buffer */
-		queue_work(system_long_wq, &t2->upd.work);
+	t2->base.dirty = false;
+	damaged = t2->base.dirty_since;
+	t2->base.dirty_since = 0;
+	refine = t2->refine > 0 && !delayed_work_pending(&t2->base.settle_work);
+	if (refine && --t2->refine) {
+		t2->base.dirty = true;	/* second pass for the other buffer */
+		mct_kick(mdev);
 	}
 	mutex_lock(&t2->io_lock);
-	memcpy(t2->snap, t2->shadow, T2_WIDTH * T2_HEIGHT * 4);
-	mutex_unlock(&t2->upd.lock);
+	memcpy(t2->snap, t2->base.shadow, T2_WIDTH * T2_HEIGHT * 4);
+	mutex_unlock(&t2->base.lock);
 
-	if (drm_dev_enter(&t2->dev, &idx)) {
+	if (drm_dev_enter(&t2->base.dev, &idx)) {
 		ret = t2_present(t2, refine, &went_lossy);
 		/* an interrupted frame leaves the firmware mid-command: always report */
 		if (ret)
-			drm_err_ratelimited(&t2->dev, "frame update error: %d\n", ret);
+			drm_err_ratelimited(&t2->base.dev, "frame update error: %d\n", ret);
 		drm_dev_exit(idx);
 	}
 	mutex_unlock(&t2->io_lock);
@@ -939,122 +906,15 @@ static void t2_update_work(struct work_struct *work)
 
 	if (went_lossy) {
 		/* two lossless passes once motion stops: one per buffer */
-		mutex_lock(&t2->upd.lock);
-		t2->upd.refine = 2;
-		mutex_unlock(&t2->upd.lock);
-		mod_delayed_work(system_long_wq, &t2->refine_work, msecs_to_jiffies(T2_REFINE_MS));
+		mutex_lock(&t2->base.lock);
+		t2->refine = 2;
+		mutex_unlock(&t2->base.lock);
+		mct_settle(mdev, T2_REFINE_MS);
 	}
 }
 
-/* motion stopped: resend what lossy updates approximated */
-static void t2_refine_work(struct work_struct *work)
-{
-	struct mct_t2 *t2 = container_of(to_delayed_work(work), struct mct_t2, refine_work);
-
-	mutex_lock(&t2->upd.lock);
-	t2->upd.dirty = true;
-	mutex_unlock(&t2->upd.lock);
-	queue_work(system_long_wq, &t2->upd.work);
-}
-
-/* copy damage from the (mapped) framebuffer into the shadow and kick the worker */
-static void t2_mark_dirty(struct mct_t2 *t2, struct drm_framebuffer *fb,
-			  const struct iosys_map *map, const struct drm_rect *dirty)
-{
-	const u8 *src = map->vaddr; /* shmem GEM: always a system-memory mapping */
-	int y;
-
-	mutex_lock(&t2->upd.lock);
-	t2->stats.px_damage += drm_rect_width(dirty) * drm_rect_height(dirty);
-	for (y = dirty->y1; y < dirty->y2; y++)
-		memcpy(t2->shadow + (y * T2_WIDTH + dirty->x1) * 4,
-		       src + y * fb->pitches[0] + dirty->x1 * 4,
-		       drm_rect_width(dirty) * 4);
-	t2->upd.dirty = true;
-	if (!t2->upd.dirty_since)
-		t2->upd.dirty_since = ktime_get();
-	mutex_unlock(&t2->upd.lock);
-
-	queue_work(system_long_wq, &t2->upd.work);
-}
-
-static void t2_stop_updates(struct mct_t2 *t2)
-{
-	/*
-	 * The update worker re-arms the refine timer and the refine timer
-	 * queues the worker, so cancel in a loop until neither is pending.
-	 */
-	do {
-		cancel_work_sync(&t2->upd.work);
-	} while (cancel_delayed_work_sync(&t2->refine_work));
-	cancel_work_sync(&t2->upd.work);
-	mutex_lock(&t2->upd.lock);
-	t2->upd.dirty = false;
-	mutex_unlock(&t2->upd.lock);
-}
-
-/* ------------------------------------------------------------------ */
-/* primary plane						      */
-
-static const u32 t2_primary_formats[] = {
-	DRM_FORMAT_XRGB8888,
-};
-
-static const u64 t2_modifiers[] = {
-	DRM_FORMAT_MOD_LINEAR,
-	DRM_FORMAT_MOD_INVALID
-};
-
-static int t2_primary_atomic_check(struct drm_plane *plane, struct drm_atomic_commit *state)
-{
-	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
-	struct drm_crtc_state *crtc_state = NULL;
-
-	if (new_state->crtc)
-		crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
-	return drm_atomic_helper_check_plane_state(new_state, crtc_state,
-						   DRM_PLANE_NO_SCALING, DRM_PLANE_NO_SCALING,
-						   false, false);
-}
-
-static void t2_primary_atomic_update(struct drm_plane *plane, struct drm_atomic_commit *state)
-{
-	struct mct_t2 *t2 = to_t2(plane->dev);
-	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
-	struct drm_plane_state *old_state = drm_atomic_get_old_plane_state(state, plane);
-	struct drm_shadow_plane_state *shadow = to_drm_shadow_plane_state(new_state);
-	struct drm_framebuffer *fb = new_state->fb;
-	struct drm_rect rect;
-
-	if (!fb || !new_state->visible)
-		return;
-	if (!drm_atomic_helper_damage_merged(old_state, new_state, &rect))
-		return;
-	if (drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
-		return;
-	t2_mark_dirty(t2, fb, &shadow->data[0], &rect);
-	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
-}
-
-static const struct drm_plane_helper_funcs t2_primary_helper_funcs = {
-	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
-	.atomic_check = t2_primary_atomic_check,
-	.atomic_update = t2_primary_atomic_update,
-};
-
-static const struct drm_plane_funcs t2_primary_funcs = {
-	.update_plane = drm_atomic_helper_update_plane,
-	.disable_plane = drm_atomic_helper_disable_plane,
-	.destroy = drm_plane_cleanup,
-	DRM_GEM_SHADOW_PLANE_FUNCS,
-};
-
 /* ------------------------------------------------------------------ */
 /* cursor plane (hardware cursor, see docs/protocol-t2.md)	      */
-
-static const u32 t2_cursor_formats[] = {
-	DRM_FORMAT_ARGB8888,
-};
 
 /* EP4 register list: position (device top-left of the 64x64 box) + show/hide */
 static int t2_cursor_regs(struct mct_t2 *t2, int x, int y, bool show)
@@ -1114,59 +974,34 @@ static int t2_cursor_upload(struct mct_t2 *t2)
 	return ret;
 }
 
-static int t2_cursor_atomic_check(struct drm_plane *plane, struct drm_atomic_commit *state)
+static void t2_cursor_hide_hook(struct mct_device *mdev)
 {
-	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
-	struct drm_framebuffer *fb = new_state->fb;
-	struct drm_crtc_state *crtc_state = NULL;
-
-	if (new_state->crtc)
-		crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
-	if (fb && (fb->width > T2_CUR || fb->height > T2_CUR))
-		return -EINVAL;
-	return drm_atomic_helper_check_plane_state(new_state, crtc_state,
-						   DRM_PLANE_NO_SCALING, DRM_PLANE_NO_SCALING,
-						   true, true);
+	t2_cursor_hide(to_t2(mdev));
 }
 
-static void t2_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_commit *state)
+static void t2_cursor_set(struct mct_device *mdev, const u8 *bgra, int x, int y)
 {
-	struct mct_t2 *t2 = to_t2(plane->dev);
-	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
-	struct drm_shadow_plane_state *shadow = to_drm_shadow_plane_state(new_state);
-	struct drm_framebuffer *fb = new_state->fb;
-	int dx, dy, sx, sy, i, j, idx;
-	const u8 *src;
+	struct mct_t2 *t2 = to_t2(mdev);
+	int dx, dy, sx, sy, i, j;
 	u8 *dst;
 
-	if (!drm_dev_enter(plane->dev, &idx))
-		return;
-
-	if (!fb || !new_state->visible) {
-		t2_cursor_hide(t2);
-		goto out;
-	}
-
 	/*
-	 * The visible 64x64 box at (crtc_x, crtc_y) lands, rotated by 180
-	 * degrees, at device (dx, dy). Coordinates must be >= 0: if the box
-	 * hangs off the visible right/bottom edge, shift the image instead.
+	 * The visible 64x64 box at (x, y) lands, rotated by 180 degrees, at
+	 * device (dx, dy). Coordinates must be >= 0: if the box hangs off the
+	 * visible right/bottom edge, shift the image instead.
 	 */
-	dx = T2_WIDTH - (new_state->crtc_x + T2_CUR);
-	dy = T2_HEIGHT - (new_state->crtc_y + T2_CUR);
+	dx = T2_WIDTH - (x + T2_CUR);
+	dy = T2_HEIGHT - (y + T2_CUR);
 	sx = max(-dx, 0);
 	sy = max(-dy, 0);
 	dx = max(dx, 0);
 	dy = max(dy, 0);
 	if (sx >= T2_CUR || sy >= T2_CUR || dx >= T2_WIDTH || dy >= T2_HEIGHT) {
 		t2_cursor_hide(t2);
-		goto out;
+		return;
 	}
 
-	/* ARGB8888 (visible orientation) -> A,B,G,R bytes, rotated 180, shifted */
-	if (drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
-		goto out;
-	src = shadow->data[0].vaddr;
+	/* B, G, R, A (visible orientation) -> A, B, G, R bytes, rotated 180, shifted */
 	dst = t2->cur.img;
 	for (j = 0; j < T2_CUR; j++) {
 		for (i = 0; i < T2_CUR; i++, dst += 4) {
@@ -1174,100 +1009,51 @@ static void t2_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_c
 			int vx = T2_CUR - 1 - (i + sx), vy = T2_CUR - 1 - (j + sy);
 			const u8 *px;
 
-			if (vx < 0 || vy < 0 || vx >= fb->width || vy >= fb->height) {
+			if (vx < 0 || vy < 0) {
 				memset(dst, 0, 4);
 				continue;
 			}
-			px = src + vy * fb->pitches[0] + vx * 4;	/* B, G, R, A */
+			px = bgra + vy * MCT_CUR_PITCH + vx * 4;
 			dst[0] = min_t(u8, px[3], 0xfe);	/* vendor uses 0xfe for opaque */
 			dst[1] = px[0];
 			dst[2] = px[1];
 			dst[3] = px[2];
 		}
 	}
-	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
 
 	if (!t2->cur.uploaded || memcmp(t2->cur.img, t2->cur.shown, T2_CUR_BYTES))
 		if (t2_cursor_upload(t2))
-			goto out;
+			return;
 	t2_cursor_regs(t2, dx, dy, true);
-out:
-	drm_dev_exit(idx);
 }
 
-static const struct drm_plane_helper_funcs t2_cursor_helper_funcs = {
-	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
-	.atomic_check = t2_cursor_atomic_check,
-	.atomic_update = t2_cursor_atomic_update,
-};
-
-static const struct drm_plane_funcs t2_cursor_funcs = {
-	.update_plane = drm_atomic_helper_update_plane,
-	.disable_plane = drm_atomic_helper_disable_plane,
-	.destroy = drm_plane_cleanup,
-	DRM_GEM_SHADOW_PLANE_FUNCS,
-};
-
 /* ------------------------------------------------------------------ */
-/* CRTC / encoder / connector					      */
+/* display on/off, modes					      */
 
-static void t2_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commit *state)
+static void t2_enable(struct mct_device *mdev, const struct drm_display_mode *mode)
 {
-	struct mct_t2 *t2 = to_t2(crtc->dev);
+	struct mct_t2 *t2 = to_t2(mdev);
 	int idx;
 
 	t2->crtc_on = true;
-	if (drm_dev_enter(crtc->dev, &idx)) {
+	if (drm_dev_enter(&mdev->dev, &idx)) {
 		t2_update_panel_power(t2);
 		drm_dev_exit(idx);
 	}
-	drm_crtc_vblank_on(crtc);
 }
 
-static void t2_crtc_atomic_disable(struct drm_crtc *crtc, struct drm_atomic_commit *state)
+static void t2_disable(struct mct_device *mdev)
 {
-	struct mct_t2 *t2 = to_t2(crtc->dev);
-	int idx;
+	struct mct_t2 *t2 = to_t2(mdev);
 
-	drm_crtc_vblank_off(crtc);
-	t2_stop_updates(t2);
-	if (drm_dev_enter(crtc->dev, &idx)) {
-		t2_cursor_hide(t2);
-		t2->crtc_on = false;
-		t2_update_panel_power(t2);	/* panel/backlight off */
-		drm_dev_exit(idx);
-	}
+	t2_cursor_hide(t2);
+	t2->crtc_on = false;
+	t2_update_panel_power(t2);	/* panel/backlight off */
 }
 
-/*
- * The device has no vblank interrupt; a 60 Hz hrtimer (DRM vblank timer
- * helpers) paces page-flip events so compositors don't render faster than
- * the panel refreshes.
- */
-static const struct drm_crtc_helper_funcs t2_crtc_helper_funcs = {
-	.atomic_check = drm_crtc_helper_atomic_check,
-	.atomic_flush = drm_crtc_vblank_atomic_flush,
-	.atomic_enable = t2_crtc_atomic_enable,
-	.atomic_disable = t2_crtc_atomic_disable,
-};
-
-static const struct drm_crtc_funcs t2_crtc_funcs = {
-	.reset = drm_atomic_helper_crtc_reset,
-	.destroy = drm_crtc_cleanup,
-	.set_config = drm_atomic_helper_set_config,
-	.page_flip = drm_atomic_helper_page_flip,
-	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
-	DRM_CRTC_VBLANK_TIMER_FUNCS,
-};
-
-static const struct drm_encoder_funcs t2_encoder_funcs = {
-	.destroy = drm_encoder_cleanup,
-};
-
-static int t2_conn_get_modes(struct drm_connector *connector)
+static int t2_get_modes(struct mct_device *mdev, struct drm_connector *connector)
 {
-	struct mct_t2 *t2 = to_t2(connector->dev);
+	struct mct_t2 *t2 = to_t2(mdev);
 	int count = 0;
 
 	if (t2->edid) {
@@ -1282,51 +1068,34 @@ static int t2_conn_get_modes(struct drm_connector *connector)
 	return count;
 }
 
-static enum drm_mode_status t2_conn_mode_valid(struct drm_connector *connector,
-					       const struct drm_display_mode *mode)
+static enum drm_mode_status t2_mode_valid(struct mct_device *mdev,
+					  const struct drm_display_mode *mode)
 {
 	if (mode->hdisplay != T2_WIDTH || mode->vdisplay != T2_HEIGHT)
 		return MODE_BAD;
 	return MODE_OK;
 }
 
-static const struct drm_connector_helper_funcs t2_conn_helper_funcs = {
-	.get_modes = t2_conn_get_modes,
-	.mode_valid = t2_conn_mode_valid,
-};
-
-static int t2_conn_late_register(struct drm_connector *connector)
+static int t2_late_register(struct mct_device *mdev)
 {
-	return t2_backlight_register(to_t2(connector->dev));
+	return t2_backlight_register(to_t2(mdev));
 }
 
-static void t2_conn_early_unregister(struct drm_connector *connector)
+static void t2_early_unregister(struct mct_device *mdev)
 {
-	t2_backlight_unregister(to_t2(connector->dev));
+	t2_backlight_unregister(to_t2(mdev));
 }
-
-static const struct drm_connector_funcs t2_conn_funcs = {
-	.late_register = t2_conn_late_register,
-	.early_unregister = t2_conn_early_unregister,
-	.fill_modes = drm_helper_probe_single_connector_modes,
-	.destroy = drm_connector_cleanup,
-	.reset = drm_atomic_helper_connector_reset,
-	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
-};
 
 /* ------------------------------------------------------------------ */
 /* debugfs							      */
 
-static int t2_stats_show(struct seq_file *m, void *data)
+static void t2_stats(struct mct_device *mdev, struct seq_file *m)
 {
-	struct drm_debugfs_entry *entry = m->private;
-	struct mct_t2 *t2 = to_t2(entry->dev);
-	u64 ms = max_t(u64, ktime_ms_delta(ktime_get(), t2->stats.since), 1);
+	struct mct_t2 *t2 = to_t2(mdev);
+	u64 ms = max_t(u64, ktime_ms_delta(ktime_get(), mdev->stats.since), 1);
 	u64 full = (u64)T2_WIDTH * T2_HEIGHT;
 	int i;
 
-	seq_printf(m, "seconds          %llu\n", ms / 1000);
 	seq_printf(m, "updates          %llu\n", t2->stats.updates);
 	seq_printf(m, "lossy updates    %llu (by tolerance:", t2->stats.lossy_updates);
 	for (i = 1; i < ARRAY_SIZE(t2->stats.lossy_tol); i++)
@@ -1334,12 +1103,10 @@ static int t2_stats_show(struct seq_file *m, void *data)
 			seq_printf(m, " %d:%llu", i, t2->stats.lossy_tol[i]);
 	seq_puts(m, ")\n");
 	seq_printf(m, "rects            %llu\n", t2->stats.rects);
-	seq_printf(m, "pixels damaged   %llu (%llu full frames)\n",
-		   t2->stats.px_damage, div64_u64(t2->stats.px_damage, full));
 	seq_printf(m, "pixels sent      %llu (%llu full frames)\n",
 		   t2->stats.px_sent, div64_u64(t2->stats.px_sent, full));
 	seq_printf(m, "sent/damaged     %llu%%\n",
-		   div64_u64(t2->stats.px_sent * 100, max_t(u64, t2->stats.px_damage, 1)));
+		   div64_u64(t2->stats.px_sent * 100, max_t(u64, t2->base.stats.px_damage, 1)));
 	seq_printf(m, "usb bytes        %llu (avg %llu KB/s)\n",
 		   t2->stats.bytes, div64_u64(t2->stats.bytes, ms));
 	seq_printf(m, "ms diff/encode/usb  %llu / %llu / %llu\n",
@@ -1352,7 +1119,6 @@ static int t2_stats_show(struct seq_file *m, void *data)
 	seq_printf(m, "latency ms       <8:%llu <16:%llu <33:%llu <50:%llu <100:%llu >=100:%llu\n",
 		   t2->stats.latency[0], t2->stats.latency[1], t2->stats.latency[2],
 		   t2->stats.latency[3], t2->stats.latency[4], t2->stats.latency[5]);
-	return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1372,77 +1138,24 @@ static const struct drm_driver t2_drm_driver = {
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
 };
 
-static const struct drm_mode_config_funcs t2_mode_config_funcs = {
-	.fb_create = drm_gem_fb_create_with_dirty,
-	.atomic_check = drm_atomic_helper_check,
-	.atomic_commit = drm_atomic_helper_commit,
+static const struct mct_funcs t2_funcs = {
+	.get_modes = t2_get_modes,
+	.mode_valid = t2_mode_valid,
+	.late_register = t2_late_register,
+	.early_unregister = t2_early_unregister,
+	.enable = t2_enable,
+	.disable = t2_disable,
+	.update = t2_update,
+	.cursor_set = t2_cursor_set,
+	.cursor_hide = t2_cursor_hide_hook,
+	.stats = t2_stats,
 };
-
-static int t2_modeset_init(struct mct_t2 *t2)
-{
-	struct drm_device *dev = &t2->dev;
-	int ret;
-
-	ret = drmm_mode_config_init(dev);
-	if (ret)
-		return ret;
-	dev->mode_config.min_width = T2_WIDTH;
-	dev->mode_config.max_width = T2_WIDTH;
-	dev->mode_config.min_height = T2_HEIGHT;
-	dev->mode_config.max_height = T2_HEIGHT;
-	dev->mode_config.cursor_width = T2_CUR;
-	dev->mode_config.cursor_height = T2_CUR;
-	dev->mode_config.funcs = &t2_mode_config_funcs;
-
-	ret = drm_universal_plane_init(dev, &t2->primary, 0, &t2_primary_funcs,
-				       t2_primary_formats, ARRAY_SIZE(t2_primary_formats),
-				       t2_modifiers, DRM_PLANE_TYPE_PRIMARY, NULL);
-	if (ret)
-		return ret;
-	drm_plane_helper_add(&t2->primary, &t2_primary_helper_funcs);
-	/* let userspace pass damage rects so small changes become partial updates */
-	drm_plane_enable_fb_damage_clips(&t2->primary);
-
-	ret = drm_universal_plane_init(dev, &t2->cursor, 0, &t2_cursor_funcs,
-				       t2_cursor_formats, ARRAY_SIZE(t2_cursor_formats),
-				       t2_modifiers, DRM_PLANE_TYPE_CURSOR, NULL);
-	if (ret)
-		return ret;
-	drm_plane_helper_add(&t2->cursor, &t2_cursor_helper_funcs);
-
-	ret = drm_crtc_init_with_planes(dev, &t2->crtc, &t2->primary, &t2->cursor,
-					&t2_crtc_funcs, NULL);
-	if (ret)
-		return ret;
-	drm_crtc_helper_add(&t2->crtc, &t2_crtc_helper_funcs);
-
-	ret = drm_encoder_init(dev, &t2->encoder, &t2_encoder_funcs, DRM_MODE_ENCODER_NONE, NULL);
-	if (ret)
-		return ret;
-	t2->encoder.possible_crtcs = drm_crtc_mask(&t2->crtc);
-
-	drm_connector_helper_add(&t2->conn, &t2_conn_helper_funcs);
-	ret = drm_connector_init(dev, &t2->conn, &t2_conn_funcs, DRM_MODE_CONNECTOR_USB);
-	if (ret)
-		return ret;
-	ret = drm_connector_attach_encoder(&t2->conn, &t2->encoder);
-	if (ret)
-		return ret;
-
-	ret = drm_vblank_init(dev, 1);
-	if (ret)
-		return ret;
-
-	drm_mode_config_reset(dev);
-	return 0;
-}
 
 static void t2_release(struct drm_device *dev, void *res)
 {
-	struct mct_t2 *t2 = to_t2(dev);
+	struct mct_t2 *t2 = to_t2(to_mct(dev));
 
 	kvfree(t2->enc);
-	kvfree(t2->shadow);
 	kvfree(t2->snap);
 	kvfree(t2->hw[0]);
 	kvfree(t2->hw[1]);
@@ -1451,6 +1164,16 @@ static void t2_release(struct drm_device *dev, void *res)
 
 static int t2_usb_probe(struct usb_interface *interface, const struct usb_device_id *id)
 {
+	static const struct mct_config cfg = {
+		.funcs = &t2_funcs,
+		.min_w = T2_WIDTH,
+		.min_h = T2_HEIGHT,
+		.max_w = T2_WIDTH,
+		.max_h = T2_HEIGHT,
+		.connector_type = DRM_MODE_CONNECTOR_USB,
+		.encoder_type = DRM_MODE_ENCODER_NONE,
+		.stats_name = "mct_t2_stats",
+	};
 	struct mct_t2 *t2;
 	struct drm_device *dev;
 	struct device *dma_dev;
@@ -1459,10 +1182,10 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	if (interface->cur_altsetting->desc.bInterfaceNumber != 0)
 		return -ENODEV;
 
-	t2 = devm_drm_dev_alloc(&interface->dev, &t2_drm_driver, struct mct_t2, dev);
+	t2 = devm_drm_dev_alloc(&interface->dev, &t2_drm_driver, struct mct_t2, base.dev);
 	if (IS_ERR(t2))
 		return PTR_ERR(t2);
-	dev = &t2->dev;
+	dev = &t2->base.dev;
 
 	dma_dev = usb_intf_get_dma_device(interface);
 	if (dma_dev) {
@@ -1472,9 +1195,6 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 		drm_warn(dev, "buffer sharing not supported");
 	}
 
-	INIT_WORK(&t2->upd.work, t2_update_work);
-	INIT_DELAYED_WORK(&t2->refine_work, t2_refine_work);
-	mutex_init(&t2->upd.lock);
 	mutex_init(&t2->io_lock);
 	mutex_init(&t2->power_lock);
 	t2->front = T2_FB_A;
@@ -1484,7 +1204,6 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	t2->cur.img = drmm_kmalloc(dev, T2_CUR_BYTES, GFP_KERNEL);
 	t2->cur.shown = drmm_kmalloc(dev, T2_CUR_BYTES, GFP_KERNEL);
 	t2->enc = kvmalloc(T2_ENC_MAX, GFP_KERNEL);
-	t2->shadow = kvzalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
 	t2->snap = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
 	t2->hw[0] = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
 	t2->hw[1] = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
@@ -1492,51 +1211,38 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	if (ret)
 		return ret;
 	if (!t2->bounce || !t2->cur.buf || !t2->cur.img || !t2->cur.shown ||
-	    !t2->enc || !t2->shadow || !t2->snap || !t2->hw[0] || !t2->hw[1])
+	    !t2->enc || !t2->snap || !t2->hw[0] || !t2->hw[1])
 		return -ENOMEM;
 
+	/* the init sends the (blank) shadow, so the core goes first */
+	ret = mct_init(&t2->base, &cfg);
+	if (ret)
+		return ret;
 	ret = t2_hw_init(t2);
 	if (ret)
 		return ret;
-
-	ret = t2_modeset_init(t2);
-	if (ret)
-		return ret;
-
-	t2->stats.since = ktime_get();
-	drm_debugfs_add_file(dev, "mct_t2_stats", t2_stats_show, NULL);
-
-	usb_set_intfdata(interface, dev);
-	ret = drm_dev_register(dev, 0);
-	if (ret)
-		return ret;
-
-	drm_client_setup(dev, NULL);
-	return 0;
+	return mct_register(&t2->base, interface);
 }
 
 static void t2_usb_disconnect(struct usb_interface *interface)
 {
-	struct drm_device *dev = usb_get_intfdata(interface);
-
-	drm_dev_unplug(dev);
-	drm_atomic_helper_shutdown(dev);
+	mct_unplug(to_mct(usb_get_intfdata(interface)));
 }
 
 static int t2_suspend(struct usb_interface *interface, pm_message_t message)
 {
-	return drm_mode_config_helper_suspend(usb_get_intfdata(interface));
+	return mct_suspend(to_mct(usb_get_intfdata(interface)));
 }
 
 static int t2_resume(struct usb_interface *interface)
 {
-	struct drm_device *dev = usb_get_intfdata(interface);
+	struct mct_device *mdev = to_mct(usb_get_intfdata(interface));
 	int ret;
 
-	ret = t2_hw_init(to_t2(dev));
+	ret = t2_hw_init(to_t2(mdev));
 	if (ret)
 		return ret;
-	return drm_mode_config_helper_resume(dev);
+	return mct_resume(mdev);
 }
 
 const struct mct_backend mct_t2_backend = {
