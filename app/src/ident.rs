@@ -18,8 +18,8 @@ use crate::Chip;
 /// One line: a stable key (for `--json`), a label and the value.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Field {
-    pub key: &'static str,
-    pub label: &'static str,
+    pub key: String,
+    pub label: String,
     pub value: String,
 }
 
@@ -27,6 +27,8 @@ pub struct Field {
 pub struct Section {
     pub key: &'static str,
     pub title: &'static str,
+    /// Technical detail: shown by `-vv` and collapsed in the window.
+    pub detail: bool,
     pub fields: Vec<Field>,
 }
 
@@ -132,20 +134,33 @@ impl Builder {
         Builder { fields: Vec::new() }
     }
 
-    fn add(&mut self, key: &'static str, label: &'static str, value: Option<String>) {
+    fn add(&mut self, key: impl Into<String>, label: impl Into<String>, value: Option<String>) {
         if let Some(value) = value.filter(|v| !v.is_empty()) {
-            self.fields.push(Field { key, label, value });
+            self.fields.push(Field {
+                key: key.into(),
+                label: label.into(),
+                value,
+            });
         }
     }
 
-    fn done(self, key: &'static str, title: &'static str, out: &mut Vec<Section>) {
+    fn push(self, key: &'static str, title: &'static str, detail: bool, out: &mut Vec<Section>) {
         if !self.fields.is_empty() {
             out.push(Section {
                 key,
                 title,
+                detail,
                 fields: self.fields,
             });
         }
+    }
+
+    fn done(self, key: &'static str, title: &'static str, out: &mut Vec<Section>) {
+        self.push(key, title, false, out)
+    }
+
+    fn done_detail(self, key: &'static str, title: &'static str, out: &mut Vec<Section>) {
+        self.push(key, title, true, out)
     }
 }
 
@@ -464,6 +479,334 @@ pub fn identify(display: &Display, info: Option<&Info>) -> Vec<Section> {
     if display.chip == Chip::T2 {
         pen(root, &display.interface, &mut out);
     }
+    details(display, info, &dir, &mut out);
+    out
+}
+
+/// The technical sections (`detail` set): what `-vv` adds.
+fn details(display: &Display, info: Option<&Info>, dir: &Path, out: &mut Vec<Section>) {
+    let mct = display.device.as_ref().map(|d| d.dir().to_path_buf());
+    let mct_file = |name: &str| -> Option<String> {
+        let s = fs::read_to_string(mct.as_ref()?.join(name)).ok()?;
+        let s = s.trim().to_string();
+        (!s.is_empty() && s != "-").then_some(s)
+    };
+
+    // the adapter's own view (T6, mct_t6 0.27.0 and later)
+    let mut s = Builder::new();
+    if let Some(f) = mct_file("functions") {
+        for line in f.lines() {
+            if let Some((id, name)) = line.split_once(' ') {
+                s.add(format!("function_{id}"), format!("Function {id}"), Some(name.into()));
+            }
+        }
+    }
+    if let Some(c) = mct_file("clock_limits") {
+        let mhz: Vec<String> = c
+            .split_whitespace()
+            .filter_map(|v| v.parse::<f64>().ok())
+            .map(|k| format!("{:.0} MHz", k / 1000.0))
+            .collect();
+        if let [all, wide] = mhz.as_slice() {
+            s.add(
+                "clock_limits",
+                "Pixel clock limit",
+                Some(format!("{all} ({wide} from 2560 pixels wide)")),
+            );
+        }
+    }
+    if let Some(m) = mct_file("device_modes") {
+        let modes: Vec<(&str, f64)> = m
+            .lines()
+            .filter_map(|l| {
+                let (mode, clock) = l.split_once(' ')?;
+                Some((mode, clock.trim().parse::<f64>().ok()? / 1000.0))
+            })
+            .collect();
+        if let Some((mode, clock)) = modes.iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
+            s.add(
+                "device_modes_max",
+                "Mode table",
+                Some(format!(
+                    "{} modes, up to {mode} ({clock:.2} MHz)",
+                    modes.len()
+                )),
+            );
+        }
+        let list: Vec<&str> = modes.iter().map(|(m, _)| *m).collect();
+        s.add("device_modes", "Table modes", Some(list.join(", ")));
+    }
+    s.done_detail("adapter", "Adapter internals", out);
+
+    // USB descriptors
+    let r = |f: &str| read(&dir.join(f));
+    let mut s = Builder::new();
+    let class = |c: Option<String>, sub: Option<String>, proto: Option<String>| {
+        let c = c?;
+        let name = match c.as_str() {
+            "00" => " (per interface)",
+            "09" => " (hub)",
+            "ff" => " (vendor specific)",
+            "03" => " (HID)",
+            "01" => " (audio)",
+            _ => "",
+        };
+        Some(format!(
+            "{c}{name}, subclass {}, protocol {}",
+            sub.unwrap_or_default(),
+            proto.unwrap_or_default()
+        ))
+    };
+    s.add(
+        "usb_class",
+        "Device class",
+        class(r("bDeviceClass"), r("bDeviceSubClass"), r("bDeviceProtocol")),
+    );
+    let intf = display.root.join("sys/bus/usb/devices").join(&display.interface);
+    let ri = |f: &str| read(&intf.join(f));
+    s.add(
+        "usb_interface_class",
+        "Interface class",
+        class(ri("bInterfaceClass"), ri("bInterfaceSubClass"), ri("bInterfaceProtocol")),
+    );
+    if let (Some(v), Some(n)) = (r("bConfigurationValue"), r("bNumConfigurations")) {
+        s.add("usb_config", "Configuration", Some(format!("{v} of {n}")));
+    }
+    s.add("usb_interfaces", "Interfaces", r("bNumInterfaces"));
+    if let Some(a) = r("bmAttributes") {
+        let bits = u8::from_str_radix(&a, 16).unwrap_or(0);
+        let mut v = vec![if bits & 0x40 != 0 {
+            "self-powered"
+        } else {
+            "bus-powered"
+        }];
+        if bits & 0x20 != 0 {
+            v.push("remote wakeup");
+        }
+        s.add("usb_attributes", "Attributes", Some(format!("0x{a}: {}", v.join(", "))));
+    }
+    s.add("usb_ep0", "Control packet size", r("bMaxPacketSize0").map(|v| format!("{v} bytes")));
+    if let (Some(rx), Some(tx)) = (r("rx_lanes"), r("tx_lanes")) {
+        s.add("usb_lanes", "Lanes", Some(format!("{rx} rx, {tx} tx")));
+    }
+    let lpm: Vec<String> = ["u1", "u2"]
+        .iter()
+        .filter_map(|u| {
+            read(&dir.join(format!("power/usb3_hardware_lpm_{u}")))
+                .map(|v| format!("{} {v}", u.to_uppercase()))
+        })
+        .collect();
+    if !lpm.is_empty() {
+        s.add("usb_lpm", "Link power management", Some(lpm.join(", ")));
+    }
+    s.add("usb_ltm", "Latency tolerance messages", r("ltm_capable"));
+    s.add("usb_power_control", "Runtime power control", read(&dir.join("power/control")));
+    s.add("usb_runtime_status", "Runtime status", read(&dir.join("power/runtime_status")));
+    s.add("usb_removable", "Removable", r("removable"));
+    s.add("usb_quirks", "Quirks", r("quirks"));
+    s.add("usb_urbs", "URBs since connect", r("urbnum"));
+    let mut eps: Vec<PathBuf> = fs::read_dir(&intf)
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with("ep_"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    eps.sort();
+    for ep in eps {
+        let e = |f: &str| read(&ep.join(f));
+        let Some(addr) = e("bEndpointAddress") else {
+            continue;
+        };
+        let size = e("wMaxPacketSize")
+            .and_then(|v| u32::from_str_radix(&v, 16).ok())
+            .map(|v| format!(", {v} bytes"))
+            .unwrap_or_default();
+        let interval = e("interval")
+            .filter(|i| e("type").as_deref() == Some("Interrupt") || i != "0ms")
+            .map(|i| format!(", every {i}"))
+            .unwrap_or_default();
+        s.add(
+            format!("endpoint_{addr}"),
+            format!("Endpoint 0x{addr}"),
+            Some(format!(
+                "{} {}{size}{interval}",
+                e("type").unwrap_or_default(),
+                e("direction").unwrap_or_default()
+            )),
+        );
+    }
+    s.done_detail("usb_descriptors", "USB descriptors", out);
+
+    // the monitor's EDID in detail
+    if let Some(c) = info.and_then(|i| i.connector.as_deref()) {
+        let path = display.root.join("sys/class/drm").join(c).join("edid");
+        if let Ok(e) = fs::read(&path) {
+            let mut s = Builder::new();
+            for (k, l, v) in edid_details(&e) {
+                s.add(k, l, Some(v));
+            }
+            s.done_detail("monitor_details", "Monitor EDID", out);
+        }
+    }
+
+    // driver
+    let mut s = Builder::new();
+    let names = |sub: &str| -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(intf.join(sub))
+            .map(|d| {
+                d.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    let cards: Vec<String> = names("drm")
+        .into_iter()
+        .filter(|n| n.starts_with("card"))
+        .collect();
+    if !cards.is_empty() {
+        s.add("drm_devices", "DRM devices", Some(cards.join(", ")));
+    }
+    let fbs = names("graphics");
+    if !fbs.is_empty() {
+        s.add("framebuffer", "Framebuffer", Some(fbs.join(", ")));
+    }
+    let params = display.root.join("sys/module/mct/parameters");
+    let mut defaults: Vec<String> = fs::read_dir(&params)
+        .map(|d| {
+            d.flatten()
+                .filter_map(|e| {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    Some(format!("{n}={}", read(&e.path())?))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    defaults.sort();
+    if !defaults.is_empty() {
+        s.add("module_defaults", "Module defaults", Some(defaults.join(", ")));
+    }
+    s.add(
+        "module_srcversion",
+        "Module srcversion",
+        read(&display.root.join("sys/module/mct/srcversion")),
+    );
+    s.done_detail("driver_details", "Driver details", out);
+}
+
+/// Decodes what helps with mode problems: input, preferred timing, range
+/// limits, HDMI clock, CTA modes; and the raw bytes.
+pub fn edid_details(e: &[u8]) -> Vec<(String, String, String)> {
+    let mut out: Vec<(String, String, String)> = Vec::new();
+    let mut add = |k: &str, l: &str, v: String| out.push((k.into(), l.into(), v));
+    if e.len() < 128 || parse_edid(e).is_none() {
+        if !e.is_empty() {
+            add("edid_invalid", "EDID", format!("{} bytes, not valid", e.len()));
+        }
+        return out;
+    }
+    let input = e[20];
+    add(
+        "edid_input",
+        "Input",
+        if input & 0x80 != 0 && e[19] < 4 {
+            "digital".into()
+        } else if input & 0x80 != 0 {
+            // EDID 1.4: interface and bit depth
+            let iface = match input & 0x0f {
+                1 => "DVI",
+                2 | 3 => "HDMI",
+                5 => "DisplayPort",
+                _ => "digital",
+            };
+            let depth = match (input >> 4) & 7 {
+                1 => " 6 bpc",
+                2 => " 8 bpc",
+                3 => " 10 bpc",
+                4 => " 12 bpc",
+                _ => "",
+            };
+            format!("digital, {iface}{depth}")
+        } else {
+            "analog (VGA)".into()
+        },
+    );
+    let mut have_preferred = false;
+    for d in e[54..126].chunks(18) {
+        let clock = u16::from_le_bytes([d[0], d[1]]) as u32 * 10;
+        if clock != 0 {
+            let ha = d[2] as u32 | ((d[4] as u32 & 0xf0) << 4);
+            let hb = d[3] as u32 | ((d[4] as u32 & 0x0f) << 8);
+            let va = d[5] as u32 | ((d[7] as u32 & 0xf0) << 4);
+            let vb = d[6] as u32 | ((d[7] as u32 & 0x0f) << 8);
+            let hz = clock as f64 * 1000.0 / ((ha + hb) as f64 * (va + vb) as f64);
+            // the first detailed timing is the preferred one
+            if !have_preferred {
+                have_preferred = true;
+                add(
+                    "edid_preferred",
+                    "Preferred timing",
+                    format!("{ha}x{va} at {hz:.2} Hz, {:.2} MHz", clock as f64 / 1000.0),
+                );
+            }
+        } else if d[3] == 0xfd {
+            let f = d[4];
+            let v = |b: u8, bit: u8| b as u32 + if f & bit != 0 { 255 } else { 0 };
+            add(
+                "edid_range",
+                "Range limits",
+                format!(
+                    "{}-{} Hz vertical, {}-{} kHz horizontal, up to {} MHz",
+                    v(d[5], 1),
+                    v(d[6], 2),
+                    v(d[7], 4),
+                    v(d[8], 8),
+                    d[9] as u32 * 10
+                ),
+            );
+        }
+    }
+    add("edid_extensions", "Extension blocks", e[126].to_string());
+    for block in e[128..].chunks(128).filter(|b| b.len() == 128 && b[0] == 0x02) {
+        let end = (block[2] as usize).min(127);
+        let mut i = 4;
+        let mut vics = 0;
+        while i < end {
+            let tag = block[i] >> 5;
+            let len = (block[i] & 0x1f) as usize;
+            let p = &block[i + 1..(i + 1 + len).min(128)];
+            match tag {
+                2 => vics += p.len(),
+                3 if p.len() >= 7 && p[..3] == [0x03, 0x0c, 0x00] => add(
+                    "edid_hdmi",
+                    "HDMI",
+                    format!("HDMI 1.x, max TMDS clock {} MHz", p[6] as u32 * 5),
+                ),
+                3 if p.len() >= 5 && p[..3] == [0xd8, 0x5d, 0xc4] => add(
+                    "edid_hdmi_forum",
+                    "HDMI Forum",
+                    format!("HDMI 2.x, max TMDS clock {} MHz", p[4] as u32 * 5),
+                ),
+                _ => {}
+            }
+            i += 1 + len;
+        }
+        if vics > 0 {
+            add("edid_cta_modes", "CTA video modes", vics.to_string());
+        }
+    }
+    let hex: Vec<String> = e
+        .chunks(16)
+        .map(|c| c.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "))
+        .collect();
+    add("edid_hex", "Raw EDID", hex.join("\n"));
     out
 }
 
@@ -471,7 +814,11 @@ pub fn identify(display: &Display, info: Option<&Info>) -> Vec<Section> {
 pub fn sections_text(sections: &[Section], indent: &str) -> String {
     let width = sections
         .iter()
-        .flat_map(|s| s.fields.iter().map(|f| f.label.chars().count()))
+        .flat_map(|s| {
+            s.fields
+                .iter()
+                .map(|f| f.label.chars().count())
+        })
         .max()
         .unwrap_or(0)
         + 1;
@@ -479,11 +826,16 @@ pub fn sections_text(sections: &[Section], indent: &str) -> String {
     for s in sections {
         out.push_str(&format!("{indent}{}\n", s.title));
         for f in &s.fields {
+            // values over several lines (the raw EDID) continue under the first
+            let mut lines = f.value.lines();
             out.push_str(&format!(
                 "{indent}  {:width$}  {}\n",
                 format!("{}:", f.label),
-                f.value
+                lines.next().unwrap_or_default()
             ));
+            for l in lines {
+                out.push_str(&format!("{indent}  {:width$}  {l}\n", ""));
+            }
         }
     }
     out
@@ -551,5 +903,11 @@ mod tests {
         assert_eq!(p.name.as_deref(), Some("27GN7"));
         assert_eq!((p.week, p.year), (8, 2020));
         assert!(parse_edid(&e[..100]).is_none());
+
+        e[20] = 0x80;
+        let d = edid_details(&e);
+        let get = |k: &str| d.iter().find(|(key, ..)| key == k).map(|(.., v)| v.clone());
+        assert_eq!(get("edid_input").as_deref(), Some("digital"));
+        assert_eq!(get("edid_hex").map(|h| h.lines().count()), Some(8));
     }
 }

@@ -182,7 +182,7 @@ tool, both per device. On NixOS: `hardware.mct.app.enable = true`, and
   EDID). Switches the DTU-1031X between the kernel driver and the legacy
   wacom-t2d daemon. Warns when a T6 runs over USB 2.
 - **`mct-manager --tray`:** the same from a tray icon (StatusNotifierItem).
-- **`mctctl`:** `list [-v]`, `info [-v] [DEV]`, `get`/`set [DEV] KEY
+- **`mctctl`:** `list [-v|-vv]`, `info [-v|-vv] [DEV]`, `get`/`set [DEV] KEY
   [VALUE]`, `stats -w`, `driver kernel|legacy`; `--json` for scripts.
 
 Writing settings without root needs the udev rule above and membership in

@@ -49,6 +49,9 @@ e.g. `2-2:1.0`. One value per file, newline terminated.
 | `firmware` | t6 | ro | boot code and image code, e.g. `16062899 17091401` |
 | `serial` | t6 | ro | chip serial, 16 hex digits, or `-` |
 | `display_flags` | t6 | ro | DISP descriptor flags, hex |
+| `functions` | t6 | ro | one line per device function: id and name (since 0.27.0, like the two below) |
+| `device_modes` | t6 | ro | the adapter's own mode table, one `WxH@Hz kHz` per line |
+| `clock_limits` | t6 | ro | the driver's pixel clock limits in kHz: all modes, wide modes |
 | `recoveries` | t6 | ro | device restarts after transfer errors |
 | `format` | t6 | rw | `auto`, `rgb24`, `rgb32`, `yuv444`, `nv12` |
 | `all_modes` | t6 | rw | `0` / `1`; a change makes userspace re-probe the monitor |
@@ -94,6 +97,14 @@ product name comes from the board name (table `BOARDS` in `app/src/ident.rs`)
 or the USB IDs. All of it shows in the window's lower groups, in
 `mctctl info -v` / `list -v`, and in the About dialog's Troubleshooting
 report.
+
+Technical details (`mctctl -vv`, the window's collapsed "Technical
+details" group, always in the report): the adapter's functions, mode table
+and clock limits; USB descriptors (classes, configuration, power
+attributes, lanes, LPM, runtime power state, every endpoint); the monitor's
+EDID decoded (input, preferred timing, range limits, HDMI TMDS clock, CTA
+modes) and as hex; the DRM card, framebuffer, module defaults and
+srcversion.
 
 Known boards: `JUA254H` j5create JUA254 (USB 3.0 to HDMI; the 5600 here),
 `A8613HV` MCT U3-A8613 (HDMI + VGA, the 5601 in the trigger6 capture),

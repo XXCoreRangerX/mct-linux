@@ -6,6 +6,9 @@ drm_info and in the kernel log at probe).
 
 ## Unreleased
 
+- mct_t6 0.27.0: the device's function descriptors (request `b1`), its
+  mode table and the driver's clock limits in sysfs (`functions`,
+  `device_modes`, `clock_limits`).
 - mct_t6 0.26.0: reads the board name, firmware versions and chip serial
   (request `b0`) and shows them in sysfs (`platform`, `board`, `firmware`,
   `serial`, `display_flags`) and the probe log line; all devices get
@@ -15,7 +18,9 @@ drm_info and in the kernel log at probe).
   and firmware, USB, driver, monitor EDID, the tablet's pen) in the window,
   `mctctl info -v` / `list -v` and the About dialog's Troubleshooting report;
   About with the project's links and credits; the tray icon waits for a tray
-  host that starts later.
+  host that starts later. `-vv` (and the window's collapsed "Technical
+  details") adds the adapter's internals, USB descriptors and endpoints,
+  the decoded and raw EDID, and driver details.
 
 ## 0.4.0 (2026-10-11): one module, mct
 

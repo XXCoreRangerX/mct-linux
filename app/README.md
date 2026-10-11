@@ -73,10 +73,13 @@ action org.mctlinux.manager.helper). On NixOS the permanent choice is
 ## mctctl
 
 ```text
-mctctl list [-v]                   displays, their driver and notes
-mctctl info [-v] [DEV]             settings and state of one display;
+mctctl list [-v|-vv]               displays, their driver and notes
+mctctl info [-v|-vv] [DEV]         settings and state of one display;
                                    -v adds product, chip and firmware,
-                                   USB, driver, monitor (EDID), pen
+                                   USB, driver, monitor (EDID), pen;
+                                   -vv also the adapter's internals, USB
+                                   descriptors and endpoints, the decoded
+                                   and raw EDID, driver details
 mctctl get [DEV] KEY               one value
 mctctl set [DEV] KEY VALUE         format, all_modes, lossy, brightness
 mctctl stats [DEV] [--watch]       update rate, data rate, errors

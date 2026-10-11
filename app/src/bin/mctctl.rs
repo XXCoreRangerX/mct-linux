@@ -42,9 +42,10 @@ enum DriverChoice {
 enum Cmd {
     /// List MCT displays on USB and their driver
     List {
-        /// Also show every identifier of each display (as in "info -v")
-        #[arg(long, short)]
-        verbose: bool,
+        /// Also show every identifier of each display (as in "info -v");
+        /// twice (-vv) adds the technical details
+        #[arg(long, short, action = clap::ArgAction::Count)]
+        verbose: u8,
         #[arg(long)]
         json: bool,
     },
@@ -52,9 +53,11 @@ enum Cmd {
     #[command(after_help = DEV_HELP)]
     Info {
         dev: Option<String>,
-        /// Show everything: product, chip and firmware, USB, driver, monitor
-        #[arg(long, short)]
-        verbose: bool,
+        /// Show product, chip and firmware, USB, driver, monitor; twice (-vv)
+        /// adds the adapter's internals, USB descriptors and endpoints, the
+        /// decoded and raw EDID, driver details
+        #[arg(long, short, action = clap::ArgAction::Count)]
+        verbose: u8,
         #[arg(long)]
         json: bool,
     },
@@ -238,7 +241,7 @@ fn display_json<'a>(
     index: Option<usize>,
     d: &'a Display,
     info: Option<&'a Info>,
-    verbose: bool,
+    verbose: u8,
 ) -> DisplayJson<'a> {
     let unbound = info.is_none();
     DisplayJson {
@@ -250,7 +253,7 @@ fn display_json<'a>(
         driver: d.route.short(),
         info,
         warnings: notes(d, info),
-        identity: verbose.then(|| ident::identify(d, info)),
+        identity: (verbose > 0).then(|| sections(d, info, verbose)),
     }
 }
 
@@ -277,19 +280,32 @@ const STATE_KEYS: &[(&str, &str)] = &[
     ("recoveries", "Device restarts"),
 ];
 
-fn verbose_text(d: &Display, info: Option<&Info>) -> String {
-    let mut sections = ident::identify(d, info);
+/// The identity sections for a verbosity level: details only from -vv.
+fn sections(d: &Display, info: Option<&Info>, verbose: u8) -> Vec<Section> {
+    ident::identify(d, info)
+        .into_iter()
+        .filter(|s| verbose >= 2 || !s.detail)
+        .collect()
+}
+
+fn verbose_text(d: &Display, info: Option<&Info>, verbose: u8) -> String {
+    let mut sections = sections(d, info, verbose);
     if let Some(i) = info {
         let fields: Vec<ident::Field> = STATE_KEYS
             .iter()
             .filter_map(|(key, label)| {
-                i.value(key).map(|value| ident::Field { key, label, value })
+                i.value(key).map(|value| ident::Field {
+                    key: key.to_string(),
+                    label: label.to_string(),
+                    value,
+                })
             })
             .collect();
         if !fields.is_empty() {
             sections.push(Section {
                 key: "state",
                 title: "State",
+                detail: false,
                 fields,
             });
         }
@@ -304,15 +320,15 @@ fn read_info(d: &Display) -> Result<Option<Info>, Error> {
     }
 }
 
-fn info(d: &Display, verbose: bool, json: bool) -> Result<(), Error> {
+fn info(d: &Display, verbose: u8, json: bool) -> Result<(), Error> {
     let info = read_info(d)?;
     if json {
         print_json(&display_json(None, d, info.as_ref(), verbose));
         return Ok(());
     }
-    if verbose {
+    if verbose > 0 {
         out!("{} ({})", name(d, info.as_ref()), d.interface);
-        out!("{}", verbose_text(d, info.as_ref()).trim_end());
+        out!("{}", verbose_text(d, info.as_ref(), verbose).trim_end());
         for n in notes(d, info.as_ref()) {
             out!("warning: {n}");
         }
@@ -345,7 +361,7 @@ fn info(d: &Display, verbose: bool, json: bool) -> Result<(), Error> {
     Ok(())
 }
 
-fn list(displays: &[Display], verbose: bool, json: bool) -> Result<(), Error> {
+fn list(displays: &[Display], verbose: u8, json: bool) -> Result<(), Error> {
     let mut rows = Vec::new();
     for d in displays {
         match read_info(d) {
@@ -438,11 +454,11 @@ fn list(displays: &[Display], verbose: bool, json: bool) -> Result<(), Error> {
             out!("{i}! {place}: {n}");
         }
     }
-    if verbose {
+    if verbose > 0 {
         for (i, (d, info)) in rows.iter().enumerate() {
             out!("");
             out!("#{i} {} ({})", name(d, info.as_ref()), d.interface);
-            let text = verbose_text(d, info.as_ref());
+            let text = verbose_text(d, info.as_ref(), verbose);
             for line in text.lines() {
                 out!("  {line}");
             }

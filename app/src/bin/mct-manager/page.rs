@@ -230,21 +230,41 @@ impl Page {
         for g in self.ident_groups.borrow_mut().drain(..) {
             self.prefs.remove(&g);
         }
-        for s in sections {
+        let row = |f: &mct::ident::Field| {
+            let row = property_row(&f.label);
+            row.set_subtitle(&f.value);
+            if f.key == "edid_hex" {
+                row.add_css_class("monospace");
+            }
+            row
+        };
+        for s in sections.iter().filter(|s| !s.detail) {
             let rows: Vec<adw::ActionRow> = s
                 .fields
                 .iter()
                 .filter(|f| !(skip_route && f.key == "driver"))
-                .map(|f| {
-                    let row = property_row(f.label);
-                    row.set_subtitle(&f.value);
-                    row
-                })
+                .map(row)
                 .collect();
             if rows.is_empty() {
                 continue;
             }
             let g = group(s.title, &rows.iter().collect::<Vec<_>>());
+            self.prefs.add(&g);
+            self.ident_groups.borrow_mut().push(g);
+        }
+        // the technical sections, collapsed
+        let details: Vec<&Section> = sections.iter().filter(|s| s.detail).collect();
+        if !details.is_empty() {
+            let g = adw::PreferencesGroup::builder()
+                .title("Technical details")
+                .build();
+            for s in details {
+                let expander = adw::ExpanderRow::builder().title(s.title).build();
+                for f in &s.fields {
+                    expander.add_row(&row(f));
+                }
+                g.add(&expander);
+            }
             self.prefs.add(&g);
             self.ident_groups.borrow_mut().push(g);
         }

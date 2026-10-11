@@ -33,6 +33,14 @@ Description:
 				or "-" if it has none
 		display_flags	display function flags from the device's
 				DISP descriptor, hex
+		functions	the device's functions, one per line: id
+				(4 hex digits) and name, e.g.
+				"5621 Trigger 6 External Graphics"
+		device_modes	the device's own mode table, one mode per
+				line: "WxH@Hz" and the pixel clock in kHz
+		clock_limits	the driver's pixel clock limits in kHz: for
+				all modes, and for modes 2560 pixels wide or
+				more
 		recoveries	device restarts after transfer errors
 
 		Read-only, Trigger II:

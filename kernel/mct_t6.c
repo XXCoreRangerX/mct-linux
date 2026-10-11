@@ -58,7 +58,7 @@ MODULE_PARM_DESC(all_modes, "Default for new devices: also offer modes larger th
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	26
+#define DRIVER_MINOR	27
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -272,6 +272,10 @@ struct mct_t6 {
 	char project[17];		/* board ("project code"), "" if unknown */
 	u8 serial[8];
 	bool has_serial;
+	struct {
+		u16 id;
+		char name[33];
+	} func[2];			/* function descriptors (0xb1 index 0, 3) */
 	int level;			/* feature level, -1 if unknown */
 	int vram_mb;
 	u32 disp_func;			/* DISP descriptor display function flags */
@@ -2185,6 +2189,54 @@ static ssize_t display_flags_show(struct device *dev, struct device_attribute *a
 }
 static DEVICE_ATTR_RO(display_flags);
 
+/* the device's functions, one per line: id (hex) and name */
+static ssize_t functions_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t6 *t6 = t6_from_dev(dev);
+	int len = 0, i;
+
+	if (!t6)
+		return -ENODEV;
+	for (i = 0; i < ARRAY_SIZE(t6->func); i++)
+		if (t6->func[i].id)
+			len += sysfs_emit_at(buf, len, "%04x %s\n", t6->func[i].id,
+					     t6->func[i].name);
+	return len;
+}
+static DEVICE_ATTR_RO(functions);
+
+/* the device's own mode table, one mode per line: WxH@Hz and pixel clock in kHz */
+static ssize_t device_modes_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t6 *t6 = t6_from_dev(dev);
+	int len = 0, i;
+
+	if (!t6)
+		return -ENODEV;
+	for (i = 0; i < t6->nmodes; i++) {
+		const struct t6_mode *m = &t6->modes[i];
+
+		if (!m->hdisplay || !m->vdisplay)
+			continue;
+		len += sysfs_emit_at(buf, len, "%ux%u@%u %u\n", le16_to_cpu(m->hdisplay),
+				     le16_to_cpu(m->vdisplay), m->refresh,
+				     le32_to_cpu(m->clock_khz));
+	}
+	return len;
+}
+static DEVICE_ATTR_RO(device_modes);
+
+/* pixel clock limits in kHz: all modes, and modes from T6_WIDE_W wide */
+static ssize_t clock_limits_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t6 *t6 = t6_from_dev(dev);
+
+	if (!t6)
+		return -ENODEV;
+	return sysfs_emit(buf, "%d %d\n", T6_MAX_CLOCK_KHZ, T6_WIDE_MAX_CLOCK_KHZ);
+}
+static DEVICE_ATTR_RO(clock_limits);
+
 static ssize_t pixel_format_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct mct_t6 *t6 = t6_from_dev(dev);
@@ -2271,6 +2323,9 @@ static struct attribute *t6_attrs[] = {
 	&dev_attr_firmware.attr,
 	&dev_attr_serial.attr,
 	&dev_attr_display_flags.attr,
+	&dev_attr_functions.attr,
+	&dev_attr_device_modes.attr,
+	&dev_attr_clock_limits.attr,
 	&dev_attr_pixel_format.attr,
 	&dev_attr_format.attr,
 	&dev_attr_all_modes.attr,
@@ -2385,6 +2440,21 @@ static int t6_read_caps(struct mct_t6 *t6)
 	if (t6_ctrl_in(t6, 0xb0, 0, 5, 8) == 8) {
 		memcpy(t6->serial, t6->ctrl, 8);
 		t6->has_serial = memchr_inv(t6->serial, 0, 8) && memchr_inv(t6->serial, 0xff, 8);
+	}
+	/* display (index 0) and audio (index 3) functions: id and UTF-16 name */
+	for (i = 0; i < ARRAY_SIZE(t6->func); i++) {
+		int j;
+
+		if (t6_ctrl_in(t6, 0xb1, 0, i ? 3 : 0, 132) < 0x44)
+			continue;
+		t6->func[i].id = get_unaligned_le16(t6->ctrl + 2);
+		for (j = 0; j < 32; j++) {
+			u16 c = get_unaligned_le16(t6->ctrl + 4 + 2 * j);
+
+			if (!c)
+				break;
+			t6->func[i].name[j] = c < 0x80 && isprint(c) ? c : '?';
+		}
 	}
 	ret = t6_ctrl_in(t6, 0xb0, 0, 4, 4);
 	t6->level = ret == 4 ? get_unaligned_le32(t6->ctrl) : -1;
