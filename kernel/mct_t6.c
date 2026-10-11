@@ -50,7 +50,7 @@ MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at re
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	20
+#define DRIVER_MINOR	21
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -77,12 +77,13 @@ MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at re
 #define T6_REQ_CUR_IMG(o)	((o) ? 0x11 : 0x10)
 
 /*
- * Cursor images are 64 or 96 pixels square: header + B, G, R, A. 128 would
- * need upload offsets past 0xffff, which the 16-bit wIndex can't carry.
+ * Cursor images are 64, 96 or 128 pixels square: header + B, G, R, A. The
+ * upload offset is 16 bits, so a 128 pixel image is sent up to 0x10000
+ * bytes; its last two pixels (bottom right) are never sent.
  */
-#define T6_CUR		96
-#define T6_CUR_SMALL	64
+#define T6_CUR		128
 #define T6_CUR_BYTES	(8 + T6_CUR * T6_CUR * 4)
+#define T6_CUR_MAX_SEND	0x10000
 
 #define T6_MAX_MODES	30		/* 0x89 table: 512 + 448 bytes */
 #define T6_MAX_OUTPUTS	2
@@ -1233,8 +1234,8 @@ static int t6_cursor_upload(struct mct_t6 *t6)
 	int off, n, ret = 0;
 
 	mutex_lock(&t6->io_lock);
-	for (off = 0; off < t6->cur.bytes && ret >= 0; off += n) {
-		n = min(t6->cur.bytes - off, T6_CTRL_BUF);
+	for (off = 0; off < min(t6->cur.bytes, T6_CUR_MAX_SEND) && ret >= 0; off += n) {
+		n = min3(t6->cur.bytes - off, T6_CUR_MAX_SEND - off, T6_CTRL_BUF);
 		memcpy(t6->ctrl, t6->cur.img + off, n);
 		ret = t6_ctrl_out(t6, T6_REQ_CUR_IMG(t6->output), slot, off, n);
 	}
@@ -1277,16 +1278,14 @@ static void t6_cursor_hide(struct mct_device *mdev)
 static void t6_cursor_set(struct mct_device *mdev, const u8 *bgra, int x, int y)
 {
 	struct mct_t6 *t6 = to_t6(mdev);
-	int size = T6_CUR_SMALL, i, j;
+	int size = 64, i, j;
 	u8 *dst;
 
-	/* the small image unless something shows outside its 64 x 64 */
-	for (j = 0; j < T6_CUR && size == T6_CUR_SMALL; j++)
-		for (i = j < T6_CUR_SMALL ? T6_CUR_SMALL : 0; i < T6_CUR; i++)
-			if (bgra[(j * T6_CUR + i) * 4 + 3]) {
-				size = T6_CUR;
-				break;
-			}
+	/* the smallest image (64, 96, 128) that holds everything visible */
+	for (j = 0; j < T6_CUR; j++)
+		for (i = 0; i < T6_CUR; i++)
+			if (bgra[(j * T6_CUR + i) * 4 + 3] && max(i, j) >= size)
+				size = max(i, j) < 96 ? 96 : 128;
 
 	mutex_lock(&t6->cur.lock);
 	if (x <= -size || y <= -size) {
