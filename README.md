@@ -6,7 +6,10 @@ Trigger chips:
 
 - Trigger II (T2): the Wacom DTU-1031X pen display (1024x600, USB
   0711:520d / 0711:5209). The pen (056a:032f) is a separate USB function
-  handled by the in-kernel wacom driver.
+  handled by the in-kernel wacom driver. This backend is written for the
+  DTU-1031X: its fixed panel and 180 degree scanout, its init sequence
+  (taken from Wacom's driver) and its brightness control through the pen
+  function. Other T2 adapters are untested and would need changes.
 - Trigger 6 (T6): USB 3 to HDMI adapters such as the "T6 USB Station"
   (0711:5600; 0711:5601 likely works too), up to 1080p at 144 Hz.
 

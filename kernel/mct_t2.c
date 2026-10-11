@@ -18,6 +18,14 @@
  * report 0x06 holds the brightness level, 0 to 8 (the vendor tool uses 1..7).
  * Backlight brightness 0 turns the panel off the same way DPMS does.
  *
+ * Only the DTU-1031X has been tested, and several things here are specific
+ * to it rather than to the Trigger II: the fixed 1024x600 panel and its 180
+ * degree scanout, the init sequence (replayed from Wacom's Windows driver,
+ * possibly with board settings), the brightness through the pen function,
+ * and the USB IDs. A plain T2 adapter (VGA/DVI) would need modes from EDID,
+ * no rotation and likely a different init; these should move into a device
+ * profile once such a device can be compared.
+ *
  * Structure modelled on drivers/gpu/drm/udl and drivers/gpu/drm/tiny/gm12u320.c.
  */
 
