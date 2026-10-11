@@ -57,7 +57,7 @@ MODULE_PARM_DESC(all_modes, "Default for new devices: also offer modes larger th
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	23
+#define DRIVER_MINOR	24
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -299,17 +299,20 @@ struct mct_t6 {
 
 	struct urb *ev_urb;		/* interrupt IN, always queued */
 	struct delayed_work ev_retry;	/* resubmit it after an error */
-	int ev_fails;			/* errors in a row */
+	atomic_t ev_fails;		/* errors in a row */
 	int ev_err;			/* the last one */
 	struct delayed_work hpd_work;	/* monitor status, debounced */
-	int hpd_last, hpd_same;		/* last reading and how often in a row */
+	int hpd_last;			/* last reading */
+	atomic_t hpd_same;		/* how often in a row; 0 restarts the count */
 	int hpd_state;			/* reported status: 1 connected, 0 not, -1 unknown */
 	bool hpd_events;		/* the device sends change events */
 	struct work_struct redraw_work;
 	atomic_t redraw;		/* resend everything with the next update */
 	atomic_t inject;		/* debugfs: break the next update on purpose */
 	atomic_t no_cancel;		/* ... and skip the cancel request */
+	struct mutex mode_lock;		/* mode_entry, enabled */
 	struct t6_mode mode_entry;	/* the mode set at the last enable */
+	bool enabled;			/* the output is on with mode_entry */
 
 	struct {
 		struct mutex lock;	/* cursor state: plane updates and redraws */
@@ -529,7 +532,9 @@ static int t6_mode_entry(struct mct_t6 *t6, const struct drm_display_mode *mode,
 	u64 vco;
 	int i;
 
-	if (mode->clock > T6_MAX_CLOCK_KHZ || mode->flags & DRM_MODE_FLAG_INTERLACE)
+	if (mode->clock > T6_MAX_CLOCK_KHZ ||
+	    mode->flags & (DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_DBLSCAN) ||
+	    drm_mode_vrefresh(mode) > 255)
 		return -ERANGE;
 	if (mode->hdisplay >= T6_WIDE_W && mode->clock > T6_WIDE_MAX_CLOCK_KHZ)
 		return -ERANGE;
@@ -909,7 +914,7 @@ static int t6_send_band(struct mct_t6 *t6, int k, const struct t6_band *b)
 		 */
 		y1 = 2 * b->p1;
 		for (y = 2 * b->p0; y < y1 && !ret; y += 3 * n) {
-			n = min(step, DIV_ROUND_UP(y1 - y, 3));
+			n = min3(step, DIV_ROUND_UP(y1 - y, 3), t6->base.height / 3);
 			ys = min(y, t6->base.height - 3 * n);
 			ret = t6_write_rect(t6, k, b, 0, ys, 0, ys + 2 * n, n);
 			t6->stats.rows += 3 * n;
@@ -944,7 +949,7 @@ static int t6_flip(struct mct_t6 *t6, int k)
 	f.s.total_len = cpu_to_le32(sizeof(f.v));
 	f.s.dest = cpu_to_le32(t6_bufs[k]);
 	f.s.frag_len = cpu_to_le32(sizeof(f.v));
-	f.v.type = cpu_to_le32(3);
+	f.v.type = cpu_to_le32(3 + t6->output);	/* flip output 0 / 1 */
 	f.v.seq = cpu_to_le32(++t6->seq);
 	f.v.unk4 = cpu_to_le32(l->fmt);			/* surface format */
 	f.v.width = cpu_to_le16(l->pitch);		/* plane pitches */
@@ -1149,10 +1154,12 @@ static void t6_update(struct mct_device *mdev)
 	t6->base.dirty = false;
 	t0 = ktime_get();
 
-	/* a failed transfer may have left any buffer half written */
+	/* a failed transfer may have left the device mid-session */
 	ret = atomic_xchg(&t6->urb_err, 0);
-	if (ret)
+	if (ret && drm_dev_enter(&t6->base.dev, &idx)) {
 		t6_recover(t6, ret);
+		drm_dev_exit(idx);
+	}
 	if (atomic_xchg(&t6->redraw, 0))
 		memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
 
@@ -1393,6 +1400,7 @@ static int t6_enable(struct mct_device *mdev, const struct drm_display_mode *mod
 	ret = t6_alloc_images(t6, mode->hdisplay, mode->vdisplay);
 	if (ret)
 		return ret;
+	mutex_lock(&t6->mode_lock);
 	t6->mode_entry = m;
 	msleep(50);	/* after output off, before the new mode, as the vendor driver does */
 	if (drm_dev_enter(&mdev->dev, &idx)) {
@@ -1401,8 +1409,12 @@ static int t6_enable(struct mct_device *mdev, const struct drm_display_mode *mod
 				mode->hdisplay, mode->vdisplay);
 		drm_dev_exit(idx);
 	}
+	t6->enabled = true;
+	mutex_unlock(&t6->mode_lock);
+	mutex_lock(&t6->cur.lock);
 	t6->cur.uploaded = false;	/* upload the image again after a mode set */
 	t6->cur.visible = false;
+	mutex_unlock(&t6->cur.lock);
 	mutex_lock(&mdev->lock);
 	/* nothing is known about the frame buffers after a mode set */
 	memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
@@ -1416,8 +1428,13 @@ static void t6_disable(struct mct_device *mdev)
 {
 	struct mct_t6 *t6 = to_t6(mdev);
 
+	mutex_lock(&t6->cur.lock);
 	t6_cursor_show(t6, false);
+	mutex_unlock(&t6->cur.lock);
+	mutex_lock(&t6->mode_lock);
+	t6->enabled = false;
 	t6_set_output(t6, false);
+	mutex_unlock(&t6->mode_lock);
 }
 
 static int t6_read_edid_block(void *data, u8 *buf, unsigned int block, size_t len)
@@ -1758,10 +1775,14 @@ static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector
 	struct mct_t6 *t6 = to_t6(mdev);
 	struct drm_display_mode *mode;
 	const struct drm_edid *edid;
-	int count, w = 0, h = 0;
+	int count, w = 0, h = 0, idx;
 	bool has_720p = false;
 
-	edid = drm_edid_read_custom(connector, t6_read_edid_block, t6);
+	edid = NULL;
+	if (drm_dev_enter(connector->dev, &idx)) {
+		edid = drm_edid_read_custom(connector, t6_read_edid_block, t6);
+		drm_dev_exit(idx);
+	}
 	drm_edid_connector_update(connector, edid);
 	count = drm_edid_connector_add_modes(connector);
 	t6_monitor_limits(t6, connector, edid);
@@ -1826,18 +1847,19 @@ static void t6_hpd_work(struct work_struct *work)
 	if (!drm_dev_enter(&t6->base.dev, &idx))
 		return;
 	st = t6_output_status(t6, t6->output);
-	if (st >= 0 && st == t6->hpd_last) {
-		t6->hpd_same++;
+	if (st >= 0 && st == t6->hpd_last && atomic_read(&t6->hpd_same)) {
+		atomic_inc(&t6->hpd_same);
 	} else {
 		t6->hpd_last = st;
-		t6->hpd_same = 1;
+		atomic_set(&t6->hpd_same, 1);
 	}
-	if (st < 0 || t6->hpd_same < T6_HPD_SAME) {
+	if (st < 0 || atomic_read(&t6->hpd_same) < T6_HPD_SAME) {
 		schedule_delayed_work(&t6->hpd_work, msecs_to_jiffies(T6_HPD_MS));
 		goto out;
 	}
 	t6->hpd_state = st;
-	if (st == 1 && READ_ONCE(t6->base.width)) {
+	mutex_lock(&t6->mode_lock);
+	if (st == 1 && t6->enabled) {
 		mutex_lock(&t6->io_lock);
 		memcpy(t6->ctrl, &t6->mode_entry, sizeof(t6->mode_entry));
 		if (t6_ctrl_out(t6, T6_REQ_SETMODE, t6->output, 0, sizeof(t6->mode_entry)) >= 0)
@@ -1846,6 +1868,7 @@ static void t6_hpd_work(struct work_struct *work)
 		mutex_unlock(&t6->io_lock);
 		schedule_work(&t6->redraw_work);
 	}
+	mutex_unlock(&t6->mode_lock);
 	drm_kms_helper_hotplug_event(&t6->base.dev);
 out:
 	drm_dev_exit(idx);
@@ -1887,13 +1910,19 @@ static void t6_ev_give_up(struct mct_t6 *t6)
 static void t6_ev_retry(struct work_struct *work)
 {
 	struct mct_t6 *t6 = container_of(to_delayed_work(work), struct mct_t6, ev_retry);
-	int idx;
+	int idx, ret;
 
 	if (!drm_dev_enter(&t6->base.dev, &idx))
 		return;
 	usb_clear_halt(t6_udev(t6), t6->ev_urb->pipe);
-	if (t6->ev_fails >= 10 || usb_submit_urb(t6->ev_urb, GFP_KERNEL))
+	if (atomic_read(&t6->ev_fails) >= 10) {
 		t6_ev_give_up(t6);
+	} else {
+		ret = usb_submit_urb(t6->ev_urb, GFP_KERNEL);
+		/* -EPERM: stopped on purpose (suspend, unplug), not a failure */
+		if (ret && ret != -EPERM)
+			t6_ev_give_up(t6);
+	}
 	drm_dev_exit(idx);
 }
 
@@ -1901,10 +1930,11 @@ static void t6_event_complete(struct urb *urb)
 {
 	struct mct_t6 *t6 = urb->context;
 	const u8 *ev = urb->transfer_buffer;
+	int fails;
 
 	switch (urb->status) {
 	case 0:
-		t6->ev_fails = 0;
+		atomic_set(&t6->ev_fails, 0);
 		break;
 	case -ENOENT:
 	case -ECONNRESET:
@@ -1915,8 +1945,8 @@ static void t6_event_complete(struct urb *urb)
 		/* stall or line errors: try again later, slower each time */
 		t6->stats.ev_errors++;
 		t6->ev_err = urb->status;
-		schedule_delayed_work(&t6->ev_retry,
-				      msecs_to_jiffies(100 << min(t6->ev_fails++, 5)));
+		fails = atomic_inc_return(&t6->ev_fails) - 1;
+		schedule_delayed_work(&t6->ev_retry, msecs_to_jiffies(100 << min(fails, 5)));
 		return;
 	}
 	if (urb->actual_length > 0x13) {
@@ -1924,7 +1954,7 @@ static void t6_event_complete(struct urb *urb)
 			t6->stats.ev_done++;
 		if (ev[0x13] & (T6_EV_CHANGE0 | T6_EV_CHANGE1)) {
 			t6->stats.ev_change++;
-			t6->hpd_same = 0;
+			atomic_set(&t6->hpd_same, 0);
 			mod_delayed_work(system_percpu_wq, &t6->hpd_work,
 					 msecs_to_jiffies(T6_HPD_MS));
 		}
@@ -1935,7 +1965,10 @@ static void t6_event_complete(struct urb *urb)
 		if (!(ev[0x13] & (T6_EV_DONE | T6_EV_CHANGE0 | T6_EV_CHANGE1 | T6_EV_REDRAW)))
 			t6->stats.ev_other++;
 	}
-	usb_submit_urb(urb, GFP_ATOMIC);
+	if (usb_submit_urb(urb, GFP_ATOMIC)) {
+		t6->ev_err = -EIO;
+		schedule_delayed_work(&t6->ev_retry, msecs_to_jiffies(100));
+	}
 }
 
 /* keep an interrupt transfer queued on the event endpoint, as the vendor driver does */
@@ -1996,11 +2029,21 @@ static void t6_stats(struct mct_device *mdev, struct seq_file *m)
 /* ------------------------------------------------------------------ */
 /* sysfs (docs/companion-app.md)				      */
 
+/* NULL once the interface is unbound, see mct_from_dev() */
+static struct mct_t6 *t6_from_dev(struct device *dev)
+{
+	struct mct_device *mdev = mct_from_dev(dev);
+
+	return mdev ? to_t6(mdev) : NULL;
+}
+
 #define T6_SHOW_U64(_name, _expr)						\
 static ssize_t _name##_show(struct device *dev, struct device_attribute *attr, char *buf) \
 {										\
-	struct mct_t6 *t6 = to_t6(mct_from_dev(dev));				\
+	struct mct_t6 *t6 = t6_from_dev(dev);					\
 										\
+	if (!t6)								\
+		return -ENODEV;							\
 	return sysfs_emit(buf, "%llu\n", (u64)(_expr));			\
 }										\
 static DEVICE_ATTR_RO(_name)
@@ -2013,21 +2056,27 @@ T6_SHOW_U64(vram_mb, t6->vram_mb);
 
 static ssize_t feature_level_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return sysfs_emit(buf, "%d\n", to_t6(mct_from_dev(dev))->level);
+	struct mct_t6 *t6 = t6_from_dev(dev);
+
+	return t6 ? sysfs_emit(buf, "%d\n", t6->level) : -ENODEV;
 }
 static DEVICE_ATTR_RO(feature_level);
 
 static ssize_t usb_speed_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return sysfs_emit(buf, "%s\n", to_t6(mct_from_dev(dev))->usb2 ? "usb2" : "usb3");
+	struct mct_t6 *t6 = t6_from_dev(dev);
+
+	return t6 ? sysfs_emit(buf, "%s\n", t6->usb2 ? "usb2" : "usb3") : -ENODEV;
 }
 static DEVICE_ATTR_RO(usb_speed);
 
 static ssize_t pixel_format_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	struct mct_t6 *t6 = to_t6(mct_from_dev(dev));
+	struct mct_t6 *t6 = t6_from_dev(dev);
 	const char *name = "-";
 
+	if (!t6)
+		return -ENODEV;
 	mutex_lock(&t6->base.lock);
 	if (t6->base.width && t6->lay.planes)
 		name = t6_kind_sysfs[t6->lay.kind];
@@ -2038,8 +2087,12 @@ static DEVICE_ATTR_RO(pixel_format);
 
 static ssize_t format_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	int req = READ_ONCE(to_t6(mct_from_dev(dev))->fmt_req);
+	struct mct_t6 *t6 = t6_from_dev(dev);
+	int req;
 
+	if (!t6)
+		return -ENODEV;
+	req = READ_ONCE(t6->fmt_req);
 	return sysfs_emit(buf, "%s\n", req == T6_FMT_AUTO ? "auto" : t6_kind_param[req]);
 }
 
@@ -2047,9 +2100,11 @@ static ssize_t format_show(struct device *dev, struct device_attribute *attr, ch
 static ssize_t format_store(struct device *dev, struct device_attribute *attr,
 			    const char *buf, size_t len)
 {
-	struct mct_t6 *t6 = to_t6(mct_from_dev(dev));
+	struct mct_t6 *t6 = t6_from_dev(dev);
 	int req = t6_parse_format(buf);
 
+	if (!t6)
+		return -ENODEV;
 	if (req == -EINVAL)
 		return req;
 	WRITE_ONCE(t6->fmt_req, req);
@@ -2063,17 +2118,21 @@ static DEVICE_ATTR_RW(format);
 
 static ssize_t all_modes_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return sysfs_emit(buf, "%d\n", READ_ONCE(to_t6(mct_from_dev(dev))->all_modes));
+	struct mct_t6 *t6 = t6_from_dev(dev);
+
+	return t6 ? sysfs_emit(buf, "%d\n", READ_ONCE(t6->all_modes)) : -ENODEV;
 }
 
 /* the mode list changes: let userspace probe the monitor again */
 static ssize_t all_modes_store(struct device *dev, struct device_attribute *attr,
 			       const char *buf, size_t len)
 {
-	struct mct_t6 *t6 = to_t6(mct_from_dev(dev));
+	struct mct_t6 *t6 = t6_from_dev(dev);
 	bool v;
 	int ret = kstrtobool(buf, &v);
 
+	if (!t6)
+		return -ENODEV;
 	if (ret)
 		return ret;
 	if (v != READ_ONCE(t6->all_modes)) {
@@ -2222,7 +2281,7 @@ static void t6_pick_output(struct mct_t6 *t6)
 {
 	int i;
 
-	t6->output = 0;
+	t6->output = le16_to_cpu(t6_udev(t6)->descriptor.idProduct) == 0x5601 ? 1 : 0;
 	for (i = 0; i < T6_MAX_OUTPUTS; i++) {
 		if (t6_output_status(t6, i) == 1) {
 			t6->output = i;
@@ -2249,12 +2308,16 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	struct mct_t6 *t6;
 	struct drm_device *dev;
 	int ret, i;
+	static const u8 bulk_eps[] = { T6_EP_OUT, 0 };
 
 	BUILD_BUG_ON(sizeof(struct t6_mode) != 32);
 	BUILD_BUG_ON(sizeof(struct t6_session) != 32);
 	BUILD_BUG_ON(sizeof(struct t6_video_header) != 48);
 
 	if (interface->cur_altsetting->desc.bInterfaceNumber != 0)
+		return -ENODEV;
+	/* refuse look-alikes without the expected endpoints */
+	if (!usb_check_bulk_endpoints(interface, bulk_eps))
 		return -ENODEV;
 
 	t6 = devm_drm_dev_alloc(&interface->dev, &t6_drm_driver, struct mct_t6, base.dev);
@@ -2272,7 +2335,9 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	INIT_DELAYED_WORK(&t6->hpd_work, t6_hpd_work);
 	INIT_DELAYED_WORK(&t6->ev_retry, t6_ev_retry);
 	INIT_WORK(&t6->redraw_work, t6_redraw_work);
-	mutex_init(&t6->cur.lock);
+	ret = drmm_mutex_init(dev, &t6->cur.lock) ?: drmm_mutex_init(dev, &t6->mode_lock);
+	if (ret)
+		return ret;
 	t6->hpd_state = -1;
 	t6->hpd_last = -1;
 	for (i = 0; i < 256; i++) {
@@ -2280,7 +2345,9 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 		t6->lut[1][i] = i;
 		t6->lut[2][i] = i;
 	}
-	mutex_init(&t6->io_lock);
+	ret = drmm_mutex_init(dev, &t6->io_lock);
+	if (ret)
+		return ret;
 
 	t6->ctrl = drmm_kmalloc(dev, T6_CTRL_BUF, GFP_KERNEL);
 	t6->cur.img = drmm_kmalloc(dev, T6_CUR_BYTES, GFP_KERNEL);
@@ -2354,7 +2421,9 @@ static int t6_suspend(struct usb_interface *interface, pm_message_t message)
 	int ret;
 
 	ret = mct_suspend(&t6->base);
-	t6_stop_events(t6);
+	/* after a failed suspend there is no resume to start them again */
+	if (!ret)
+		t6_stop_events(t6);
 	return ret;
 }
 
@@ -2363,7 +2432,7 @@ static int t6_resume(struct usb_interface *interface)
 	struct mct_t6 *t6 = to_t6(to_mct(usb_get_intfdata(interface)));
 
 	t6->hpd_state = -1;	/* the monitor may have changed meanwhile */
-	t6->ev_fails = 0;
+	atomic_set(&t6->ev_fails, 0);
 	usb_unpoison_urb(t6->ev_urb);
 	if (t6->hpd_events)
 		usb_submit_urb(t6->ev_urb, GFP_KERNEL);

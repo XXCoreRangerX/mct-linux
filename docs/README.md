@@ -29,6 +29,7 @@ time; later findings are added, earlier ones are kept.
 |---|---|
 | [t6-driver.md](t6-driver.md) | the Trigger 6 backend: probe, modes, frames, errors and events, cursor |
 | [debugfs.md](debugfs.md) | the statistics files and the T6 test hook |
+| [ABI-sysfs-mct.txt](ABI-sysfs-mct.txt) | the per-device sysfs files, in the kernel's ABI format |
 | [kernel-driver.md](kernel-driver.md) | the Trigger II backend: design, measurements, lossy mode, recovery, known issues |
 | [display-driver.md](display-driver.md) | the older EVDI + wacom-t2d userspace route for the T2 |
 | [optimization-ideas.md](optimization-ideas.md) | T2 speed ideas, tried and not tried |

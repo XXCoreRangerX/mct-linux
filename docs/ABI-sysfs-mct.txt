@@ -1,0 +1,44 @@
+What:		/sys/bus/usb/devices/<interface>/mct/
+Date:		October 2026
+KernelVersion:	7.2
+Contact:	Filip Piękoś <mail@filippiekos.com>
+Description:
+		Per-device information and settings of the mct driver (MCT
+		Trigger USB displays). One value per file.
+
+		Read-only, all devices:
+
+		chip		"t2" or "t6"
+		model		USB product string
+		connector	DRM connector name, e.g. "card2-HDMI-A-3"
+		mode		current mode "WxH@Hz", or "off"
+		updates		frames sent since probe
+		bytes		bytes sent since probe
+		errors		transfer errors since probe
+
+		Read-only, Trigger 6:
+
+		pixel_format	"NV12", "YUV444", "RGB24", "RGB32" or "-"
+		feature_level	the device's feature level, -1 if unknown
+		vram_mb		video memory in MiB
+		usb_speed	"usb2" or "usb3"
+		recoveries	device restarts after transfer errors
+
+		Read-only, Trigger II:
+
+		backlight	name of the backlight device in
+				/sys/class/backlight/, or "-"
+
+		Read-write:
+
+		format		(Trigger 6) "auto", "rgb24", "rgb32", "yuv444",
+				"nv12". auto: exact RGB or YUV 4:4:4 while the
+				screen is still, NV12 during large changes.
+		all_modes	(Trigger 6) 0 or 1: also offer modes larger than
+				the monitor's native resolution. A change sends
+				a hotplug event so userspace probes again.
+		lossy		(Trigger II) 0 to 8: maximum lossy tolerance for
+				updates too big for one frame; 0 = lossless.
+
+		The module parameters of the same names are the values new
+		devices start with.

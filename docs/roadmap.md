@@ -79,6 +79,30 @@ Later:
 - **Device profiles:** separate Wacom quirks from plain T2 once a plain T2
   dongle is available.
 
+## From the code review of 2026-10-11 (not done yet)
+
+Fixed in mct_t6 0.24.0 / mct_t2 0.3.21: sysfs access during unbind, workers
+outliving the device, tiny modes in RGB24, shared T2 encoder scratch, T2
+without EDID, runtime-added IDs, the 5601's output and flip type (untested),
+hotplug vs. mode set, cursor state locking, events after a failed suspend
+or resubmit, device I/O after unplug, unlocked counters, T2 resume and
+resync after a failed frame, the pen lookup, backlight name, power flags,
+endpoint checks, managed mutexes, DBLSCAN and >255 Hz modes. Left:
+
+- T2 resync (up to 45 s) runs in probe and resume, blocking the USB hub
+  thread; move it to a work item.
+- Per-mode buffers are allocated in atomic_enable, so a failure can't be
+  reported to userspace (display stays dark); allocate in atomic_check or
+  preallocate. T6 hw[] copies could be sized per format instead of 4 B/px.
+- T2 cursor partly off the left/top edge: whether the device clips or
+  wraps is unverified.
+- The debugfs inject hook should go behind a debug option; the sysfs files
+  are documented in ABI-sysfs-mct.txt (Documentation/ABI format).
+- The T2 backlight goes through the pen's HID function behind usbhid's
+  back; upstream may want it in the wacom driver.
+- Mode filtering removes entries from probed_modes in get_modes; mode_valid
+  with a stored native size would be more usual.
+
 ## Rules that stay
 
 - Quality, the colour modes and the auto mode are not to get worse for speed.

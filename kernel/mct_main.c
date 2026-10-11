@@ -47,6 +47,8 @@ static int mct_probe(struct usb_interface *intf, const struct usb_device_id *id)
 {
 	const struct mct_backend *b = (const struct mct_backend *)id->driver_info;
 
+	if (!b)
+		return -ENODEV;
 	return b->probe(intf, id);
 }
 
@@ -58,14 +60,14 @@ static void mct_disconnect(struct usb_interface *intf)
 		b->disconnect(intf);
 }
 
-static int mct_suspend(struct usb_interface *intf, pm_message_t message)
+static int mct_usb_suspend(struct usb_interface *intf, pm_message_t message)
 {
 	const struct mct_backend *b = mct_backend(intf);
 
 	return b ? b->suspend(intf, message) : 0;
 }
 
-static int mct_resume(struct usb_interface *intf)
+static int mct_usb_resume(struct usb_interface *intf)
 {
 	const struct mct_backend *b = mct_backend(intf);
 
@@ -83,9 +85,11 @@ static struct usb_driver mct_usb_driver = {
 	 * through a command's payload, and T6 transfers drain in order.
 	 */
 	.soft_unbind = 1,
-	.suspend = pm_ptr(mct_suspend),
-	.resume = pm_ptr(mct_resume),
-	.reset_resume = pm_ptr(mct_resume),
+	.suspend = pm_ptr(mct_usb_suspend),
+	.resume = pm_ptr(mct_usb_resume),
+	.reset_resume = pm_ptr(mct_usb_resume),
+	/* each ID needs its backend; IDs added at runtime would have none */
+	.no_dynamic_id = 1,
 };
 
 module_usb_driver(mct_usb_driver);

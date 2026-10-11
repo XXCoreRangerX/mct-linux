@@ -62,7 +62,7 @@ MODULE_PARM_DESC(lossy, "Default for new devices: maximum lossy tolerance (1-8) 
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	20
+#define DRIVER_PATCH	21
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -98,7 +98,9 @@ struct mct_t2 {
 	struct mutex io_lock;		/* EP2 command sequences + bounce */
 	u8 *bounce;			/* DMA-able transfer buffer */
 	u8 *enc;			/* RLE output */
-	u8 *snap;			/* shadow snapshot being sent */
+	u8 *snap;
+	u8 enc_ch[3][1024];		/* t2_encode scratch, io_lock held */
+	u8 *enc_pix[1024];			/* shadow snapshot being sent */
 	u8 *hw[2];			/* what device buffers A and B hold */
 	bool hw_valid[2];
 
@@ -111,6 +113,7 @@ struct mct_t2 {
 	} stats;
 	const struct drm_edid *edid;	/* read from the device at init */
 	struct backlight_device *bl;
+	char bl_name[32];		/* for sysfs; empty without a backlight */
 	struct mutex power_lock;		/* crtc_on + bl_off -> pixel clock */
 	bool crtc_on, bl_off;
 	u32 front;			/* framebuffer address currently scanned out */
@@ -240,8 +243,8 @@ static int t2_rle_line(u8 *v, int n, u8 *out, int tol)
  */
 static int t2_encode(struct mct_t2 *t2, u8 *src, int dx, int dy, int w, int h, int tol)
 {
-	static u8 ch[3][1024];	/* only used with io_lock held */
-	static u8 *pix[1024];
+	u8 (*ch)[1024] = t2->enc_ch;	/* io_lock held */
+	u8 **pix = t2->enc_pix;
 	int x, y, k = 0, len = 0, c, i;
 
 	for (y = dy; y < dy + h; y++) {
@@ -306,8 +309,10 @@ static int t2_send_rect(struct mct_t2 *t2, u8 *src, u32 base, int dx, int dy, in
 			int tol, long *sent, int *used)
 {
 	u32 a = (base + dy * T2_STRIDE + dx * 3) << 8;
-	ktime_t t0 = ktime_get();
+	ktime_t t0 = ktime_get(), t1;
 	int len = t2_encode(t2, src, dx, dy, w, h, 0);
+	u8 hdr[36];
+	int ret;
 
 	if (tol && *sent + len > T2_FRAME_BUDGET) {
 		tol = t2_pick_tol(*sent + len, tol);
@@ -315,9 +320,7 @@ static int t2_send_rect(struct mct_t2 *t2, u8 *src, u32 base, int dx, int dy, in
 		*used = max(*used, tol);
 	}
 	*sent += len;
-	ktime_t t1 = ktime_get();
-	u8 hdr[36];
-	int ret;
+	t1 = ktime_get();
 
 	t2->stats.rects++;
 	t2->stats.px_sent += w * h;
@@ -494,13 +497,11 @@ static int t2_wreg(struct mct_t2 *t2, u16 reg, u8 val)
 #define T2_REG_PLL_EN	0xfcf6
 
 /* the pixel clock runs only while the CRTC is on and the backlight isn't off */
-static void t2_update_panel_power(struct mct_t2 *t2)
+static void t2_set_power(struct mct_t2 *t2, bool *flag, bool v)
 {
-	bool on;
-
 	mutex_lock(&t2->power_lock);
-	on = t2->crtc_on && !t2->bl_off;
-	t2_wreg(t2, T2_REG_PLL_EN, on);
+	*flag = v;
+	t2_wreg(t2, T2_REG_PLL_EN, t2->crtc_on && !t2->bl_off);
 	mutex_unlock(&t2->power_lock);
 }
 
@@ -737,6 +738,7 @@ static int t2_hw_init(struct mct_t2 *t2)
 /* backlight (via the pen function's HID feature report 0x06)	      */
 
 #define T2_PEN_VENDOR	0x056a
+#define T2_PEN_PRODUCT	0x032f	/* the DTU-1031X's pen function */
 #define T2_BL_REPORT	0x06
 #define T2_BL_LEVELS	9	/* report values 0..8; the firmware clamps above 8 */
 /* backlight brightness: 0 = off, 1..9 = report level 0..8 */
@@ -751,7 +753,8 @@ static int t2_match_pen(struct usb_device *udev, void *data)
 	struct t2_pen_lookup *l = data;
 
 	if (udev->parent != l->hub ||
-	    le16_to_cpu(udev->descriptor.idVendor) != T2_PEN_VENDOR)
+	    le16_to_cpu(udev->descriptor.idVendor) != T2_PEN_VENDOR ||
+	    le16_to_cpu(udev->descriptor.idProduct) != T2_PEN_PRODUCT)
 		return 0;
 	l->pen = usb_get_dev(udev);
 	return 1;
@@ -801,8 +804,7 @@ static int t2_bl_update_status(struct backlight_device *bd)
 
 	if (b)
 		ret = t2_bl_xfer(t2, true, &level);
-	t2->bl_off = !b;
-	t2_update_panel_power(t2);
+	t2_set_power(t2, &t2->bl_off, !b);
 	return ret;
 }
 
@@ -838,7 +840,7 @@ static int t2_backlight_register(struct mct_t2 *t2)
 		.scale = BACKLIGHT_SCALE_NON_LINEAR,
 	};
 	struct backlight_device *bd;
-	char name[32];
+	char name[sizeof(t2->bl_name)];
 	u8 level;
 
 	/*
@@ -854,11 +856,13 @@ static int t2_backlight_register(struct mct_t2 *t2)
 		return 0;	/* not fatal */
 	}
 	t2->bl = bd;
+	strscpy(t2->bl_name, name);
 	return 0;
 }
 
 static void t2_backlight_unregister(struct mct_t2 *t2)
 {
+	t2->bl_name[0] = 0;
 	backlight_device_unregister(t2->bl);
 	t2->bl = NULL;
 }
@@ -874,7 +878,7 @@ static void t2_update(struct mct_device *mdev)
 	int idx, ret = -ENODEV;
 
 	mutex_lock(&t2->base.lock);
-	if (!t2->base.dirty) {
+	if (!t2->base.dirty || !t2->base.width) {
 		mutex_unlock(&t2->base.lock);
 		return;
 	}
@@ -900,6 +904,21 @@ static void t2_update(struct mct_device *mdev)
 		drm_dev_exit(idx);
 	}
 	mutex_unlock(&t2->io_lock);
+
+	/* finish the cut command on the device, then send whole frames again */
+	if (ret && ret != -ENODEV && ret != -ESHUTDOWN && drm_dev_enter(&t2->base.dev, &idx)) {
+		if (!t2_resync(t2)) {
+			mutex_lock(&t2->io_lock);
+			t2->hw_valid[0] = false;
+			t2->hw_valid[1] = false;
+			mutex_unlock(&t2->io_lock);
+			mutex_lock(&t2->base.lock);
+			t2->base.dirty = true;
+			mutex_unlock(&t2->base.lock);
+			mct_kick(mdev);
+		}
+		drm_dev_exit(idx);
+	}
 
 	if (!ret && damaged) {
 		static const int bounds[] = { 8, 16, 33, 50, 100 };
@@ -1042,9 +1061,8 @@ static int t2_enable(struct mct_device *mdev, const struct drm_display_mode *mod
 	struct mct_t2 *t2 = to_t2(mdev);
 	int idx;
 
-	t2->crtc_on = true;
 	if (drm_dev_enter(&mdev->dev, &idx)) {
-		t2_update_panel_power(t2);
+		t2_set_power(t2, &t2->crtc_on, true);
 		drm_dev_exit(idx);
 	}
 	return 0;
@@ -1055,25 +1073,34 @@ static void t2_disable(struct mct_device *mdev)
 	struct mct_t2 *t2 = to_t2(mdev);
 
 	t2_cursor_hide(t2);
-	t2->crtc_on = false;
-	t2_update_panel_power(t2);	/* panel/backlight off */
+	t2_set_power(t2, &t2->crtc_on, false);	/* panel/backlight off */
 }
 
 static int t2_get_modes(struct mct_device *mdev, struct drm_connector *connector)
 {
 	struct mct_t2 *t2 = to_t2(mdev);
+	struct drm_display_mode *mode;
 	int count = 0;
 
 	if (t2->edid) {
 		drm_edid_connector_update(connector, t2->edid);
 		count = drm_edid_connector_add_modes(connector);
 	}
-	if (!count) {
+	if (!count)
 		drm_edid_connector_update(connector, NULL);
-		count = drm_add_modes_noedid(connector, T2_WIDTH, T2_HEIGHT);
-		drm_set_preferred_mode(connector, T2_WIDTH, T2_HEIGHT);
-	}
-	return count;
+	/*
+	 * No EDID, or one without the panel's size: offer 1024x600 anyway (the
+	 * init programs the panel's timing, the mode only names the size).
+	 */
+	list_for_each_entry(mode, &connector->probed_modes, head)
+		if (mode->hdisplay == T2_WIDTH && mode->vdisplay == T2_HEIGHT)
+			return count;
+	mode = drm_cvt_mode(connector->dev, T2_WIDTH, T2_HEIGHT, 60, false, false, false);
+	if (!mode)
+		return count;
+	mode->type |= DRM_MODE_TYPE_PREFERRED;
+	drm_mode_probed_add(connector, mode);
+	return count + 1;
 }
 
 static enum drm_mode_status t2_mode_valid(struct mct_device *mdev,
@@ -1148,11 +1175,21 @@ static const struct drm_driver t2_drm_driver = {
 
 /* sysfs (docs/companion-app.md) */
 
+/* NULL once the interface is unbound, see mct_from_dev() */
+static struct mct_t2 *t2_from_dev(struct device *dev)
+{
+	struct mct_device *mdev = mct_from_dev(dev);
+
+	return mdev ? to_t2(mdev) : NULL;
+}
+
 #define T2_SHOW_U64(_name, _expr)						\
 static ssize_t _name##_show(struct device *dev, struct device_attribute *attr, char *buf) \
 {										\
-	struct mct_t2 *t2 = to_t2(mct_from_dev(dev));				\
+	struct mct_t2 *t2 = t2_from_dev(dev);					\
 										\
+	if (!t2)								\
+		return -ENODEV;							\
 	return sysfs_emit(buf, "%llu\n", (u64)(_expr));			\
 }										\
 static DEVICE_ATTR_RO(_name)
@@ -1163,27 +1200,34 @@ T2_SHOW_U64(errors, t2->stats.errors);
 
 static ssize_t backlight_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	struct mct_t2 *t2 = to_t2(mct_from_dev(dev));
+	struct mct_t2 *t2 = t2_from_dev(dev);
 
-	return sysfs_emit(buf, "%s\n", t2->bl ? dev_name(&t2->bl->dev) : "-");
+	if (!t2)
+		return -ENODEV;
+	return sysfs_emit(buf, "%s\n", t2->bl_name[0] ? t2->bl_name : "-");
 }
 static DEVICE_ATTR_RO(backlight);
 
 static ssize_t lossy_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return sysfs_emit(buf, "%d\n", READ_ONCE(to_t2(mct_from_dev(dev))->lossy));
+	struct mct_t2 *t2 = t2_from_dev(dev);
+
+	return t2 ? sysfs_emit(buf, "%d\n", READ_ONCE(t2->lossy)) : -ENODEV;
 }
 
 static ssize_t lossy_store(struct device *dev, struct device_attribute *attr,
 			   const char *buf, size_t len)
 {
+	struct mct_t2 *t2 = t2_from_dev(dev);
 	int v, ret = kstrtoint(buf, 0, &v);
 
+	if (!t2)
+		return -ENODEV;
 	if (ret)
 		return ret;
 	if (v < 0 || v > 8)
 		return -EINVAL;
-	WRITE_ONCE(to_t2(mct_from_dev(dev))->lossy, v);
+	WRITE_ONCE(t2->lossy, v);
 	return len;
 }
 static DEVICE_ATTR_RW(lossy);
@@ -1240,8 +1284,12 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	struct drm_device *dev;
 	struct device *dma_dev;
 	int ret;
+	static const u8 bulk_eps[] = { T2_EP_FB, T2_EP_CMD, T2_EP_MCU, T2_EP_IN, 0 };
 
 	if (interface->cur_altsetting->desc.bInterfaceNumber != 0)
+		return -ENODEV;
+	/* refuse look-alikes without the expected endpoints */
+	if (!usb_check_bulk_endpoints(interface, bulk_eps))
 		return -ENODEV;
 
 	t2 = devm_drm_dev_alloc(&interface->dev, &t2_drm_driver, struct mct_t2, base.dev);
@@ -1257,10 +1305,11 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 		drm_warn(dev, "buffer sharing not supported");
 	}
 
-	mutex_init(&t2->io_lock);
+	ret = drmm_mutex_init(dev, &t2->io_lock) ?: drmm_mutex_init(dev, &t2->power_lock);
+	if (ret)
+		return ret;
 	/* the module parameter is the default this device starts with */
 	t2->lossy = clamp(READ_ONCE(lossy), 0, 8);
-	mutex_init(&t2->power_lock);
 	t2->front = T2_FB_A;
 
 	t2->bounce = drmm_kmalloc(dev, T2_BOUNCE, GFP_KERNEL);
@@ -1306,10 +1355,9 @@ static int t2_resume(struct usb_interface *interface)
 	struct mct_device *mdev = to_mct(usb_get_intfdata(interface));
 	int ret;
 
+	/* resume the DRM side even if the device stays dark */
 	ret = t2_hw_init(to_t2(mdev));
-	if (ret)
-		return ret;
-	return mct_resume(mdev);
+	return mct_resume(mdev) ?: ret;
 }
 
 const struct mct_backend mct_t2_backend = {

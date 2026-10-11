@@ -245,8 +245,8 @@ static int mct_primary_atomic_check(struct drm_plane *plane, struct drm_atomic_c
 						  false, false);
 	if (ret || !fb || !new_state->visible)
 		return ret;
-	/* the whole framebuffer is the image: no panning, no larger buffers */
-	if (fb->width != crtc_state->mode.hdisplay || fb->height != crtc_state->mode.vdisplay ||
+	/* the image starts at the framebuffer's top left (larger ones: fbdev) */
+	if (fb->width < crtc_state->mode.hdisplay || fb->height < crtc_state->mode.vdisplay ||
 	    new_state->src_x || new_state->src_y || fb->offsets[0])
 		return -EINVAL;
 	return 0;
@@ -263,7 +263,7 @@ static void mct_primary_atomic_update(struct drm_plane *plane, struct drm_atomic
 
 	if (!fb || !new_state->visible || !mdev->width)
 		return;
-	if (fb->width != mdev->width || fb->height != mdev->height)
+	if (fb->width < mdev->width || fb->height < mdev->height)
 		goto invalid;
 	if (!mct_damage_rows(mdev, new_state))
 		return;
@@ -420,11 +420,12 @@ static void mct_crtc_atomic_disable(struct drm_crtc *crtc, struct drm_atomic_com
 	int idx;
 
 	drm_crtc_vblank_off(crtc);
-	mct_stop_updates(mdev);
+	/* off first, so nothing kicked meanwhile does a whole update */
 	mutex_lock(&mdev->lock);
 	mdev->width = 0;
 	mdev->height = 0;
 	mutex_unlock(&mdev->lock);
+	mct_stop_updates(mdev);
 	if (drm_dev_enter(crtc->dev, &idx)) {
 		mdev->funcs->disable(mdev);
 		drm_dev_exit(idx);
@@ -552,14 +553,24 @@ static int mct_stats_show(struct seq_file *m, void *data)
 /* ------------------------------------------------------------------ */
 /* sysfs: /sys/bus/usb/devices/<interface>/mct/ (docs/companion-app.md) */
 
+/*
+ * NULL once the interface is unbound (the files go away a little later
+ * than the driver data); the device itself lives until the files are gone.
+ */
 struct mct_device *mct_from_dev(struct device *dev)
 {
-	return to_mct(usb_get_intfdata(to_usb_interface(dev)));
+	struct drm_device *drm = usb_get_intfdata(to_usb_interface(dev));
+
+	return drm ? to_mct(drm) : NULL;
 }
 
 static ssize_t chip_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	return sysfs_emit(buf, "%s\n", mct_from_dev(dev)->chip);
+	struct mct_device *mdev = mct_from_dev(dev);
+
+	if (!mdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%s\n", mdev->chip);
 }
 static DEVICE_ATTR_RO(chip);
 
@@ -575,6 +586,8 @@ static ssize_t connector_show(struct device *dev, struct device_attribute *attr,
 {
 	struct mct_device *mdev = mct_from_dev(dev);
 
+	if (!mdev)
+		return -ENODEV;
 	return sysfs_emit(buf, "%s\n", mdev->conn.kdev ? dev_name(mdev->conn.kdev) : "-");
 }
 static DEVICE_ATTR_RO(connector);
@@ -584,6 +597,8 @@ static ssize_t mode_show(struct device *dev, struct device_attribute *attr, char
 	struct mct_device *mdev = mct_from_dev(dev);
 	int w, h, hz;
 
+	if (!mdev)
+		return -ENODEV;
 	mutex_lock(&mdev->lock);
 	w = mdev->width;
 	h = mdev->height;
@@ -667,7 +682,9 @@ int mct_init(struct mct_device *mdev, const struct mct_config *cfg)
 	int ret;
 
 	mdev->funcs = cfg->funcs;
-	mutex_init(&mdev->lock);
+	ret = drmm_mutex_init(dev, &mdev->lock);
+	if (ret)
+		return ret;
 	ret = mct_attrs_init(mdev, cfg);
 	if (ret)
 		return ret;
@@ -769,15 +786,24 @@ int mct_register(struct mct_device *mdev, struct usb_interface *intf)
 	return 0;
 }
 
+/*
+ * The workers can be kicked with the display already off (format change,
+ * redraw request), when the shutdown below doesn't stop them: do it here.
+ */
 void mct_unplug(struct mct_device *mdev)
 {
 	drm_dev_unplug(&mdev->dev);
 	drm_atomic_helper_shutdown(&mdev->dev);
+	mct_stop_updates(mdev);
 }
 
 int mct_suspend(struct mct_device *mdev)
 {
-	return drm_mode_config_helper_suspend(&mdev->dev);
+	int ret = drm_mode_config_helper_suspend(&mdev->dev);
+
+	if (!ret)
+		mct_stop_updates(mdev);
+	return ret;
 }
 
 int mct_resume(struct mct_device *mdev)
