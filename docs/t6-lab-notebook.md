@@ -512,3 +512,11 @@ is the right side of the panel):
 Conclusion: format 0 is not usable for scanout (the vendor only uses it
 internally as a JPEG 4:2:2 decode target). Formats in the driver: auto,
 rgb24, rgb32, yuv444, nv12.
+
+**One module (mct 0.4.0, branch mct)**: the pending T2 branches (resync
+0.3.17, counters 0.3.18, adaptive-lossy 0.3.19) merged cleanly into the T6
+line; `mct_main.c` registers one USB driver for all four IDs and hands each
+device to its backend (mct_t2.c / mct_t6.c, still separate DRM drivers with
+their own parameters lossy / format). Live: tablet and T6 both running on
+the one module at the same time, picture, cursor, brightness slider, window
+drags and the T6's 120 Hz auto mode all fine.
