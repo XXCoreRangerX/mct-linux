@@ -476,3 +476,18 @@ unplug (now not logged).
 last conversion are converted (the commit's copy marks them), and each frame
 buffer keeps a mask of rows that may differ from the image, so the diff only
 looks at those.
+
+**0.17 stats** (68 s at 1080p120, auto, niri with the display-only sysmem
+patch): framebuffer copy **0.19 ms** per commit (was 7 ms with niri's
+buffers in VRAM), USB queueing 2.19 ms and convert + diff 2.45 ms per
+update, 51 updates/s, 27 switches to NV12 for motion, no stale areas. Rows
+copied per commit still ~1037: with the output rotated, the clip workaround
+marks nearly all rows. "0 frame done" events: the T6 sends frame-done only
+for flips that carry image data, and the driver now only sends empty flips
+after its rectangle writes (the Python partial-update tests saw no acks
+either). Monitor change events are unaffected.
+
+**0.17.1**: for framebuffers in our own (cached) memory, i.e. with the niri
+patch, damaged rows are compared with the shadow and only rows that really
+changed are copied and converted. Imported GPU buffers keep the plain copy
+(reading them twice would be slow).

@@ -64,7 +64,7 @@ MODULE_PARM_DESC(format, "Pixel format sent to the device: auto (exact RGB at re
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	17
-#define DRIVER_PATCH	0
+#define DRIVER_PATCH	1
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -1101,6 +1101,7 @@ static void t6_update_work(struct work_struct *work)
 static void t6_mark_dirty(struct mct_t6 *t6, struct drm_framebuffer *fb,
 			  const struct iosys_map *map)
 {
+	struct drm_gem_object *obj = drm_gem_fb_get_obj(fb, 0);
 	int w = t6->width, y;
 	ktime_t t0;
 	u64 ns;
@@ -1109,6 +1110,26 @@ static void t6_mark_dirty(struct mct_t6 *t6, struct drm_framebuffer *fb,
 	t0 = ktime_get();
 	if (t6->upd.dirty)
 		t6->stats.skipped++;	/* the previous image never went out */
+	/*
+	 * Our own (shmem) buffers are cached system memory, cheap to read:
+	 * compare each damaged row with the shadow and only take the ones that
+	 * really changed. Compositors' damage is coarse (whole windows, or all
+	 * rows on a rotated output with the clip workaround below).
+	 */
+	if (obj && !drm_gem_is_imported(obj) && !map->is_iomem) {
+		for (y = 0; y < t6->height; y++) {
+			u8 *dst = t6->shadow + (size_t)y * w * 4;
+			const u8 *src = (const u8 *)map->vaddr + (size_t)y * fb->pitches[0];
+
+			if (!t6->rowmask[y] || (t6->shadow_valid && !memcmp(dst, src, w * 4)))
+				continue;
+			memcpy(dst, src, w * 4);
+			t6->cvt[y] = 1;
+			t6->stats.px_damage += w;
+			t6->stats.rows_copied++;
+		}
+		goto done;
+	}
 	/*
 	 * Buffers shared by a GPU are usually mapped write-combined, where plain
 	 * reads crawl (~90 MB/s measured with amdgpu); the streaming-load copy
@@ -1151,6 +1172,7 @@ static void t6_mark_dirty(struct mct_t6 *t6, struct drm_framebuffer *fb,
 		t6->stats.rows_copied += n;
 		y += n;
 	}
+done:
 	t6->shadow_valid = true;
 	ns = ktime_to_ns(ktime_sub(ktime_get(), t0));
 	t6->stats.copies++;
@@ -1831,7 +1853,7 @@ static int t6_stats_show(struct seq_file *m, void *data)
 	seq_printf(m, "pixels damaged   %llu\n", t6->stats.px_damage);
 	seq_printf(m, "damage clips     %llu commits without, %llu clips, %llu px in clips\n",
 		   t6->stats.no_clips, t6->stats.clips, t6->stats.clip_px);
-	seq_printf(m, "rows copied      %llu per commit\n",
+	seq_printf(m, "rows changed     %llu per commit\n",
 		   div64_u64(t6->stats.rows_copied, max_t(u64, t6->stats.copies, 1)));
 	seq_printf(m, "rows sent        %llu in %llu bands (%llu per update)\n",
 		   t6->stats.rows, t6->stats.bands, div64_u64(t6->stats.rows, n));
