@@ -21,8 +21,8 @@ its settings.
 > so other T2 devices will most likely not work without changes.
 
 MCT's own drivers are for Windows and macOS, plus a userspace Linux driver
-for the T6. The protocols here were worked out from USB captures, the vendor
-drivers' disassembly and testing on real hardware.
+for the T6. The protocols here were worked out from USB captures, analysis
+of the vendor drivers for interoperability, and testing on real hardware.
 
 ## Status
 
@@ -304,8 +304,9 @@ file:
 ## How this was made
 
 This driver was developed with AI coding agents (Anthropic's Claude, through
-Claude Code). These tools sped up the slow parts of reverse engineering and
-driver work: reading disassembly and USB captures, writing test scripts,
+Claude Code). These tools sped up the slow parts of the protocol work and
+driver development: analysing the vendor drivers for interoperability and
+reading USB captures, writing test scripts,
 drafting code and documentation, and chasing down bugs.
 
 Every step was directed, reviewed and tested by a human
