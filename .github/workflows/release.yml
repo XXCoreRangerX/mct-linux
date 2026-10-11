@@ -15,12 +15,12 @@ jobs:
     name: Driver (DKMS source)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
       # the tarball is only published if the module builds
       - run: nix build .#mct-kmod -L
       - run: packaging/make-release.sh driver "${GITHUB_REF_NAME#v}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: driver
           path: dist/*
@@ -32,13 +32,13 @@ jobs:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev pkg-config
       - uses: dtolnay/rust-toolchain@stable
       - working-directory: app
         run: cargo test --locked
       - run: packaging/make-release.sh app "${GITHUB_REF_NAME#v}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: app-${{ matrix.runner }}
           path: dist/*
@@ -47,8 +47,8 @@ jobs:
     needs: [driver, app]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
