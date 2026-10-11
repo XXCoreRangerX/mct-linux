@@ -56,10 +56,14 @@
 #include <drm/drm_vblank.h>
 #include <drm/drm_vblank_helper.h>
 
+static bool yuv444 = true;
+module_param(yuv444, bool, 0644);
+MODULE_PARM_DESC(yuv444, "Full colour resolution (YUV 4:4:4, twice the data of 4:2:0 for full-screen changes); 0 = YUV 4:2:0 (NV12) (default: 1)");
+
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	12
+#define DRIVER_MINOR	13
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02
@@ -91,6 +95,7 @@
 #define T6_TIMEOUT	2000
 
 #define T6_FMT_NV12	0x6
+#define T6_FMT_YUV444	0xb
 
 /*
  * Three frame buffers in device memory, as the vendor driver lays them out
@@ -165,6 +170,22 @@ struct t6_rect_header {
 	__le32 rsvd[2];
 } __packed;
 
+/*
+ * Image layout. On the host every plane is packed (row length = width); in
+ * device memory the planes follow the frame header at the buffer's +0x30.
+ * NV12: Y, then interleaved UV at half height (2 Y rows and 1 UV row per
+ * row pair). YUV 4:4:4: Y, U, V, full height, rows aligned to 32 bytes.
+ */
+struct t6_layout {
+	bool is444;
+	int planes;
+	int rows[3];			/* rows per row pair */
+	size_t host[3];			/* plane offsets in img/hw */
+	u32 dev[3];			/* plane offsets from buffer + 0x30 */
+	int pitch;			/* device row pitch */
+	u32 fmt;
+};
+
 /* rows of unchanged pixel pairs still merged into one band */
 #define T6_BAND_GAP	8
 #define T6_MAX_BANDS	16
@@ -221,6 +242,7 @@ struct mct_t6 {
 	u8 *rowmask;			/* rows to copy from the framebuffer */
 	u8 *img;			/* the shadow in NV12 */
 	u8 lut[3][256];			/* gamma, R G B, applied in software */
+	struct t6_layout lay;		/* of img and hw, set by the worker */
 	u8 *hw[3];			/* NV12 image each frame buffer holds */
 	bool hw_valid[3];
 	int width, height;		/* current mode */
@@ -457,7 +479,7 @@ static int t6_mode_entry(struct mct_t6 *t6, const struct drm_display_mode *mode,
 	if (mode->hdisplay % 16 || mode->vdisplay % 2)
 		return -ERANGE;
 	if (mode->hdisplay > t6->max_w || mode->vdisplay > t6->max_h ||
-	    0x30 + (u64)mode->hdisplay * mode->vdisplay * 3 / 2 > T6_BUF_SIZE)
+	    0x30 + 3ull * round_up(mode->hdisplay, 32) * mode->vdisplay > T6_BUF_SIZE)
 		return -ERANGE;
 
 	memset(m, 0, sizeof(*m));
@@ -523,30 +545,76 @@ static int t6_set_mode(struct mct_t6 *t6, const struct t6_mode *m)
 /* ------------------------------------------------------------------ */
 /* frame updates						      */
 
+static void t6_set_layout(struct mct_t6 *t6, bool is444)
+{
+	struct t6_layout *l = &t6->lay;
+	int w = t6->width, h = t6->height;
+	size_t px = (size_t)w * h;
+
+	memset(l, 0, sizeof(*l));
+	l->is444 = is444;
+	if (is444) {
+		l->planes = 3;
+		l->pitch = round_up(w, 32);
+		l->fmt = T6_FMT_YUV444;
+		for (int i = 0; i < 3; i++) {
+			l->rows[i] = 2;
+			l->host[i] = i * px;
+			l->dev[i] = i * l->pitch * h;
+		}
+	} else {
+		l->planes = 2;
+		l->pitch = w;
+		l->fmt = T6_FMT_NV12;
+		l->rows[0] = 2;
+		l->rows[1] = 1;
+		l->host[1] = px;
+		l->dev[1] = w * h;
+	}
+	/* nothing in the frame buffers is in the new layout */
+	memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
+}
+
 /*
- * Shadow (XRGB8888) to NV12 in t6->img: BT.601 limited range, 4:2:0, the Y
- * plane then interleaved Cb/Cr. Modes have even sizes. upd.lock held.
+ * Shadow (XRGB8888) to t6->img, BT.601 limited range, through the gamma
+ * tables: NV12 (chroma of each 2x2 block) or YUV 4:4:4. Modes have even
+ * sizes. upd.lock held.
  */
 static void t6_convert(struct mct_t6 *t6)
 {
 	const u8 *lr = t6->lut[0], *lg = t6->lut[1], *lb = t6->lut[2];
 	int w = t6->width, h = t6->height, x, y, i;
-	u8 *py = t6->img, *puv = t6->img + (size_t)w * h;
+	size_t px = (size_t)w * h;
+	u8 *py = t6->img;
+
+	if (t6->lay.is444) {
+		u8 *pu = py + px, *pv = pu + px;
+		const u8 *s = t6->shadow;	/* B, G, R, X */
+
+		for (i = 0; i < px; i++, s += 4) {
+			int r = lr[s[2]], g = lg[s[1]], b = lb[s[0]];
+
+			py[i] = ((66 * r + 129 * g + 25 * b + 128) >> 8) + 16;
+			pu[i] = ((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128;
+			pv[i] = ((112 * r - 94 * g - 18 * b + 128) >> 8) + 128;
+		}
+		return;
+	}
 
 	for (y = 0; y < h; y += 2) {
 		const u8 *s0 = t6->shadow + (size_t)y * w * 4;	/* B, G, R, X */
 		const u8 *s1 = s0 + w * 4;
 		u8 *y0 = py + (size_t)y * w, *y1 = y0 + w;
-		u8 *uv = puv + (size_t)(y / 2) * w;
+		u8 *uv = py + px + (size_t)(y / 2) * w;
 
 		for (x = 0; x < w; x += 2, s0 += 8, s1 += 8, y0 += 2, y1 += 2, uv += 2) {
 			/* the 2x2 block: top left, top right, bottom left, bottom right */
-			const u8 *px[4] = { s0, s0 + 4, s1, s1 + 4 };
+			const u8 *p4[4] = { s0, s0 + 4, s1, s1 + 4 };
 			u8 *out[4] = { y0, y0 + 1, y1, y1 + 1 };
 			int r = 0, g = 0, b = 0;
 
 			for (i = 0; i < 4; i++) {
-				int pr = lr[px[i][2]], pg = lg[px[i][1]], pb = lb[px[i][0]];
+				int pr = lr[p4[i][2]], pg = lg[p4[i][1]], pb = lb[p4[i][0]];
 
 				*out[i] = ((66 * pr + 129 * pg + 25 * pb + 128) >> 8) + 16;
 				r += pr;
@@ -581,29 +649,34 @@ static bool t6_row_diff(const u8 *a, const u8 *b, int n, int *lo, int *hi)
 	return true;
 }
 
+/* host offset of row r of row pair p in plane i */
+static size_t t6_row(const struct mct_t6 *t6, int i, int p, int r)
+{
+	return t6->lay.host[i] + ((size_t)p * t6->lay.rows[i] + r) * t6->width;
+}
+
 /*
- * Bands of row pairs (two Y rows and their UV row) where t6->img differs
- * from what frame buffer k holds, each with the columns that changed;
- * returns the count.
+ * Bands of row pairs where t6->img differs from what frame buffer k holds,
+ * each with the columns that changed; returns the count.
  */
 static int t6_diff_bands(struct mct_t6 *t6, int k, struct t6_band *bands)
 {
-	int w = t6->width, pairs = t6->height / 2, n = 0, p;
-	const u8 *ny = t6->img, *oy = t6->hw[k];
-	const u8 *nuv = ny + (size_t)w * t6->height, *ouv = oy + (size_t)w * t6->height;
+	int w = t6->width, pairs = t6->height / 2, n = 0, p, i, r;
 
 	if (!t6->hw_valid[k]) {
 		bands[0] = (struct t6_band){ 0, pairs, 0, w };
 		return 1;
 	}
 	for (p = 0; p < pairs; p++) {
-		size_t yo = (size_t)p * 2 * w, uvo = (size_t)p * w;
 		int lo = w, hi = 0;
-		bool d;
+		bool d = false;
 
-		d = t6_row_diff(ny + yo, oy + yo, w, &lo, &hi);
-		d |= t6_row_diff(ny + yo + w, oy + yo + w, w, &lo, &hi);
-		d |= t6_row_diff(nuv + uvo, ouv + uvo, w, &lo, &hi);
+		for (i = 0; i < t6->lay.planes; i++)
+			for (r = 0; r < t6->lay.rows[i]; r++) {
+				size_t o = t6_row(t6, i, p, r);
+
+				d |= t6_row_diff(t6->img + o, t6->hw[k] + o, w, &lo, &hi);
+			}
 		if (!d)
 			continue;
 		lo = round_down(lo, 16);
@@ -619,44 +692,66 @@ static int t6_diff_bands(struct mct_t6 *t6, int k, struct t6_band *bands)
 	return n;
 }
 
-/* write a band of t6->img into frame buffer k; io_lock held */
+/*
+ * One session 7 write: rows [ya, ya + 2n) of host plane ia to device plane
+ * ia, then n rows from row yb of host plane ib to device plane ib (the
+ * write's "UV" part, half the height). io_lock held.
+ */
+static int t6_write_rect(struct mct_t6 *t6, int k, const struct t6_band *b,
+			 int ia, int ya, int ib, int yb, int n)
+{
+	int w = t6->width, bw = b->x1 - b->x0, pitch = t6->lay.pitch, i;
+	u32 base = t6_bufs[k] + 0x30;
+	struct t6_rect_header r = { };
+	struct t6_urb *u;
+	u8 *d;
+	int ret;
+
+	r.type = cpu_to_le32(7);
+	r.len = cpu_to_le32(3 * n * bw);
+	r.y_addr = cpu_to_le32(base + t6->lay.dev[ia] + ya * pitch + b->x0);
+	r.uv_addr = cpu_to_le32(base + t6->lay.dev[ib] + yb * pitch + b->x0);
+	r.y_pitch = cpu_to_le16(pitch);
+	r.uv_pitch = cpu_to_le16(pitch);
+	r.width = cpu_to_le16(bw);
+	r.height = cpu_to_le16(2 * n);
+	ret = t6_bulk(t6, &r, sizeof(r));
+	if (ret)
+		return ret;
+	u = t6_urb_get(t6);
+	if (!u)
+		return -ETIMEDOUT;
+	d = u->buf;
+	for (i = 0; i < 2 * n; i++, d += bw)
+		memcpy(d, t6->img + t6->lay.host[ia] + (size_t)(ya + i) * w + b->x0, bw);
+	for (i = 0; i < n; i++, d += bw)
+		memcpy(d, t6->img + t6->lay.host[ib] + (size_t)(yb + i) * w + b->x0, bw);
+	t6->stats.bytes += sizeof(r) + 3 * n * bw;
+	return t6_urb_send(t6, u, 3 * n * bw);
+}
+
+/*
+ * Write a band of t6->img into frame buffer k with session 7 writes, which
+ * fill a Y plane and a half-height UV plane. NV12 needs one per piece; 4:4:4
+ * two: Y with the first half of U, V with the second half. io_lock held.
+ */
 static int t6_send_band(struct mct_t6 *t6, int k, const struct t6_band *b)
 {
-	int w = t6->width, h = t6->height, bw = b->x1 - b->x0;
-	/* each write fits the transfer buffer: per pair 2 Y rows + 1 UV row */
+	int bw = b->x1 - b->x0;
+	/* each write fits a transfer: 2n rows + n rows of bw bytes */
 	int step = max(T6_FRAG / (3 * bw), 1);
-	u32 base = t6_bufs[k] + 0x30;
-	int p, n, i, ret = 0;
+	int p, n, ret = 0;
 
 	for (p = b->p0; p < b->p1 && !ret; p += n) {
-		struct t6_rect_header r = { };
-		size_t yo = (size_t)p * 2 * w + b->x0, uvo = (size_t)w * h + (size_t)p * w + b->x0;
-		struct t6_urb *u;
-		u8 *d;
-
 		n = min(step, b->p1 - p);
-		r.type = cpu_to_le32(7);
-		r.len = cpu_to_le32(3 * n * bw);
-		r.y_addr = cpu_to_le32(base + yo);
-		r.uv_addr = cpu_to_le32(base + uvo);
-		r.y_pitch = cpu_to_le16(w);
-		r.uv_pitch = cpu_to_le16(w);
-		r.width = cpu_to_le16(bw);
-		r.height = cpu_to_le16(n * 2);
-		ret = t6_bulk(t6, &r, sizeof(r));
-		if (ret)
-			break;
-		u = t6_urb_get(t6);
-		if (!u)
-			return -ETIMEDOUT;
-		d = u->buf;
-		for (i = 0; i < 2 * n; i++, d += bw)
-			memcpy(d, t6->img + yo + (size_t)i * w, bw);
-		for (i = 0; i < n; i++, d += bw)
-			memcpy(d, t6->img + uvo + (size_t)i * w, bw);
-		ret = t6_urb_send(t6, u, 3 * n * bw);
-		t6->stats.rows += n * 2;
-		t6->stats.bytes += sizeof(r) + 3 * n * bw;
+		if (!t6->lay.is444) {
+			ret = t6_write_rect(t6, k, b, 0, 2 * p, 1, p, n);
+		} else {
+			ret = t6_write_rect(t6, k, b, 0, 2 * p, 1, 2 * p, n);
+			if (!ret)
+				ret = t6_write_rect(t6, k, b, 2, 2 * p, 1, 2 * p + n, n);
+		}
+		t6->stats.rows += 2 * n;
 	}
 	return ret;
 }
@@ -668,22 +763,22 @@ static int t6_flip(struct mct_t6 *t6, int k)
 		struct t6_session s;
 		struct t6_video_header v;
 	} __packed f = { };
-	int w = t6->width, h = t6->height;
-	u32 base = t6_bufs[k];
+	const struct t6_layout *l = &t6->lay;
+	u32 base = t6_bufs[k] + 0x30;
 	int ret;
 
 	f.s.total_len = cpu_to_le32(sizeof(f.v));
-	f.s.dest = cpu_to_le32(base);
+	f.s.dest = cpu_to_le32(t6_bufs[k]);
 	f.s.frag_len = cpu_to_le32(sizeof(f.v));
 	f.v.type = cpu_to_le32(3);
 	f.v.seq = cpu_to_le32(++t6->seq);
-	f.v.unk4 = cpu_to_le32(T6_FMT_NV12);		/* surface format */
-	f.v.width = cpu_to_le16(w);			/* Y pitch */
-	f.v.height = cpu_to_le16(w);			/* UV pitch */
-	f.v.start = cpu_to_le32(base + 0x30);		/* Y plane */
-	f.v.end = cpu_to_le32(base + 0x30 + w * h);	/* UV plane */
-	f.v.unk9 = cpu_to_le32(base + 0x30);		/* third plane, unused */
-	f.v.format = cpu_to_le32(T6_FMT_NV12);
+	f.v.unk4 = cpu_to_le32(l->fmt);			/* surface format */
+	f.v.width = cpu_to_le16(l->pitch);		/* plane pitches */
+	f.v.height = cpu_to_le16(l->pitch);
+	f.v.start = cpu_to_le32(base + l->dev[0]);	/* plane addresses */
+	f.v.end = cpu_to_le32(base + l->dev[1]);
+	f.v.unk9 = cpu_to_le32(base + (l->planes > 2 ? l->dev[2] : 0));
+	f.v.format = cpu_to_le32(l->fmt);
 
 	ret = t6_bulk(t6, &f.s, sizeof(f.s));
 	if (!ret)
@@ -699,8 +794,8 @@ static int t6_flip(struct mct_t6 *t6, int k)
 static int t6_present(struct mct_t6 *t6)
 {
 	struct t6_band bands[T6_MAX_BANDS];
-	int k = t6->buf, w = t6->width, h = t6->height;
-	int n, i, p, ret;
+	int k = t6->buf;
+	int n, i, j, p, r, ret;
 
 	/* a failed transfer may have left any buffer half written */
 	ret = atomic_xchg(&t6->urb_err, 0);
@@ -721,14 +816,13 @@ static int t6_present(struct mct_t6 *t6)
 	for (i = 0; i < n; i++) {
 		int bw = bands[i].x1 - bands[i].x0;
 
-		for (p = bands[i].p0; p < bands[i].p1; p++) {
-			size_t yo = (size_t)p * 2 * w + bands[i].x0;
-			size_t uvo = (size_t)w * h + (size_t)p * w + bands[i].x0;
+		for (p = bands[i].p0; p < bands[i].p1; p++)
+			for (j = 0; j < t6->lay.planes; j++)
+				for (r = 0; r < t6->lay.rows[j]; r++) {
+					size_t o = t6_row(t6, j, p, r) + bands[i].x0;
 
-			memcpy(t6->hw[k] + yo, t6->img + yo, bw);
-			memcpy(t6->hw[k] + yo + w, t6->img + yo + w, bw);
-			memcpy(t6->hw[k] + uvo, t6->img + uvo, bw);
-		}
+					memcpy(t6->hw[k] + o, t6->img + o, bw);
+				}
 	}
 	t6->hw_valid[k] = true;
 	t6->stats.bands += n;
@@ -754,6 +848,8 @@ static void t6_update_work(struct work_struct *work)
 		return;
 	}
 	t6->upd.dirty = false;
+	if (READ_ONCE(yuv444) != t6->lay.is444 || !t6->lay.planes)
+		t6_set_layout(t6, READ_ONCE(yuv444));
 	t0 = ktime_get();
 	t6_convert(t6);
 	/* commits only wait for the conversion above, never for USB */
@@ -1202,6 +1298,7 @@ static void t6_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_commi
 	mutex_lock(&t6->upd.lock);
 	/* nothing is known about the frame buffers after a mode set */
 	memset(t6->hw_valid, 0, sizeof(t6->hw_valid));
+	t6->lay.planes = 0;		/* the worker sets it up for the new size */
 	t6->buf = 0;
 	t6->shadow_valid = false;
 	t6->width = crtc_state->mode.hdisplay;
@@ -1731,10 +1828,10 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	}
 
 	px = (size_t)t6->max_w * t6->max_h;
-	t6->img = kvmalloc(px * 3 / 2, GFP_KERNEL);
-	t6->hw[0] = kvmalloc(px * 3 / 2, GFP_KERNEL);
-	t6->hw[1] = kvmalloc(px * 3 / 2, GFP_KERNEL);
-	t6->hw[2] = kvmalloc(px * 3 / 2, GFP_KERNEL);
+	t6->img = kvmalloc(px * 3, GFP_KERNEL);
+	t6->hw[0] = kvmalloc(px * 3, GFP_KERNEL);
+	t6->hw[1] = kvmalloc(px * 3, GFP_KERNEL);
+	t6->hw[2] = kvmalloc(px * 3, GFP_KERNEL);
 	t6->shadow = kvzalloc(px * 4, GFP_KERNEL);
 	t6->rowmask = drmm_kzalloc(dev, t6->max_h, GFP_KERNEL);
 	ret = drmm_add_action_or_reset(dev, t6_release, NULL);

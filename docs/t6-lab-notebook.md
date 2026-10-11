@@ -401,3 +401,20 @@ transfers. The bulk endpoint keeps the order (writes before their flip).
 A failed transfer invalidates all three buffer copies (next update sends
 whole frames); disable/suspend/unplug wait for or kill what is in flight.
 "usb" time in the stats is now the time spent queueing (backpressure).
+
+**YUV 4:4:4** (`tools/t6_yuv444_test.py`; surface format 11, planes Y, U, V
+at full size, pitch align32(width), each following the previous): a detail
+image (1-pixel coloured lines, red strokes on blue) looked crisper than NV12,
+"especially green and blue"; a moving block at full speed (6.2 MB frames,
+52.8 fps) showed **no tearing**, like NV12.
+- Partial writes: the video command type 7 (FB_DIRECT) with raw 4:4:4 data
+  through a staging address (0x3000000) did nothing (likely JPEG only).
+  Session 7 does two strided copies (h rows to the "Y" address, h/2 rows to
+  the "UV" address), so two writes per band cover three planes: Y rows with
+  the first half of the U rows, V rows with the second half. A green
+  rectangle written that way into the hidden buffer appeared on the flip.
+
+**mct_t6 0.13**: image layout abstraction (NV12 or 4:4:4), module parameter
+`yuv444` (default on, runtime writable; switching resends whole frames).
+Development now happens in a worktree (`../mct-t2-linux-t6`) so the main
+checkout, which the dotfiles build, stays on main.
