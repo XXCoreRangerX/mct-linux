@@ -214,9 +214,10 @@ values above 8 read back as 8.
 
 Other Wacom driver traffic seen at startup: feature `0x83` (`83 02 00`) x3,
 `0x02` (`02 02`, mode), GET `0x0c` (serial), GET `0x10` (status), and a series of
-`0x40` exchanges, some carrying random-looking 64-byte blocks (probably a
-challenge/response the driver uses to identify genuine hardware). None of it is
-needed for brightness.
+`0x40` exchanges, some carrying random-looking 64-byte blocks: the pen data
+encryption handshake (RSA-wrapped AES key, see
+[wacom-display-settings.md](wacom-display-settings.md)). None of it is needed
+for brightness.
 
 ## I2C masters (verified live 2026-09-24, `tools/t2i2c.py`)
 

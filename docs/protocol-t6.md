@@ -48,7 +48,7 @@ Nothing here shares code or framing with the T2.
 | `40 1c`, `40 1d` | output << 8 (\| 2 enable) | 0x100 / 0x200 / 0x400 | 256 B out | gamma enable and one table per channel (C) |
 | `40 14` | 0 | 0 | none | cancel / reset after a bulk timeout (C) |
 | `40 30` | | level | none | hardware reset (C) |
-| `40 1f` | | 0..3 | none | hardware rotation (C) |
+| `40 1f` | | 0..3 | none | hardware rotation (C); stalls on the 5600, also with 0 (V) |
 | `40 23`, `40 24`, `c0 a1..a5` | | | | audio (C) |
 
 Outputs: the 5600 drives its HDMI port as output 0, the 5601 in the capture

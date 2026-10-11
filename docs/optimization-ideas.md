@@ -47,8 +47,9 @@ Ideas, roughly by expected payoff:
    oversharpened by the RTD2280, and the rainbow-line issue is a scaler
    sampling-phase problem. Brightness goes through the pen's HID feature
    report 0x06; the pen has more feature reports with unknown meaning
-   (0x02-0x0d, 0x10, 0xb0, 0xcc; 0x40 looks like firmware update, never
-   write it). Find their use statically: unpack WacomTablet_6.4.9-2.exe
+   (0x02-0x0d, 0x10, 0xb0, 0xcc; 0x40 is the pen data encryption handshake,
+   never write it). Update 2026-10-11: Wacom's driver has no setting beyond
+   brightness for this model, see wacom-display-settings.md. Find their use statically: unpack WacomTablet_6.4.9-2.exe
    (7z works) and search the control panel's strings and resources, then
    capture any setting found in the Windows VM like brightness was. Wine
    can't help here: the control panel needs Wacom's kernel drivers to see

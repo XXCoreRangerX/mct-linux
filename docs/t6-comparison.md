@@ -81,8 +81,9 @@ mct_t2's mould; the code is separate (mct_t2.c ~1360 lines, mct_t6.c ~2180).
   driver (below).
 - **Dual-output models and HDMI audio** (not present on the 5600; a general
   MCT driver would need them).
-- **Hardware rotation** (request 0x1f); on Linux the compositor rotates for
-  free.
+- Hardware rotation (request 0x1f) only exists in MCT's Ubuntu driver; the
+  5600 stalls on it and the Windows driver leaves rotation to the OS, as
+  Linux compositors do.
 
 ## JPEG and Linux
 

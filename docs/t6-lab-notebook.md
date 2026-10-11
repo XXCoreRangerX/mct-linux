@@ -520,3 +520,51 @@ device to its backend (mct_t2.c / mct_t6.c, still separate DRM drivers with
 their own parameters lossy / format). Live: tablet and T6 both running on
 the one module at the same time, picture, cursor, brightness slider, window
 drags and the T6's 120 Hz auto mode all fine.
+
+## 2026-10-11: pacing, rotation, larger monitors
+
+**Frame-done pacing, checked before building it.** The idea was to drive
+the vblank timer from the chip's frame-done events. The vendor capture
+already answers most of it (`captures/t6-research/capture-analysis.md`,
+section 3): done events come 0.9-11 ms after the last data, depending on
+decode work, and their phase against the 60 Hz refresh is spread out
+(R = 0.11). They mean "frame processed", not "flipped at vblank", and empty
+flips (all partial updates) send none. So there is no vblank signal to lock
+to. `tools/t6_pacing_test.py` measures it with raw frames on our
+side (rate when sending back to back, latency, phase R) to close it for
+good. What remains possible without a vblank signal is small: the timer
+already runs at the mode's nominal rate, and the PLL rounding (P / 1000
+steps) is ~30 ppm, below a crystal's tolerance; a one-frame drift every
+few minutes at 144 Hz is not visible.
+
+**Hardware rotation (0.18.0, branch t6-rotation, not usable here).** From
+the vendor's Ubuntu driver (`evdi_t6_1/main.c`, `t6usbdongle.c`): `40 1f`
+with wIndex 0..3 = 0/90/180/270 (xrandr's counter-clockwise rotations), the
+host sends the image in the rotated (portrait) size with the pitch of that
+width, and the mode entry keeps the monitor's timings but carries the
+portrait size in the active width/height fields. Cursor positions and
+images go to the chip unchanged in image coordinates, so the chip likely
+turns the cursor with the picture. Driver: rotation property on the
+primary plane, a new rotation is a mode set, portrait buffers allowed, the
+cursor box and image are mapped from screen to image coordinates.
+Userspace test first: the 5600 answers `40 1f` with a **stall**, already
+for rotation 0. Same as the gamma requests on this feature level 6 chip;
+the Windows driver's request table has no 0x1f either (rotation there is
+the OS's job). So no hardware rotation on the 5600; the branch stays
+unmerged for a chip that has it. Compositors rotate for free anyway.
+
+**Above 1080p (3440x1440 monitor coming).** Found while reading the size
+checks: the driver allows modes only up to the largest entry of the chip's
+own table (2048x1152 on the 5600), so 3440x1440 is rejected today. What
+the numbers say for 3440x1440@60 (CVT-RB ~319 MHz, below the 340 MHz cap):
+- Frame buffer room: three buffers sit 0xfffec0 (~16.8 MB) apart. RGB32
+  (19.8 MB) doesn't fit, NV12 (7.4 MB), 4:4:4 and RGB24 (14.9 MB each) do.
+  The current check assumes 4 bytes per pixel and has to become per format.
+- Scanout: NV12 446 MB/s fits; 4:4:4 892 MB/s and RGB24 892 MB/s are over
+  the measured limits (760 / 500), so at 60 Hz only NV12, 4:4:4 up to
+  ~50 Hz. Those limits were measured at 1080p and may differ.
+- USB: full NV12 frames 7.4 MB, ~45 fps for full-screen motion; partial
+  updates as now.
+- Unknown: whether the scanout has a line length limit (format 0 broke
+  after ~2300 bytes per row; 3440 px is 3440 bytes of Y in NV12). Test from
+  userspace with a computed mode before changing the driver.
