@@ -145,8 +145,8 @@ struct t6_mode {
  * Largest image beyond the device's own table, and a lower clock limit for
  * modes from 2560 pixels wide, where higher clocks were not reliable.
  */
-#define T6_TESTED_W		3840
-#define T6_TESTED_H		2160
+#define T6_MAX_IMG_W		3840
+#define T6_MAX_IMG_H		2160
 #define T6_WIDE_W		2560
 #define T6_WIDE_MAX_CLOCK_KHZ	316000
 /* computed extra refresh rates only for sizes up to this */
@@ -505,8 +505,8 @@ static int t6_read_modes(struct mct_t6 *t6)
 		t6->max_w = max(t6->max_w, w);
 		t6->max_h = max(t6->max_h, h);
 	}
-	t6->max_w = max(t6->max_w, T6_TESTED_W);
-	t6->max_h = max(t6->max_h, T6_TESTED_H);
+	t6->max_w = max(t6->max_w, T6_MAX_IMG_W);
+	t6->max_h = max(t6->max_h, T6_MAX_IMG_H);
 	return t6->nmodes ? 0 : -ENODEV;
 }
 
