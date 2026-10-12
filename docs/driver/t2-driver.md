@@ -136,8 +136,9 @@ may band sooner; watch skies when testing.
 ## Half-resolution motion (driver 0.3.24)
 
 `motion=half` (sysfs, or the module parameter `half_motion`): when at least
-half the screen changed and the exact full frame would not fit one frame's
-budget, the update goes out as a 512x300 image (each 2x2 block averaged:
+half the screen changed since the last update (compared with a copy of the
+last presented picture, kept only in half mode) and the exact full frame
+would not fit one frame's budget, the update goes out as a 512x300 image (each 2x2 block averaged:
 150 RLE units, a quarter of the pixels) in a `0x13` with scale `0x2000`,
 which the chip upscales into the back buffer; then the usual flip. The
 upscaler's output isn't modelled, so that buffer's copy is marked unknown
@@ -145,7 +146,14 @@ and the next update to it is a full frame; the refinement after motion
 (two lossless passes) restores the exact picture. Motion shows a slight
 blur instead of the lossy mode's horizontal streaks. Smaller heavy updates
 keep the lossy level. The header form was verified with `tools/t2_probe.py`
-on 2026-10-12; the mode itself is not yet tested on the tablet.
+on 2026-10-12.
+
+First test (0.3.24, 2026-10-12): the picture stayed pixelated, also when
+still. The motion check compared against the back buffer's copy, which is
+unknown right after a half frame, so every later update to that buffer
+counted as a full-screen change and went half again, and each half frame
+re-armed the refinement timer, so with anything updating it never ran.
+0.3.25 compares with the last presented picture instead.
 
 ## Software gamma (driver 0.3.23)
 

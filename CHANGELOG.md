@@ -19,6 +19,8 @@ drm_info and in the kernel log at probe).
 - mct_t2 0.3.24: `motion=half` sends heavy full-screen updates at half
   resolution, upscaled 2x by the chip (blur instead of streaks), refined
   once motion stops; in the app as "Half resolution during heavy motion".
+  0.3.25 fixes it staying pixelated (the motion check now compares with the
+  last presented picture).
 - T2 protocol corrected and extended from the vendor drivers and captures;
   hardware upscale, RGB565, YUV 4:2:2 and 512 KiB transfers verified on the
   tablet with the new `tools/t2_probe.py`. Software gamma tested.

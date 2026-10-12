@@ -67,7 +67,7 @@ MODULE_PARM_DESC(half_motion, "Default for new devices: send full-screen updates
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	24
+#define DRIVER_PATCH	25
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -112,6 +112,13 @@ struct mct_t2 {
 	u8 *bounce;			/* DMA-able transfer buffer */
 	u8 *enc;			/* RLE output */
 	u8 *snap;
+	/*
+	 * Half mode: the picture of the last update, whatever the device made
+	 * of it, so "heavy motion" means what really changed since then and not
+	 * a buffer whose copy is unknown after a half-resolution frame.
+	 */
+	u8 *last;
+	bool last_valid;
 	u8 enc_ch[3][1024];		/* t2_encode scratch, io_lock held */
 	u8 *enc_pix[1024];			/* shadow snapshot being sent */
 	u8 *hw[2];			/* what device buffers A and B hold */
@@ -480,20 +487,34 @@ static int t2_send_half(struct mct_t2 *t2, u8 *src, u32 base, long *sent)
 	return ret;
 }
 
-/*
- * Half mode only for heavy updates: at least half the screen changed and
- * the exact full frame would not fit one frame's budget.
- */
-static bool t2_want_half(struct mct_t2 *t2, const struct drm_rect *bands, int n)
-{
-	long area = 0;
-	int i;
+static int t2_diff_bands(const u8 *cur, const u8 *old, struct drm_rect *bands);
 
-	for (i = 0; i < n; i++)
-		area += (long)drm_rect_width(&bands[i]) * drm_rect_height(&bands[i]);
+/*
+ * Half mode only for heavy updates: at least half the screen changed since
+ * the last update and the exact full frame would not fit one frame's budget.
+ */
+static bool t2_want_half(struct mct_t2 *t2)
+{
+	struct drm_rect bands[T2_MAX_BANDS];
+	long area = (long)T2_WIDTH * T2_HEIGHT;
+	int i, n;
+
+	if (t2->last_valid) {
+		n = t2_diff_bands(t2->snap, t2->last, bands);
+		for (area = 0, i = 0; i < n; i++)
+			area += (long)drm_rect_width(&bands[i]) * drm_rect_height(&bands[i]);
+	}
 	if (area * 2 < (long)T2_WIDTH * T2_HEIGHT)
 		return false;
 	return t2_encode(t2, t2->snap, 0, 0, T2_WIDTH, T2_HEIGHT, 0) > T2_FRAME_BUDGET;
+}
+
+/* half mode: remember this update's picture for the next motion check */
+static void t2_keep_last(struct mct_t2 *t2)
+{
+	t2->last_valid = READ_ONCE(t2->half);
+	if (t2->last_valid)
+		memcpy(t2->last, t2->snap, T2_WIDTH * T2_HEIGHT * 4);
 }
 
 /*
@@ -559,7 +580,7 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 	/* updates too big for one frame may go lossy; refined once motion stops */
 	if (!lossless && READ_ONCE(t2->lossy) > 0)
 		tol = READ_ONCE(t2->lossy);
-	half = !lossless && READ_ONCE(t2->half) && t2_want_half(t2, bands, n);
+	half = !lossless && READ_ONCE(t2->half) && t2_want_half(t2);
 
 	t2->hw_valid[back] = false;
 	if (half)
@@ -572,6 +593,7 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 		return ret;
 
 	t2->stats.updates++;
+	t2_keep_last(t2);
 	if (half) {
 		/* the buffer holds the chip's upscale: unknown, sent whole next time */
 		t2->stats.half_updates++;
@@ -1467,6 +1489,7 @@ static void t2_release(struct drm_device *dev, void *res)
 
 	kvfree(t2->enc);
 	kvfree(t2->snap);
+	kvfree(t2->last);
 	kvfree(t2->hw[0]);
 	kvfree(t2->hw[1]);
 	drm_edid_free(t2->edid);
@@ -1527,13 +1550,14 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	t2->cur.shown = drmm_kmalloc(dev, T2_CUR_BYTES, GFP_KERNEL);
 	t2->enc = kvmalloc(T2_ENC_MAX, GFP_KERNEL);
 	t2->snap = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
+	t2->last = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
 	t2->hw[0] = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
 	t2->hw[1] = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
 	ret = drmm_add_action_or_reset(dev, t2_release, NULL);
 	if (ret)
 		return ret;
 	if (!t2->bounce || !t2->cur.buf || !t2->cur.img || !t2->cur.shown ||
-	    !t2->enc || !t2->snap || !t2->hw[0] || !t2->hw[1])
+	    !t2->enc || !t2->snap || !t2->last || !t2->hw[0] || !t2->hw[1])
 		return -ENOMEM;
 
 	/* the init sends the (blank) shadow, so it exists from the start */
