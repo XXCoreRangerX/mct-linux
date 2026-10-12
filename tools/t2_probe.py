@@ -6,8 +6,10 @@
 Tests features found by static analysis of the vendor drivers
 (captures/t2-research/binary-analysis.md) that no captured traffic uses:
 large payload transfers, raw 0x11 rects, hardware upscaling, RGB565,
-0x13 with separate source/target addresses, YUV 4:2:2 RLE. Steps, in order
-of risk, each one skippable:
+0x13 with separate source/target addresses, YUV 4:2:2 RLE. Steps s-w test
+findings from other vendors' T2 drivers (captures/t2-research/
+other-t2-drivers.md: the j5create macOS driver MCTTriggerDriver, and
+rhgndf/trigger2). Steps, each one skippable:
 
   a  control: 0x13 RGB24 RLE rect, header exactly as Windows sends it
   b  full frame 0x13 with the payload in 512 KiB transfers (Windows URB size)
@@ -42,6 +44,24 @@ of risk, each one skippable:
      check and one settled read of all 58; prints which registers/bits changed
      and when, and the read latencies (a read blocked while the chip is busy
      is a signal as well), then flips to B for a PASS/FAIL look
+  s  16 MiB VRAM: a 0x13 box with the RLD staging address 0xD37000 (the Mac
+     driver's), s2 a 1:1 0x13 decoded at 0xE00000 into B, s3 one decoded at
+     0x800000 + an empty spot of B (an 8 MiB VRAM would wrap and draw there)
+  t  power states from the Mac driver while B is shown, registers read and
+     logged before and after each: t1 monitor off (fb60=00 fcb0=04 fcb0=20),
+     t1b its on sequence (fcb0=04 fcb0=09), t1c fb60 back, t2 display sleep
+     (fc4d=80 fc4f=80 fc6f=04), t2b those three back; afterwards (also on
+     failure or quit) every register gets the value read at the start
+  u  cursor: shape 1 at VRAM 0 and shape 2 at 0x4000 (0x12), u1 fe30-33 =
+     0x4000 >> 2, u2 back to the start values, u3-u5 the Mac driver's edge
+     clipping (fe44/fe45 with fe36 = 4f/47) at the right, bottom and corner,
+     u6 cursor registers back to the start values and both slots zeroed
+  v  flip with two EP2 0x16 lists (16 fb 01 65 SEL; 16 fc 06 b4 11 b1 b2 b3
+     b4 15 b4 11, rhgndf/trigger2) instead of 0x15: v1 to A, v2 back to B
+  w  EP2 timeout: read MC8032 register 4 (0x91), w1 set it to 0x1000 (0x90,
+     as Windows) and send a 0x13 with half its payload, wait --w-wait-s for
+     the fc01 read: an answer = the chip ended it by itself, none = padding
+     recovery; w2 sets the init's 0x61a80 back and draws a normal box
 
 There is no step o (0x13 RLE of the 12-bit YUV format): the legacy RLE
 builder only encodes 24/32-bit (mode 5) and YUY2 (mode 6) and returns
@@ -72,6 +92,13 @@ normal init (also run by every recovery) loads the zeros again; step q
 loads three more tables into it. Step r only adds register reads (EP3 0x05)
 to commands of the kind the driver sends; a read gets no reply only when
 the EP2 parser waits for payload bytes, which then goes to the recovery.
+Steps s-w print their own risk note; t, u and w restore what they change
+(registers read at the start, cursor slots zeroed, the init's EP2 timeout),
+also when a check fails or you quit, and re-run the init if a register does
+not read back. Never sent, checked before every command and in the
+self-test: the I2C writes 0x1a / 0x1c (0x1c = the bus with the ID ROM),
+EP3 mode setup (0x14, 0x16, 0x22), writes to DVO/HDMI (fb96), the I2C
+masters (fce0-fcef), mode timing (fcc4-fccf) and the PLL (fcf3-fcf7).
 
 Needs the tablet unbound from mct (the tool refuses otherwise and prints the
 commands), pyusb and access to the device node (the NixOS module's uaccess
@@ -169,9 +196,29 @@ def flip_bytes(buf):
                   0xfc, 0xb3, (a >> 16) & 0xff, 0xfc, 0xb4, 0x15, 0xfc, 0xb4, 0x11])
 
 
-def describe(hdr):
-    """One line with the fields of a 0x11/0x13/0x15 header."""
+def describe(hdr, ep=None):
+    """One line with the fields of a command (EP2 header, EP3 command, EP4 list)."""
     op = hdr[0]
+    if ep == 4:
+        return (f"0x{op:02x} EP4 list, bank {'fe' if op == 0x05 else f'{op:#04x}'}: "
+                + " ".join(f"{r:02x}={v:02x}" for r, v in zip(hdr[2::2], hdr[3::2])))
+    if op == 0x02 and len(hdr) == 6:
+        return f"0x02 register write {hdr[3]:02x}{hdr[4]:02x} = {hdr[5]:02x}"
+    if op == 0x90 and len(hdr) >= 4:
+        n = hdr[2] | hdr[3] << 8
+        v = int.from_bytes(hdr[4:4 + n], "big")
+        name = " (REG8032_EP2_TIMEOUT)" if hdr[1] == FW_REG_EP2_TIMEOUT else ""
+        return f"0x90 MC8032 register {hdr[1]}{name} = {v:#010x} ({n} B, big-endian)"
+    if op == 0x91 and len(hdr) == 4:
+        return f"0x91 read MC8032 register {hdr[1]}, {hdr[2] | hdr[3] << 8} B"
+    if op == 0x12 and len(hdr) == 14:
+        a = struct.unpack_from("<I", hdr, 1)[0]
+        return (f"0x12 addr {a:#08x}  raw {int.from_bytes(hdr[5:8], 'little')}  comp "
+                f"{int.from_bytes(hdr[8:11], 'little')}  esc {hdr[11]:02x} mode {hdr[12]:02x} "
+                f"flags {hdr[13]:02x}")
+    if op == 0x16 and len(hdr) >= 3 and len(hdr) == 3 + 2 * hdr[2]:
+        return (f"0x16 register list, bank {hdr[1]:02x}: "
+                + " ".join(f"{hdr[1]:02x}{r:02x}={v:02x}" for r, v in zip(hdr[3::2], hdr[4::2])))
     if op == 0x11 and len(hdr) == 21:
         a, sw, sh, dw, dh, sx, sy, fmt = struct.unpack_from("<IHHHHHHB", hdr, 1)
         ln = int.from_bytes(hdr[18:21], "little")
@@ -732,10 +779,12 @@ def cmd_lut(name, lut):
 
 class Check:
     """A sub-check run while buffer B is shown: send cmds, ask PASS/FAIL.
-    restores = the cmds put the table back (the step's restore is then done)."""
+    restores = the cmds put the table/registers back (the step's restore is
+    then done)."""
 
-    def __init__(self, sid, cmds, expect, restores=False):
+    def __init__(self, sid, cmds, expect, restores=False, stop_on_fail=False):
         self.sid, self.cmds, self.expect, self.restores = sid, cmds, expect, restores
+        self.stop_on_fail = stop_on_fail    # n: skip the remaining checks, re-init at the end
 
 
 def step_q(opt):
@@ -932,6 +981,485 @@ def watch_summary(runs, baseline, base_lat):
     return lines
 
 
+# ---------------------------------------------------------------------------
+# steps s-w: findings from other vendors' T2 drivers
+# (captures/t2-research/other-t2-drivers.md; sources in third_party/t2-sources/:
+# the j5create macOS driver "MCTTriggerDriver" 3.3, Ghidra output
+# j5create_mac_10.9/analysis/MCTTriggerDriver.decomp.c, and rhgndf/trigger2)
+
+class Refused(Quit):
+    """A command this tool must never send (see check_safe)."""
+
+
+# Never sent by this tool, on any endpoint (checked before every send and in
+# the self-test): the I2C writes. 0x1a writes I2C bus 0 (the Mac driver uses
+# it only for an HDMI transmitter at 0x72, FUN_100043544); 0x1c is by
+# analogy bus 1, where the ID ROM EEPROM (0xae) lives.
+REFUSED_OPS = {0x1a: "I2C write, bus 0 (HDMI transmitter TPI)",
+               0x1c: "I2C write, bus 1 (the bus with the ID ROM EEPROM)"}
+# EP3 opcodes that set up modes / outputs (non-panel modes, display enable)
+REFUSED_EP3 = {0x14: "display enable / window setup", 0x16: "timing packet (mode setup)",
+               0x22: "mode packet (mode setup)"}
+# registers never written: DVO/HDMI output, both I2C masters, mode timing, PLL
+REFUSED_REGS = ({0xfb96: "DVO mode (fb96)"}
+                | {a: "I2C master registers" for a in range(0xfce0, 0xfcf0)}
+                | {a: "mode timing (fcc4-fccf)" for a in range(0xfcc4, 0xfcd0)}
+                | {a: "pixel clock PLL (fcf3-fcf7)" for a in range(0xfcf3, 0xfcf8)})
+EP3_ALLOWED = {0x02, 0x0a, 0x90, 0x91}
+EP2_ALLOWED = {0x11, 0x12, 0x13, 0x15, 0x16}
+FLIP_REGS = {(0xfb, 0x65), (0xfc, 0xb1), (0xfc, 0xb2), (0xfc, 0xb3), (0xfc, 0xb4)}
+CURSOR_LO = set(range(0x30, 0x3c)) | {0x44, 0x45}      # fe30-fe3b, fe44, fe45 (EP4 bank 05)
+FW_REG_EP2_TIMEOUT = 4                                  # REG8032_EP2_TIMEOUT (Mac driver)
+TIMEOUT_WIN, TIMEOUT_INIT = 0x1000, 0x61a80             # Windows' short value / the init's
+
+
+def check_safe(cmd):
+    """Raise Refused if a command is on the refused list or outside what the
+    steps are meant to send."""
+    h, ep = cmd.header, cmd.ep
+    op = h[0]
+
+    def no(why):
+        raise Refused(f"refused to send '{cmd.name}' (EP{ep}, {h[:16].hex(' ')}): {why}")
+    if op in REFUSED_OPS:
+        no(REFUSED_OPS[op])
+    if ep == 3:
+        if op in REFUSED_EP3:
+            no(REFUSED_EP3[op])
+        if op not in EP3_ALLOWED:
+            no(f"EP3 opcode {op:#04x} is not used by any step")
+        if op == 0x02:
+            reg = h[3] << 8 | h[4]
+            if len(h) != 6 or h[1:3] != b"\x00\x01":
+                no("malformed register write")
+            if reg in REFUSED_REGS:
+                no(REFUSED_REGS[reg])
+        elif op == 0x90:
+            if (len(h) != 8 or h[1] != FW_REG_EP2_TIMEOUT or h[2:4] != b"\x04\x00"
+                    or int.from_bytes(h[4:], "big") not in (TIMEOUT_WIN, TIMEOUT_INIT)):
+                no("0x90 only for REG8032_EP2_TIMEOUT with Windows' values")
+        elif op == 0x91:
+            if len(h) != 4 or h[1] not in (0, FW_REG_EP2_TIMEOUT) or not 0 < (h[2] | h[3] << 8) <= 4:
+                no("0x91 only reads MC8032 registers 0 and 4, at most 4 bytes")
+    elif ep == 4:
+        if op != 0x05 or h[1] != len(h) - 2 or len(h) % 2:
+            no("EP4 only as a bank fe (05) register list")
+        if not set(h[2::2]) <= CURSOR_LO:
+            no("EP4 list touches registers other than the cursor's")
+    elif ep == 2:
+        if op not in EP2_ALLOWED:
+            no(f"EP2 opcode {op:#04x} is not used by any step")
+        if op == 0x15 and not {(h[k], h[k + 1]) for k in range(2, len(h), 3)} <= FLIP_REGS:
+            no("0x15 writing registers other than the flip's")
+        if op == 0x16 and (len(h) != 3 + 2 * h[2]
+                           or not {(h[1], r) for r in h[3::2]} <= FLIP_REGS):
+            no("0x16 writing registers other than the flip's")
+    else:
+        no("unknown endpoint")
+
+
+def cmd_wreg(name, addr, val):
+    """EP3 single register write 02 00 01 <hi> <lo> <val> (t2dev.T2.wreg)."""
+    return Cmd(name, bytes((0x02, 0x00, 0x01, addr >> 8, addr & 0xFF, val)), ep=3)
+
+
+class RegRead:
+    """EP3 register reads (05 lo hi each), printed and logged; save=True keeps
+    the values for a later RegRestore (the first read of a step wins)."""
+    ep = 3
+
+    def __init__(self, name, regs, save=False):
+        self.name, self.regs, self.save = name, list(regs), save
+
+    def preview(self, timeout_ms):
+        return [f"  EP3  {self.name}", f"       read {' '.join(f'{a:04x}' for a in self.regs)} "
+                f"(05 lo hi, reply 1 B each, timeout {timeout_ms} ms)"
+                + ("; values kept for the restore" if self.save else "")]
+
+
+class RegRestore:
+    """Write back the values a RegRead(save=True) kept, then read back.
+    EP3 single writes in the given order (a register with `via` values gets
+    those first, e.g. fcb0: 04 then the saved value, the Mac driver's on
+    sequence; only when it differs from the current value), or EP4 bank fe
+    lists (`ep4_groups`, each written whole). reinit: re-run the init if the
+    read-back still differs."""
+    ep = 3
+
+    def __init__(self, name, regs=(), via=None, ep4_groups=None, reinit=False):
+        self.name, self.via, self.ep4_groups, self.reinit = name, via or {}, ep4_groups, reinit
+        self.regs = [a for g in ep4_groups for a in g] if ep4_groups else list(regs)
+
+    def writes(self, saved, cur):
+        """-> the Cmds to send for these saved/current values."""
+        if self.ep4_groups:
+            out = []
+            for g in self.ep4_groups:
+                pairs = [(a & 0xFF, saved[a]) for a in g if saved.get(a) is not None]
+                if pairs:
+                    out.append(Cmd(f"restore {' '.join(f'{a:04x}' for a in g)} (EP4 list)",
+                                   ep4_list(pairs), ep=4))
+            return out
+        out = []
+        for a in self.regs:
+            s = saved.get(a)
+            if s is None:
+                continue
+            if a in self.via and cur.get(a) == s:
+                continue
+            for v in tuple(self.via.get(a, ())) + (s,):
+                out.append(cmd_wreg(f"restore {a:04x} = {v:02x}", a, v))
+        return out
+
+    def preview(self, timeout_ms):
+        how = ("EP4 lists " + " / ".join("05 " + " ".join(f"{a & 0xFF:02x} <v>" for a in g)
+                                         for g in self.ep4_groups) if self.ep4_groups else
+               "EP3 02 00 01 <reg> <value> each, in this order: " + ", ".join(
+                   f"{a:04x}" + (f" (if it differs: " + " ".join(f"{v:02x}" for v in self.via[a])
+                                 + " first)" if a in self.via else "") for a in self.regs))
+        return [f"  EP3  {self.name}",
+                f"       read {' '.join(f'{a:04x}' for a in self.regs)}, write back the values "
+                f"read at the start: {how}; health check after each write; read back"
+                + ("; re-run the init if they still differ" if self.reinit else "")]
+
+
+class FwRead:
+    """EP3 0x91 <reg> <len16>: read an MC8032 ("firmware") register, the Mac
+    driver's T2_readFirmware (FUN_10004280d; it reads register 0, 2 bytes, as
+    Windows' 91 00 0200 does). The value is printed big-endian (0x90 writes
+    are big-endian, FUN_1000427f0). Then the health check."""
+    ep = 3
+
+    def __init__(self, name, reg, n, key=None, expect_key=None, reinit=False):
+        self.name, self.reg, self.n = name, reg, n
+        self.key, self.expect_key, self.reinit = key, expect_key, reinit
+        self.header = bytes((0x91, reg, n & 0xFF, n >> 8))
+
+    def preview(self, timeout_ms):
+        return [f"  EP3  {self.name}",
+                f"       command 4 B: {hexs(self.header)}  -> expect a {self.n} B reply "
+                f"(timeout 1000 ms); no reply = only logged, then the health check"
+                + (f"; re-run the init if it differs from the value read at the start"
+                   if self.reinit else ""),
+                f"  EP3  health check: {hexs(READ_FC01)} -> expect {FC01_OK:02x} within {timeout_ms} ms"]
+
+
+class ReinitIfFailed:
+    """Re-run the normal init if a check of the step was answered n (or the
+    flip back to A was not seen)."""
+    ep = 3
+    name = "re-run the init if a check failed"
+
+    def preview(self, timeout_ms):
+        return [f"  ---  {self.name} (or the flip back was not seen)"]
+
+
+class Truncated(Cmd):
+    """An EP2 command sent with only the first `cut` payload bytes; then the
+    fc01 read is queued at once and its reply awaited for up to wait_s."""
+
+    def __init__(self, name, header, payload, cut, wait_s):
+        super().__init__(name, header, payload)
+        self.cut, self.wait_s = cut, wait_s
+
+
+def ep4_list(pairs, bank=0x05):
+    """EP4 short register list: bank (05 = fe), 2*n, (reg val)*n
+    (Mac T2_writeRegistersShortEP4, FUN_100043231)."""
+    return bytes([bank, 2 * len(pairs)]) + bytes(b for p in pairs for b in p)
+
+
+def hdr12(addr):
+    """0x12 DirRldCmd for one 64x64x4 cursor image, stored uncompressed: the
+    Mac driver's FUN_1000439b0 (12 <addr32> 004000 004000 00 01 25); at
+    address 0 it equals Windows' captured header."""
+    return (b"\x12" + struct.pack("<I", addr) + (0x4000).to_bytes(3, "little") * 2
+            + bytes((0x00, 0x01, 0x25)))
+
+
+def cursor_addr_list(addr):
+    """t2_cursor_set_address (FUN_1000206ce): fe30-fe33 = address >> 2."""
+    assert addr & 3 == 0, "cursor address must be 4-byte aligned (Mac driver assert)"
+    v = addr >> 2
+    return ep4_list([(0x30, v & 0xFF), (0x31, (v >> 8) & 0xFF), (0x32, (v >> 16) & 0xFF),
+                     (0x33, (v >> 24) & 0xFF)])
+
+
+def cursor_full_list(x, y):
+    """Windows' first-time cursor list: size 64x64, position, no clip, shown."""
+    return ep4_list([(0x34, 0x40), (0x35, 0x40), (0x38, x & 0xFF), (0x39, x >> 8),
+                     (0x3a, y & 0xFF), (0x3b, y >> 8), (0x44, 0), (0x45, 0), (0x36, 0x07)])
+
+
+def mac_cursor_pos(x, y):
+    """The Mac driver's cursor position list (FUN_1000207dc), device
+    coordinates, may be negative: x, y clamped to >= 0; fe44 = -x if x < 0,
+    fe45 = -y if y < 0; fe36 = 0x4f if x <= 0, else 0x47 if y <= 0, else 0x07."""
+    cx = (-x) & 0xFF if x < 0 else 0
+    cy = (-y) & 0xFF if y < 0 else 0
+    st = 0x4f if x <= 0 else (0x47 if y <= 0 else 0x07)
+    xr, yr = max(x, 0), max(y, 0)
+    return ep4_list([(0x38, xr & 0xFF), (0x39, xr >> 8 & 0xFF), (0x3a, yr & 0xFF),
+                     (0x3b, yr >> 8 & 0xFF), (0x44, cx), (0x45, cy), (0x36, st)])
+
+
+def cursor_bytes(argb):
+    """64x64 (a, r, g, b) pixels in visible orientation -> 16384 B upload:
+    device orientation (pixel order reversed), bytes A, B, G, R per pixel."""
+    assert len(argb) == 64 * 64
+    return b"".join(bytes((a, b, g, r)) for a, r, g, b in reversed(argb))
+
+
+CUR_A = 0xFE                # Windows' alpha for opaque cursor pixels
+CUR1 = cursor_bytes([(CUR_A, *quads(64, 64)[i:i + 3]) for i in range(0, 64 * 64 * 3, 3)])
+CUR2 = cursor_bytes([(CUR_A, 0, 0xFF, 0xFF) if abs(x - y) < 4 or abs(x + y - 63) < 4
+                     else (0, 0, 0, 0) for y in range(64) for x in range(64)])
+CUR2_ADDR = 0x4000          # free between cursor 0 (0x0000-0x3fff) and framebuffer A (0xc000)
+
+
+def hdr16(bank, pairs):
+    """EP2 0x16 in-band register list, one bank: 16 <bank> <n> (reg val)*n,
+    bank = the register's high byte (rhgndf/trigger2, trigger2_drm.c
+    trigger2_bank_locked: 16 fc 06 b4 .. ; trigger2_prime_channels_locked:
+    16 fb 01 65 10)."""
+    return bytes([0x16, bank, len(pairs)]) + bytes(b for p in pairs for b in p)
+
+
+def flip16_cmds(buf):
+    """The 0x15 flip as two 0x16 lists, same registers, values and order:
+    fb65 = SEL, then fcb4 11, fcb1-b3 = address >> 2, fcb4 15, fcb4 11."""
+    a = buf >> 2
+    sel = 0x10 if buf == FB_A else 0x20
+    w = "A" if buf == FB_A else "B"
+    return [Cmd(f"0x16 flip to {w}, 1/2: fb65 = {sel:02x}", hdr16(0xfb, [(0x65, sel)])),
+            Cmd(f"0x16 flip to {w}, 2/2: fcb4 11, fcb1-b3 = {a:06x}, fcb4 15, fcb4 11",
+                hdr16(0xfc, [(0xb4, 0x11), (0xb1, a & 0xFF), (0xb2, (a >> 8) & 0xFF),
+                             (0xb3, (a >> 16) & 0xFF), (0xb4, 0x15), (0xb4, 0x11)]))]
+
+
+def cmd_90(name, val):
+    """0x90 <reg> <len16> <data>: write MC8032 register 4 = REG8032_EP2_TIMEOUT,
+    u32 big-endian (Mac FUN_100042a30 + FUN_1000427f0, caller FUN_10002a680)."""
+    return Cmd(name, bytes((0x90, FW_REG_EP2_TIMEOUT, 4, 0)) + val.to_bytes(4, "big"), ep=3)
+
+
+# --- step s: 16 MiB of VRAM
+
+S_RLD = 0xD37000            # the Mac driver's RLD staging address (FUN_1000437c1)
+S_SRC = 0xE00000            # a 0x13 source high in the third 4 MiB
+S_ALIAS = 0x800000          # an 8 MiB VRAM would wrap this to 0
+S_LOW_VY, S_HIGH_VY = 400, 140
+
+
+def step_s(opt):
+    img = quads(BOX_W, BOX_H)
+    pay = rle_rect(rot180(img), BOX_W, BOX_H)
+    a = fb_addr(FB_B, TEST_VX, BOX_VY, BOX_W, BOX_H)
+    d2 = fb_addr(FB_B, TEST_VX, S_LOW_VY, BOX_W, BOX_H)
+    s3 = S_ALIAS + fb_addr(FB_B, REF_VX, S_LOW_VY, BOX_W, BOX_H)
+    d3 = fb_addr(FB_B, TEST_VX, S_HIGH_VY, BOX_W, BOX_H)
+    top = max(S_RLD + len(pay), S_SRC + BOX_H * STRIDE, s3 + BOX_H * STRIDE)
+    assert top <= 0x1000000 and RLD_BUF + len(pay) <= SCRATCH
+    raw = BOX_W * BOX_H * 3
+    checks = [
+        Check("s2", [Cmd(f"s2: 0x13 decoded at {S_SRC:#x}, 1:1 into B below the right box",
+                         hdr13(S_SRC, d2, BOX_W, BOX_H, BOX_W, BOX_H, 0, raw, len(pay)), pay)],
+              "PASS = a third box with the same 4 colours appears below the right box "
+              "(lower right), everything else unchanged. FAIL = no new box, garbage, or a "
+              "box anywhere else (note where)"),
+        Check("s3", [Cmd(f"s3: 0x13 decoded at {s3:#x} (= {S_ALIAS:#x} + the place below the "
+                         "left box), 1:1 into B above the right box",
+                         hdr13(s3, d3, BOX_W, BOX_H, BOX_W, BOX_H, 0, raw, len(pay)), pay)],
+              "PASS = a fourth box appears above the right box (upper right) AND the place "
+              "below the LEFT box stays plain dark green. FAIL = anything shows up below the "
+              "left box (then the VRAM wraps at 8 MiB: 0x800000 is address 0 again, and the "
+              "0xD37000 staging of the first box really went to 0x537000), or no box above "
+              "the right one"),
+    ]
+    return (prep(img) + [Cmd(f"test box: 0x13 in place, RLD staging at {S_RLD:#x} (Mac "
+                             "driver) instead of 0x390000",
+                             hdr13(a, a, BOX_W, BOX_H, BOX_W, BOX_H, 0, raw, len(pay),
+                                   rld=S_RLD), pay)],
+            f"{PASS_SAME}, and the chip answered after the command (the health line). "
+            "FAIL = right box missing, wrong or garbage", [], checks)
+
+
+# --- step t: power states from the Mac driver (register tables dumped from
+# the binary: monitorPowerOnOff FUN_100030350 DAT_10008cb98 / DAT_10008cb90,
+# t2_displaySleep FUN_100036c50 DAT_10008f1ea)
+
+MAC_MON_OFF = [(0xfb60, 0x00), (0xfcb0, 0x04), (0xfcb0, 0x20)]
+MAC_MON_ON = [(0xfcb0, 0x04), (0xfcb0, 0x09)]
+MAC_SLEEP = [(0xfc4d, 0x80), (0xfc4f, 0x80), (0xfc6f, 0x04)]
+T_REGS = [0xfb60, 0xfcb0, 0xfc4b, 0xfc4d, 0xfc4f, 0xfc6f, 0xfcf6]   # read and logged
+T_RESTORE = [0xfc6f, 0xfc4f, 0xfc4d, 0xfcb0, 0xfb60]               # written back, this order
+T_PIC = f"two equal boxes on dark green ({QUADS_TEXT})"
+
+
+def t_writes(sid, what, table):
+    return [cmd_wreg(f"{sid}: {what}: {r:04x} = {v:02x}", r, v) for r, v in table]
+
+
+def step_t(opt):
+    img = quads(BOX_W, BOX_H)
+    cmds = prep(img) + [cmd_rle("test box (known-good 0x13)", FB_B, TEST_VX, BOX_VY, BOX_W,
+                                BOX_H, img),
+                        RegRead("t: power registers at the start (kept for the restore)",
+                                T_REGS, save=True)]
+    restore = [RegRestore("restore fc6f fc4f fc4d fcb0 fb60 to the values read at the start",
+                          T_RESTORE, via={0xfcb0: (0x04,)}, reinit=True), ReinitIfFailed()]
+    checks = [
+        Check("t1", [RegRead("t1: before", T_REGS)]
+              + t_writes("t1", "monitor off (Mac)", MAC_MON_OFF) + [RegRead("t1: after", T_REGS)],
+              "PASS = the picture goes off (black screen or backlight off). Write in the note "
+              "exactly what you see: black with the backlight on, backlight off, a 'no signal' "
+              "message from the panel, a frozen picture. FAIL = no change at all"),
+        Check("t1b", [RegRead("t1b: before", T_REGS)]
+              + t_writes("t1b", "monitor on (Mac)", MAC_MON_ON) + [RegRead("t1b: after", T_REGS)],
+              f"PASS = the same picture back: {T_PIC}. FAIL = still off, or anything else "
+              "(the remaining checks are then skipped and the init re-run)", stop_on_fail=True),
+        Check("t1c", [RegRestore("t1c: fb60 back to the value read at the start", [0xfb60]),
+                      RegRead("t1c: after", T_REGS)],
+              "PASS = the picture is still shown, unchanged. FAIL = it changed or went off",
+              stop_on_fail=True),
+        Check("t2", [RegRead("t2: before", T_REGS)]
+              + t_writes("t2", "display sleep (Mac)", MAC_SLEEP) + [RegRead("t2: after", T_REGS)],
+              "PASS = the picture goes off. Note what you see (black, backlight off, 'no "
+              "signal' message, frozen). FAIL = no change at all"),
+        Check("t2b", [RegRestore("t2b: fc6f, fc4f, fc4d back to the values read at the start",
+                                 [0xfc6f, 0xfc4f, 0xfc4d]), RegRead("t2b: after", T_REGS)],
+              f"PASS = the same picture back: {T_PIC}. FAIL = still off, or anything else",
+              stop_on_fail=True),
+    ]
+    return cmds, f"PASS = {T_PIC} (the picture for the power tests)", restore, checks
+
+
+# --- step u: cursor shape by address, edge clipping
+
+CURSOR_ADDR_REGS = [0xfe30, 0xfe31, 0xfe32, 0xfe33]
+CURSOR_POS_REGS = [0xfe34, 0xfe35, 0xfe38, 0xfe39, 0xfe3a, 0xfe3b, 0xfe44, 0xfe45, 0xfe36]
+CURSOR_REGS = CURSOR_ADDR_REGS + CURSOR_POS_REGS
+U_VX, U_VY = 480, 120                                   # cursor, visible top-left
+U_DX, U_DY = W - U_VX - 64, H - U_VY - 64               # device coordinates (480, 416)
+U_CLIP = 24
+CUR1_TEXT = ("a 64x64 copy of the left box: red top left, green top right, blue bottom "
+             "left, yellow bottom right, white border")
+
+
+def cursor_restore_items(sid):
+    return [RegRestore(f"{sid}: cursor registers back to the values read at the start",
+                       ep4_groups=[CURSOR_ADDR_REGS, CURSOR_POS_REGS]),
+            Cmd(f"{sid}: zero cursor slot 0 (VRAM 0, transparent)", hdr12(0), bytes(16384), 16384),
+            Cmd(f"{sid}: zero cursor slot 2 (VRAM {CUR2_ADDR:#x}, transparent)", hdr12(CUR2_ADDR),
+                bytes(16384), 16384),
+            RegRead(f"{sid}: cursor registers after the restore", CURSOR_REGS)]
+
+
+def step_u(opt):
+    img = quads(BOX_W, BOX_H)
+    cmds = prep(img) + [
+        RegRead("u: cursor registers at the start (kept for the restore)", CURSOR_REGS, save=True),
+        Cmd("upload cursor shape 1 (4-colour square) to VRAM 0 (0x12, as Windows)", hdr12(0),
+            CUR1, 16384),
+        Cmd(f"upload cursor shape 2 (cyan X) to VRAM {CUR2_ADDR:#x} (0x12, Mac layout)",
+            hdr12(CUR2_ADDR), CUR2, 16384),
+        Cmd("cursor address 0 (fe30-33 = 00 00 00 00, as the init writes it)",
+            cursor_addr_list(0), ep=4),
+        Cmd(f"cursor at device ({U_DX},{U_DY}) = visible ({U_VX},{U_VY}), 64x64, shown "
+            "(Windows' first-time list)", cursor_full_list(U_DX, U_DY), ep=4)]
+    edge = ("{what}. FAIL = the whole square shown (no clipping), the wrong part cut off "
+            "(note which: e.g. the white border on the cut side still visible), the cursor "
+            "gone, or garbage")
+    checks = [
+        Check("u1", [Cmd(f"u1: cursor address {CUR2_ADDR:#x} (fe30-33 = address >> 2)",
+                         cursor_addr_list(CUR2_ADDR), ep=4),
+                     RegRead("u1: fe30-33 after", CURSOR_ADDR_REGS)],
+              "PASS = the cursor changes to a cyan X on a transparent background (dark green "
+              "shows around the X) at the same place. FAIL = unchanged, gone, or garbage"),
+        Check("u2", [RegRestore("u2: fe30-33 back to the values read at the start",
+                                ep4_groups=[CURSOR_ADDR_REGS]),
+                     RegRead("u2: fe30-33 after", CURSOR_ADDR_REGS)],
+              f"PASS = the first cursor is back: {CUR1_TEXT} (if the start values printed "
+              "above were 00 00 00 00). FAIL = anything else"),
+        Check("u3", [Cmd(f"u3: Mac position x = -{U_CLIP}, y = {U_DY}: x 0, fe44 = {U_CLIP}, "
+                         "fe36 = 4f", mac_cursor_pos(-U_CLIP, U_DY), ep=4)],
+              edge.format(what=f"PASS = the cursor at the visible RIGHT edge of the screen at "
+                          f"the same height, its right {U_CLIP} columns cut off: red and blue "
+                          "whole, then 8 columns of green/yellow, no white border on the "
+                          "right side")),
+        Check("u4", [Cmd(f"u4: Mac position x = {U_DX}, y = -{U_CLIP}: y 0, fe45 = {U_CLIP}, "
+                         "fe36 = 47", mac_cursor_pos(U_DX, -U_CLIP), ep=4)],
+              edge.format(what=f"PASS = the cursor at the visible BOTTOM edge, at its first "
+                          f"x position, its bottom {U_CLIP} rows cut off: red and green whole, "
+                          "then 8 rows of blue/yellow, no white border at the bottom")),
+        Check("u5", [Cmd(f"u5: Mac position x = -{U_CLIP}, y = -{U_CLIP}: fe44 = fe45 = "
+                         f"{U_CLIP}, fe36 = 4f", mac_cursor_pos(-U_CLIP, -U_CLIP), ep=4)],
+              edge.format(what=f"PASS = the cursor in the visible bottom-right corner, only "
+                          "its top-left 40x40 shown: red whole, 8 columns of green on its "
+                          "right, 8 rows of blue below, an 8x8 yellow corner; no white border "
+                          "on the right or bottom")),
+        Check("u6", cursor_restore_items("u6"),
+              "PASS = the cursor is gone and the rest of the picture is unchanged. FAIL = a "
+              "cursor or anything else still visible", restores=True),
+    ]
+    return (cmds, f"PASS = the boxes on dark green and above them (centre) a cursor: "
+            f"{CUR1_TEXT}. FAIL = no cursor, wrong colours, or garbage",
+            cursor_restore_items("restore"), checks)
+
+
+# --- step v: the flip as EP2 0x16 lists
+
+def step_v(opt):
+    img = quads(BOX_W, BOX_H)
+    cmds = prep(img) + [cmd_rle("test box (known-good 0x13)", FB_B, TEST_VX, BOX_VY,
+                                BOX_W, BOX_H, img)]
+    mark = cmd_rle("yellow box into buffer A (hidden now) on the left", FB_A, REF_VX, BOX_VY,
+                   BOX_W, BOX_H, solid(BOX_W, BOX_H, YELLOW))
+    checks = [
+        Check("v1", [mark] + flip16_cmds(FB_A),
+              "PASS = buffer A is shown: dark blue with ONE yellow box on the left (the 0x16 "
+              "flip happened). FAIL = still the two boxes on green (no flip), a mix, garbage "
+              "or a black screen"),
+        Check("v2", flip16_cmds(FB_B) + [cmd_full("repaint buffer A plain dark blue (hidden "
+                                                  "again)", FB_A, BG_A)],
+              f"PASS = {T_PIC} again. FAIL = anything else", restores=True),
+    ]
+    return (cmds, f"PASS = {T_PIC} (shown with the normal 0x15 flip)",
+            [cmd_full("repaint buffer A plain dark blue", FB_A, BG_A), cmd_flip(FB_A)], checks)
+
+
+# --- step w: the EP2 timeout (REG8032_EP2_TIMEOUT)
+
+def step_w(opt):
+    img = quads(BOX_W, BOX_H)
+    a = fb_addr(FB_B, TEST_VX, BOX_VY, BOX_W, BOX_H)
+    pay = rle_rect(rot180(img), BOX_W, BOX_H)
+    cut = len(pay) // 2
+    fw = opt.w_fw_read == "yes"
+    rd = (lambda *args, **kw: [FwRead(*args, **kw)]) if fw else (lambda *args, **kw: [])
+    cmds = prep(img) + rd("w: MC8032 register 4 (EP2 timeout) at the start", 4, 4, key="fw4")
+    restore = ([cmd_90(f"restore the EP2 timeout to the init's {TIMEOUT_INIT:#x}", TIMEOUT_INIT)]
+               + rd("read MC8032 register 4 back", 4, 4, expect_key="fw4", reinit=True))
+    checks = [
+        Check("w1", [cmd_90(f"w1: EP2 timeout = {TIMEOUT_WIN:#x}, as Windows sends it around "
+                            "its 32x1 fill", TIMEOUT_WIN)]
+              + rd("w1: MC8032 register 4 after the write", 4, 4)
+              + [Truncated(f"w1: test box 0x13, only {cut} of {len(pay)} payload bytes sent",
+                           hdr13(a, a, BOX_W, BOX_H, BOX_W, BOX_H, 0, BOX_W * BOX_H * 3, len(pay)),
+                           pay, cut, opt.w_wait_s)],
+              "PASS = no garbage anywhere: dark green, the left box, and on the right "
+              "nothing, part of a box or a whole box (say which in the note); the chip ended "
+              "the command by itself (the time is printed above). FAIL = garbage, stripes or "
+              "other changes"),
+        Check("w2", restore + [cmd_rle("w2: test box again, complete (known-good 0x13)", FB_B,
+                                       TEST_VX, BOX_VY, BOX_W, BOX_H, img)],
+              f"PASS = {T_PIC}: the parser is in step after the truncated command. FAIL = "
+              "anything else", restores=True),
+    ]
+    return (cmds, "PASS = dark green with the reference box on the left, nothing on the right",
+            restore, checks)
+
+
 STEPS = [
     ("a", "control: 0x13 RGB24 RLE rect as Windows sends it", "low", step_a),
     ("b", "full frame, payload in 512 KiB transfers", "low", step_b),
@@ -954,7 +1482,52 @@ STEPS = [
      "medium", step_q),
     ("r", "scaler completion signal: register reads right after a full-screen 2x 0x13",
      "low-medium", step_r),
+    ("s", "16 MiB VRAM: 0x13 staged at 0xD37000 (Mac driver), sources at 0xE00000 and "
+     "0x800000+", "low", step_s),
+    ("t", "power states from the Mac driver: monitor off/on (fb60, fcb0), display sleep "
+     "(fc4d, fc4f, fc6f); registers restored afterwards", "low", step_t),
+    ("u", "cursor: second shape at VRAM 0x4000 via fe30-33, Mac edge clipping (fe44/fe45, "
+     "fe36 47/4f); registers restored afterwards", "low", step_u),
+    ("v", "flip with EP2 0x16 register lists (rhgndf/trigger2) instead of 0x15", "low", step_v),
+    ("w", "EP2 timeout 0x1000 (0x90 register 4): does the chip recover from a truncated 0x13 "
+     "by itself? init value restored afterwards", "medium-low", step_w),
 ]
+
+
+# printed at the start of a step, before its commands
+STEP_NOTES = {
+    "s": "The Mac driver stages the RLE stream at 0xD37000 (FUN_1000437c1) and ROM byte 9 "
+         "decodes to 16 MiB. If the VRAM were only 8 MiB, 0xD37000 and 0xE00000 would wrap to "
+         "0x537000 / 0x600000 (free space: nothing visible changes), so s3 decodes at "
+         "0x800000 + an empty spot of the shown buffer: a wrap would draw there. Only VRAM "
+         "writes; the reads after every command show whether the chip still answers.",
+    "t": "Single register writes from the Mac driver's tables (monitorPowerOnOff off: "
+         "fb60=00 fcb0=04 fcb0=20, on: fcb0=04 fcb0=09; t2_displaySleep: fc4d=80 fc4f=80 "
+         "fc6f=04). fb60 was tried before without effect; fcb0 and fc6f bit 2 are new on this "
+         "tablet. The panel may go dark or show its own 'no signal' message: that is expected. "
+         "The values read at the start are written back afterwards, also on failure or quit "
+         "(fcb0 through 04 as the Mac on sequence), and if they do not read back or a check "
+         "fails the normal init runs again. No mode, PLL or timing register is touched.",
+    "u": "Cursor registers only (EP4 bank fe list) and two 16 KiB 0x12 uploads below "
+         "framebuffer A (VRAM 0 and 0x4000; A starts at 0xc000). Afterwards the cursor "
+         "registers get the values read at the start and both slots are zeroed "
+         "(transparent), also on failure or quit.",
+    "v": "The same 7 register writes as the 0x15 flip, as two EP2 0x16 lists (bank fb: fb65; "
+         "bank fc: fcb4/fcb1-b3), the form rhgndf/trigger2 sends. A firmware that does not "
+         "know this form leaves the flip undone or, at worst, waits for bytes (the read after "
+         "the command catches that).",
+    "w": "RISK medium-low. 0x90 04 0400 <u32 BE> writes the firmware's REG8032_EP2_TIMEOUT "
+         "(Mac FUN_10002a680); Windows sends 0x1000 around its 32x1 fill, the init leaves "
+         "0x61a80. The unit is unknown: if 0x1000 is short, the 8051 could also end a NORMAL "
+         "command whose transfers come slower, and then parse the rest of its payload as "
+         "commands (a 0x30 run byte first here, an unknown opcode). So w1 sends only the "
+         "0x90 and the truncated test box under 0x1000, and w2 sets 0x61a80 back before it "
+         "draws again. The truncated 0x13 is the same interrupted-payload state as the "
+         "recovery test (protocol-t2.md): if the chip does not end it by itself, the usual "
+         "zero padding and init follow (up to 45 s; a power cycle only if that fails). "
+         "0x91 04 0400 (T2_readFirmware with register 4) is a read nobody sends: Windows and "
+         "the Mac driver only read register 0 (--w-fw-read no skips it).",
+}
 
 
 def parse_steps(spec):
@@ -1011,7 +1584,7 @@ def print_cmd(cmd, full, timeout_ms):
     else:
         print(f"       command {len(cmd.header)} B in one transfer, sha256 "
               f"{hashlib.sha256(cmd.header).hexdigest()[:16]}: {hexs(cmd.header[:16])} ...")
-    print(f"       {describe(cmd.header)}")
+    print(f"       {describe(cmd.header, cmd.ep)}")
     p = cmd.payload
     if p:
         n = (len(p) + cmd.chunk - 1) // cmd.chunk
@@ -1043,9 +1616,30 @@ def print_sweep(sw, timeout_ms):
         print("         " + " ".join(f"{a:04x}" for a in sw.regs[k:k + 16]))
 
 
+def print_truncated(c, full, timeout_ms):
+    print(f"  EP2  {c.name}")
+    print(f"       header {len(c.header)} B: {hexs(c.header)}")
+    print(f"       {describe(c.header, 2)}")
+    print(f"       payload: only the first {c.cut} of {len(c.payload)} B, in one transfer, "
+          f"sha256 of the part {hashlib.sha256(c.payload[:c.cut]).hexdigest()[:16]}, "
+          f"head {c.payload[:16].hex()}")
+    if full:
+        for k in range(0, c.cut, 64):
+            print(f"         {c.payload[k:min(k + 64, c.cut)].hex()}")
+    print(f"  EP3  at once: {hexs(READ_FC01)} queued, wait up to {c.wait_s:g} s for the reply "
+          "(time logged). Reply = the chip ended the command by itself (PASS); none = it "
+          "still waits: zero-padding recovery and init (FAIL)")
+    print(f"  EP3  then the health check: {hexs(READ_FC01)} -> expect {FC01_OK:02x}")
+
+
 def print_item(c, full, timeout_ms):
     if isinstance(c, Sweep):
         print_sweep(c, timeout_ms)
+    elif isinstance(c, Truncated):
+        print_truncated(c, full, timeout_ms)
+    elif hasattr(c, "preview"):
+        for ln in c.preview(timeout_ms):
+            print(ln)
     else:
         print_cmd(c, full, timeout_ms)
 
@@ -1128,6 +1722,9 @@ class Probe:
         self.baseline = {}              # step r: addr -> values read at rest
         self.base_lat = []              # step r: read times at rest (us)
         self.watch_runs = []            # step r: one dict per watched command
+        self.saved = {}                 # steps t, u, w: values read at the start of the step
+        self.auto = []                  # notes the tool found by itself during a check
+        self.step_failed = False        # a check with stop_on_fail answered n
 
     # --- low level
     def _out(self, ep, data, timeout):
@@ -1173,10 +1770,11 @@ class Probe:
     def send(self, cmd):
         """Send one EP2 command and check the parser. True = in step;
         False = it was stuck and has been recovered (device re-initialised)."""
+        check_safe(cmd)
         if self.dry:
             print_cmd(cmd, self.full_hex, self.timeout_ms)
             return True
-        self.log("CMD", f"{cmd.name}: {describe(cmd.header)}")
+        self.log("CMD", f"{cmd.name}: {describe(cmd.header, cmd.ep)}")
         with HoldCtrlC():
             try:
                 t_start = time.perf_counter_ns()
@@ -1310,7 +1908,161 @@ class Probe:
         return True
 
     def do(self, c):
-        return self.sweep(c) if isinstance(c, Sweep) else self.send(c)
+        if isinstance(c, Sweep):
+            return self.sweep(c)
+        if isinstance(c, Truncated):
+            return self.truncated(c)
+        if isinstance(c, (RegRead, RegRestore, FwRead, ReinitIfFailed)):
+            if isinstance(c, FwRead):
+                check_safe(c)
+            if self.dry:
+                if isinstance(c, RegRestore):       # the writes it can make pass check_safe
+                    for w in c.writes({a: 0 for a in c.regs}, {a: 1 for a in c.regs}):
+                        check_safe(w)
+                print_item(c, self.full_hex, self.timeout_ms)
+                return True
+            return {RegRead: self.reg_read, RegRestore: self.reg_restore,
+                    FwRead: self.fw_read, ReinitIfFailed: self.reinit_if_failed}[type(c)](c)
+        return self.send(c)
+
+    # --- steps t, u, w: register reads and restores
+    def _regs(self, regs, what):
+        """Read registers (drained first, Ctrl-C held) -> {addr: value}; None if
+        the parser was stuck (then it has been recovered)."""
+        with HoldCtrlC():
+            self.drain()
+            return self._read_regs(regs, what)
+
+    def reg_read(self, rr):
+        got = self._regs(rr.regs, rr.name)
+        if got is None:
+            return False
+        text = " ".join(f"{a:04x}={fmt_v(v)}" for a, v in got.items())
+        print(f"       {rr.name}: {text}")
+        self.log("REGS", f"{rr.name}: {text}")
+        if rr.save:
+            for a, v in got.items():
+                self.saved.setdefault(a, v)
+        return True
+
+    def reg_restore(self, rr):
+        cur = self._regs(rr.regs, rr.name + " (current values)")
+        if cur is None:
+            return False
+        self.log("REGS", f"{rr.name}: now " + " ".join(f"{a:04x}={fmt_v(v)}" for a, v in cur.items())
+                 + "; saved " + " ".join(f"{a:04x}={fmt_v(self.saved.get(a))}" for a in rr.regs))
+        missing = [a for a in rr.regs if self.saved.get(a) is None]
+        if missing:
+            print(f"   {rr.name}: no start value for {' '.join(f'{a:04x}' for a in missing)} "
+                  "(not read), left as it is")
+        for c in rr.writes(self.saved, cur):
+            print(f"-> {c.name}")
+            if not self.send(c):
+                return False            # recovered: the init has set these up again
+        got = self._regs(rr.regs, rr.name + " (read back)")
+        if got is None:
+            return False
+        text = " ".join(f"{a:04x}={fmt_v(v)}" for a, v in got.items())
+        bad = [a for a in rr.regs if self.saved.get(a) is not None and got[a] != self.saved[a]]
+        print(f"       {rr.name}: {text}" + ("" if not bad else "  !! differs from the start: "
+                                              + " ".join(f"{a:04x}" for a in bad)))
+        self.log("REGS", f"{rr.name}: read back {text}" + (f" DIFFERS {bad}" if bad else ""))
+        if bad and rr.reinit:
+            print("   re-running the init to get back to a known state")
+            self.setup()
+        return True
+
+    def fw_read(self, fr):
+        """0x91 read of an MC8032 register; no reply is only logged."""
+        self.log("CMD", f"{fr.name}: {describe(fr.header, 3)}")
+        with HoldCtrlC():
+            self.drain()
+            try:
+                self._out(3, fr.header, 2000)
+            except usb.core.USBError as e:
+                raise Fatal(f"EP3 write failed ({fr.name}): {e}")
+            try:
+                r = self._read(1000)
+            except usb.core.USBError as e:
+                if not is_timeout(e):
+                    raise Fatal(f"EP81 read failed ({fr.name}): {e}")
+                r = None
+        if r is None:
+            print(f"       {fr.name}: no reply to 0x91 within 1000 ms")
+            self.log("FWREAD", f"{fr.name}: no reply")
+            return self.health(fr.name)
+        self.log("EP81 IN", r.hex())
+        v = int.from_bytes(r[:fr.n], "big")
+        print(f"       {fr.name}: {r[:fr.n].hex(' ')} = {v:#x} ({len(r)} B reply)")
+        self.log("FWREAD", f"{fr.name}: {r[:fr.n].hex()} = {v:#x}, reply {len(r)} B")
+        if fr.key:
+            self.saved.setdefault(fr.key, v)
+        ok = self.health(fr.name)
+        exp = self.saved.get(fr.expect_key) if fr.expect_key else None
+        if ok and exp is not None and v != exp:
+            print(f"!! {fr.name}: {v:#x}, at the start it was {exp:#x}")
+            self.log("FWREAD", f"{fr.name}: differs from the start value {exp:#x}")
+            if fr.reinit:
+                print("   re-running the init (it sets the EP2 timeout to the init's value)")
+                self.setup()
+        return ok
+
+    def reinit_if_failed(self, c):
+        if self.step_failed:
+            print("-> a check failed or the flip back was not seen: re-running the init")
+            self.log("REINIT", "after a failed check")
+            self.setup()
+        return True
+
+    # --- step w: a deliberately truncated EP2 command
+    def truncated(self, c):
+        check_safe(c)
+        if self.dry:
+            print_truncated(c, self.full_hex, self.timeout_ms)
+            return True
+        self.log("CMD", f"{c.name}: {describe(c.header, 2)}; payload cut at {c.cut} of "
+                        f"{len(c.payload)} B")
+        with HoldCtrlC():
+            self.drain()
+            try:
+                self._out(2, c.header, 2000)
+                self._out(2, c.payload[:c.cut], 30000)
+            except usb.core.USBError as e:
+                if not is_timeout(e):
+                    raise Fatal(f"USB error while sending {c.name}: {e}")
+                print(f"!! EP2 write timed out during '{c.name}'")
+                return self.stuck(c.name, read_queued=False)
+            t0 = time.monotonic()
+            try:
+                self._out(3, READ_FC01, 2000)
+            except usb.core.USBError as e:
+                raise Fatal(f"EP3 write failed ({e}); the chip does not take commands")
+            reply, deadline = None, t0 + c.wait_s
+            while reply is None and time.monotonic() < deadline:
+                left = max(1, int((deadline - time.monotonic()) * 1000))
+                try:
+                    reply = self._read(min(250, left))
+                except usb.core.USBError as e:
+                    if not is_timeout(e):
+                        raise Fatal(f"EP81 read failed: {e}")
+            ms = (time.monotonic() - t0) * 1000
+            if reply is None:
+                msg = (f"no reply within {c.wait_s:g} s: the parser still waits for the "
+                       f"other {len(c.payload) - c.cut} B (the timeout did not end it)")
+                print(f"!! {msg}")
+                self.log("TRUNCATED", msg)
+                self.auto.append(msg)
+                return self.stuck(c.name, read_queued=True)
+        msg = f"the chip answered without padding after {ms:.0f} ms ({reply.hex()})"
+        print(f"       {msg}")
+        self.log("TRUNCATED", msg)
+        self.auto.append(msg)
+        if reply[:1] != bytes((FC01_OK,)):
+            print(f"!! fc01 read answered {reply.hex()} instead of {FC01_OK:02x}: re-running the init")
+            self.last_pad = 0
+            self.setup()
+            return False
+        return self.health(c.name)
 
     def health(self, after):
         """EP3 05 01 fc, expect 07 within the short timeout."""
@@ -1442,6 +2194,8 @@ class Probe:
 
 def run_step(p, key, title, risk, fn, opt, results):
     print(f"\n=== step {key}: {title}  [risk: {risk}]")
+    if key in STEP_NOTES:
+        print(STEP_NOTES[key])
     if fn is None:
         print("not implemented: see captures/t2-research/blit-engine.md")
         p.log("STEP", f"{key} stub")
@@ -1454,6 +2208,7 @@ def run_step(p, key, title, risk, fn, opt, results):
     after = rest[0] if rest else []
     checks = rest[1] if len(rest) > 1 else []
     p.baseline, p.base_lat, p.watch_runs = {}, [], []
+    p.saved, p.auto, p.step_failed = {}, [], False
     print("sends:")
     if p.dry:
         for c in cmds:
@@ -1464,15 +2219,16 @@ def run_step(p, key, title, risk, fn, opt, results):
         for ch in checks:
             print(f"  --- {ch.sid}, while B is shown:")
             for c in ch.cmds:
-                p.send(c)
-            print(f"  expect on the panel: {ch.expect}")
+                p.do(c)
+            print(f"  expect on the panel: {ch.expect}"
+                  + ("  (n: the remaining checks are skipped)" if ch.stop_on_fail else ""))
         p.send(cmd_flip(FB_A))
         print("  expect: plain dark blue again")
         if after:
             print(f"  then, if the step ended before {checks[-1].sid}:"
                   if checks and checks[-1].restores else "  then, however the step ended:")
             for c in after:
-                p.send(c)
+                p.do(c)
         results.append((key, "dry run"))
         return
     for c in cmds:
@@ -1483,12 +2239,12 @@ def run_step(p, key, title, risk, fn, opt, results):
     for ch in checks:
         print(f"  --- {ch.sid}:")
         for c in ch.cmds:
-            print_cmd(c, False, p.timeout_ms)
+            print_item(c, False, p.timeout_ms)
         print(f"      expect: {ch.expect}")
     if after:
         print("  afterwards, also on failure or quit:")
     for c in after:
-        print_cmd(c, False, p.timeout_ms)
+        print_item(c, False, p.timeout_ms)
     print(f"expect: {expect}")
     if ask(f"run step {key}?", "ynq") == "n":
         p.log("STEP", f"{key} skipped")
@@ -1506,7 +2262,7 @@ def run_step(p, key, title, risk, fn, opt, results):
         if restore and not done["restored"]:
             for c in after:
                 print(f"-> {c.name}")
-                if not p.send(c):
+                if not p.do(c):
                     # the recovery ran the normal init, which restores it as well
                     p.log("RESTORE", f"{key}: parser stuck after '{c.name}', recovered")
 
@@ -1548,29 +2304,178 @@ def run_live(p, key, cmds, expect, results, checks=(), done=None):
     p.log("ANSWER", f"{key} seen={seen} note={note!r}")
     res = f"{'as expected' if seen == 'y' else 'NOT as expected'}{': ' + note if note else ''}"
     for ch in checks:
+        p.auto = []
         for c in ch.cmds:
             print(f"-> {c.name}")
-            if not p.send(c):
+            if not p.do(c):
                 results.append((key, res))
+                if p.auto:
+                    p.log("RESULT", f"{ch.sid}: {'; '.join(p.auto)}")
                 return stuck_result(p, ch.sid, c, results)
         if ch.restores:
             done["restored"] = True
         seen = ask_pass(ch.expect)
         note = ask_note()
         p.log("ANSWER", f"{ch.sid} seen={seen} note={note!r}")
-        r = f"{'PASS' if seen == 'y' else 'FAIL'}{': ' + note if note else ''}"
+        r = (f"{'PASS' if seen == 'y' else 'FAIL'}{': ' + note if note else ''}"
+             + (f" [{'; '.join(p.auto)}]" if p.auto else ""))
         results.append((ch.sid, r))
         p.log("RESULT", f"{ch.sid}: {r}")
+        if seen == "n" and ch.stop_on_fail:
+            p.step_failed = True
+            print("   the remaining checks of this step are skipped")
+            break
     print("-> flip back to A")
     if p.send(cmd_flip(FB_A)):
         back = ask("plain dark blue screen again?")
         p.log("ANSWER", f"{key} back-to-A={back}")
         if back == "n":
+            p.step_failed = True
             res += "; flip back to A not seen"
     else:
         res += "; parser stuck after the flip back, recovered"
     results.append((key, res))
     p.log("RESULT", f"{key}: {res}")
+
+
+def step_items(ret):
+    """All items of a step's return value: commands, restore list, checks."""
+    return (list(ret[0]) + list(ret[2] if len(ret) > 2 else [])
+            + [c for ch in (ret[3] if len(ret) > 3 else []) for c in ch.cmds])
+
+
+def check_items(items):
+    """check_safe on every command a step can send, including the writes a
+    RegRestore may build at run time (raises Refused)."""
+    for c in items:
+        if isinstance(c, (Cmd, FwRead)):
+            check_safe(c)
+        elif isinstance(c, RegRestore):
+            for w in c.writes({a: 0 for a in c.regs}, {a: 1 for a in c.regs}):
+                check_safe(w)
+
+
+def refused(cmd):
+    try:
+        check_safe(cmd)
+    except Refused:
+        return True
+    return False
+
+
+def self_test_s_w(O):
+    """Steps s-w: the builders against the bytes in the sources, and the
+    refused list."""
+    # the refused list: I2C writes (0x1a bus 0, 0x1c bus 1 = ID ROM) on any
+    # endpoint, mode/timing setup, DVO, I2C master, timing and PLL registers
+    i2c = bytes.fromhex("1a80007200 0100 fa".replace(" ", ""))   # FUN_100043544: 1a 80 00 addr reg len16 fa
+    for ep in (2, 3, 4):
+        assert refused(Cmd("x", i2c, ep=ep)) and refused(Cmd("x", b"\x1c" + i2c[1:], ep=ep))
+    assert set(REFUSED_OPS) == {0x1a, 0x1c}
+    for op in (0x14, 0x16, 0x22, 0x1b, 0x1d, 0x28, 0x29):
+        assert refused(Cmd("x", bytes((op, 0x20, 0x00)), ep=3)), hex(op)
+    for reg in (0xfb96, 0xfce0, 0xfce4, 0xfcea, 0xfcec, 0xfcc4, 0xfccf, 0xfcf3, 0xfcf6, 0xfcf7):
+        assert refused(cmd_wreg("x", reg, 0)), hex(reg)
+    assert not refused(cmd_wreg("x", 0xfcb0, 0x09)) and not refused(cmd_wreg("x", 0xfc6f, 0))
+    assert refused(Cmd("x", bytes.fromhex("9004040000000001"), ep=3))   # other 0x90 values
+    assert refused(Cmd("x", bytes.fromhex("9003010000"), ep=3))
+    assert refused(Cmd("x", ep4_list([(0xb0, 0x40)]), ep=4))          # EP4 outside the cursor
+    assert refused(Cmd("x", hdr16(0xfc, [(0xc4, 0)])))                 # 0x16 outside the flip
+    assert refused(Cmd("x", b"\x14" + bytes(47)))                     # EP2 blit (step i)
+    # step s: the Mac driver's RLD staging address in bytes 23-26
+    ret = step_s(O)
+    h = ret[0][-1].header
+    assert h[23:27] == bytes.fromhex("0070d300") and h[2:6] == h[6:10]
+    assert h[:23] == hdr13(*struct.unpack_from("<II", h, 2), BOX_W, BOX_H, BOX_W, BOX_H, 0,
+                           BOX_W * BOX_H * 3, len(ret[0][-1].payload))[:23]
+    s2, s3 = (ch.cmds[0].header for ch in ret[3])
+    assert struct.unpack_from("<I", s2, 2)[0] == S_SRC and s2[23:27] == bytes.fromhex("00003900")
+    a3 = struct.unpack_from("<I", s3, 2)[0]
+    assert a3 - S_ALIAS == fb_addr(FB_B, REF_VX, S_LOW_VY, BOX_W, BOX_H) and a3 < 0x1000000
+    assert t2rle.decode(ret[0][-1].payload, 1024, BOX_W * BOX_H // 1024) == rot180(
+        quads(BOX_W, BOX_H))
+    # step t: the tables as dumped from the Mac binary (u16 reg LE, u8 val, pad)
+    def table(hx):
+        b = bytes.fromhex(hx)
+        return [(b[i] | b[i + 1] << 8, b[i + 2]) for i in range(0, len(b), 4)]
+    assert MAC_MON_OFF == table("60fb0000b0fc0400b0fc2000")          # DAT_10008cb98
+    assert MAC_MON_ON == table("b0fc0400b0fc0900")                   # DAT_10008cb90
+    assert MAC_SLEEP == table("4dfc80004ffc80006ffc0400")            # DAT_10008f1ea
+    ret = step_t(O)
+    sent = [c.header for ch in ret[3] for c in ch.cmds if isinstance(c, Cmd)]
+    assert sent == [bytes((2, 0, 1, r >> 8, r & 0xFF, v)) for r, v in MAC_MON_OFF + MAC_MON_ON
+                    + MAC_SLEEP]
+    assert cmd_wreg("x", 0xfcb0, 0x09).header == bytes.fromhex("020001fcb009")   # init.bin rec 58
+    rr = ret[2][0]
+    w = rr.writes({0xfcb0: 0x09, 0xfb60: 0x01, 0xfc6f: 0, 0xfc4f: 0x80, 0xfc4d: 0x80},
+                  {0xfcb0: 0x20, 0xfb60: 0x00, 0xfc6f: 4, 0xfc4f: 0x80, 0xfc4d: 0x80})
+    assert [c.header.hex() for c in w] == ["020001fc6f00", "020001fc4f80", "020001fc4d80",
+                                            "020001fcb004", "020001fcb009", "020001fb6001"]
+    w = rr.writes({0xfcb0: 0x09}, {0xfcb0: 0x09})                    # fcb0 unchanged: no toggle
+    assert w == []
+    assert [ch.sid for ch in ret[3]] == ["t1", "t1b", "t1c", "t2", "t2b"]
+    assert isinstance(ret[0][-1], RegRead) and ret[0][-1].save
+    # step u: cursor builders against Windows' and the Mac driver's bytes
+    assert hdr12(0) == bytes.fromhex("1200000000004000004000000125")  # Windows, verbatim
+    assert hdr12(CUR2_ADDR) == bytes.fromhex("1200400000004000004000000125")
+    assert cursor_addr_list(0) == bytes.fromhex("05083000310032003300")    # init.bin rec 59
+    assert cursor_addr_list(CUR2_ADDR) == bytes.fromhex("05083000311032003300")
+    # FUN_1000206ce: fe30 = a >> 2, fe31 = a >> 10, fe32 = a >> 18, fe33 = (a >> 24) >> 2
+    assert cursor_addr_list(0x12345678) == bytes.fromhex("0508309e3115328d3304")
+    assert cursor_full_list(0x1e0, 0x1a0) == bytes.fromhex(
+        "05123440354038e039013aa03b01440045003607")                  # protocol-t2.md layout
+    assert mac_cursor_pos(100, 50) == bytes.fromhex("050e386439003a323b00440045003607")
+    assert mac_cursor_pos(-24, 416) == bytes.fromhex("050e380039003aa03b0144184500364f")
+    assert mac_cursor_pos(480, -24) == bytes.fromhex("050e38e039013a003b00440045183647")
+    assert mac_cursor_pos(-24, -24) == bytes.fromhex("050e380039003a003b0044184518364f")
+    assert mac_cursor_pos(0, 50)[-1] == 0x4f and mac_cursor_pos(5, 0)[-1] == 0x47
+    assert len(CUR1) == len(CUR2) == 16384
+    assert CUR1[:4] == bytes((0xfe, 0xff, 0xff, 0xff))                # bottom-right: border
+    k = 4 * (4095 - (1 * 64 + 1))                                     # visible (1,1): red
+    assert CUR1[k:k + 4] == bytes((0xfe, 0x00, 0x00, 0xff))
+    assert CUR2[:4] == bytes((0xfe, 0xff, 0xff, 0x00)) and CUR2[4 * 32:4 * 33] == bytes(4)
+    ret = step_u(O)
+    assert [ch.sid for ch in ret[3]] == ["u1", "u2", "u3", "u4", "u5", "u6"]
+    assert ret[3][-1].restores and ret[0][4].header == hdr12(CUR2_ADDR)
+    rr = ret[2][0]
+    w = rr.writes(dict(zip(CURSOR_REGS, range(13))), {})
+    assert [c.header.hex() for c in w] == ["05083000310132023303",
+                                            "051234043505380639073a083b09440a450b360c"]
+    assert all(c.ep == 4 for c in w)
+    # step v: the 0x16 lists write the same (bank, reg, value) sequence as 0x15
+    for buf in (FB_A, FB_B):
+        f = flip_bytes(buf)
+        trip = [tuple(f[k:k + 3]) for k in range(2, len(f), 3)]
+        got = [(h[1], r, v) for h in (c.header for c in flip16_cmds(buf))
+               for r, v in zip(h[3::2], h[4::2])]
+        assert got == trip, (got, trip)
+    fa, fb = (c.header for c in flip16_cmds(FB_A))
+    assert fa == bytes.fromhex("16fb016510")                          # rhgndf "activate"
+    assert fb == bytes.fromhex("16fc06b411b100b230b300b415b411")      # trigger2_bank_locked, ch 1
+    assert flip16_cmds(FB_B)[1].header == bytes.fromhex("16fc06b411b100b238b307b415b411")
+    ret = step_v(O)
+    assert ret[3][-1].restores and [c.header for c in ret[3][1].cmds[:2]] == [
+        c.header for c in flip16_cmds(FB_B)]
+    # step w: 0x90 / 0x91 as in the init capture and the Mac driver
+    assert cmd_90("x", TIMEOUT_INIT).header == bytes.fromhex("9004040000061a80")  # init rec 6/24
+    assert cmd_90("x", TIMEOUT_WIN).header == bytes.fromhex("9004040000001000")   # Windows rec 18
+    assert FwRead("x", 0, 2).header == bytes.fromhex("91000200")       # Windows / Mac reg 0
+    assert FwRead("x", 4, 4).header == bytes.fromhex("91040400")
+    ret = step_w(O)
+    tr = [c for ch in ret[3] for c in ch.cmds if isinstance(c, Truncated)]
+    assert len(tr) == 1 and 0 < tr[0].cut < len(tr[0].payload) and tr[0].wait_s == 2.0
+    assert ret[2][0].header == cmd_90("x", TIMEOUT_INIT).header and ret[3][-1].restores
+    assert ret[3][0].cmds[0].header == cmd_90("x", TIMEOUT_WIN).header
+    assert ret[3][1].cmds[0].header == cmd_90("x", TIMEOUT_INIT).header   # back before w2's box
+    O.w_fw_read = "no"
+    assert not any(isinstance(c, FwRead) for c in step_items(step_w(O)))
+    O.w_fw_read = "yes"
+    # describe: every new command type
+    assert describe(hdr16(0xfb, [(0x65, 0x10)])) == "0x16 register list, bank fb: fb65=10"
+    assert describe(cursor_addr_list(CUR2_ADDR), 4) == "0x05 EP4 list, bank fe: 30=00 31=10 " \
+        "32=00 33=00"
+    assert "(REG8032_EP2_TIMEOUT) = 0x00001000" in describe(cmd_90("x", TIMEOUT_WIN).header)
+    assert describe(hdr12(CUR2_ADDR)).startswith("0x12 addr 0x004000  raw 16384  comp 16384")
 
 
 def self_test():
@@ -1674,6 +2579,7 @@ def self_test():
     class O:
         scratch, stretch_src, n_layout = SCRATCH, "target", "y411"
         r_window_ms, r_max_reads, r_plain_src = 50, 400, "target"
+        w_wait_s, w_fw_read = 2.0, "yes"
     rc = step_r(O)[0]
     assert isinstance(rc[0], Sweep) and [c.watch.label for c in rc[1:]] == [
         "2x #1", "1:1", "2x #2", "2x #3"]
@@ -1707,14 +2613,14 @@ def self_test():
     for key, _, _, fn in STEPS:
         if fn:
             ret = fn(O)
-            items = ret[0] + (ret[2] if len(ret) > 2 else [])
-            items += [c for ch in (ret[3] if len(ret) > 3 else []) for c in ch.cmds]
+            items = step_items(ret)
+            check_items(items)
             for c in items:
-                if isinstance(c, Sweep):
+                if not isinstance(c, Cmd):
                     continue
                 if c.header[0] == 0x13:
                     assert int.from_bytes(c.header[30:33], "little") == len(c.payload)
-                assert describe(c.header).startswith(f"0x{c.header[0]:02x}")
+                assert describe(c.header, c.ep).startswith(f"0x{c.header[0]:02x}"), c.name
                 if c.header[0] == 0x11:
                     assert int.from_bytes(c.header[18:21], "little") == len(c.payload)
             if key in sizes:
@@ -1728,6 +2634,7 @@ def self_test():
         assert len(step_n(O)[0][-1].payload) == sizes["n"]
     ret = step_p(O)
     assert ret[0][0].ep == 3 and ret[0][0].header == lut and ret[2][0].header == lut_bytes({})
+    self_test_s_w(O)
     print(f"self-test ok (step b payload {len(pay_b)} B, {len(pay_b) % 512} B in the last "
           f"512 B packet, {(len(pay_b) + CHUNK_BIG - 1) // CHUNK_BIG} transfers)")
 
@@ -1735,7 +2642,7 @@ def self_test():
 def main():
     ap = argparse.ArgumentParser(description="Interactive probe for unverified T2 frame "
                                  "commands; read the docstring first.")
-    ap.add_argument("--steps", default="all", help="e.g. a,c-e (default all: a-r, no o)")
+    ap.add_argument("--steps", default="all", help="e.g. a,c-e (default all: a-w, no o)")
     ap.add_argument("--dry-run", action="store_true", help="print every packet, no USB access")
     ap.add_argument("--full-hex", action="store_true", help="dry run: print whole payloads")
     ap.add_argument("--self-test", action="store_true", help="check the packet builders and exit")
@@ -1759,8 +2666,22 @@ def main():
                     help="payload of step n (format 0x96): y411 = per row, per 4 px "
                     "Y0 U V Y1 Y2 Y3 as the legacy driver builds it (default); i420/nv12 = "
                     "planar 4:2:0, only to try if y411 fails")
+    ap.add_argument("--w-wait-s", type=float, default=2.0,
+                    help="step w: how long to wait for the chip to end the truncated 0x13 "
+                    "by itself before the padding recovery (default 2 s)")
+    ap.add_argument("--w-fw-read", choices=("yes", "no"), default="yes",
+                    help="step w: read MC8032 register 4 with 0x91 04 0400 before/after "
+                    "(default yes; no = only write it with 0x90)")
     opt = ap.parse_args()
     keys = parse_steps(opt.steps)
+    # every command the selected steps can send passes the refused list, before
+    # anything touches USB
+    for key, title, risk, fn in STEPS:
+        if fn and key in keys:
+            try:
+                check_items(step_items(fn(opt)))
+            except Refused as e:
+                sys.exit(f"step {key}: {e}")
 
     if opt.self_test or opt.dry_run:
         self_test()
@@ -1797,7 +2718,8 @@ def main():
     log("START", f"steps {''.join(keys)} intf {intf} pid {pid} timeout {opt.timeout_ms} ms "
                  f"scratch {opt.scratch:#x} stretch-src {opt.stretch_src} "
                  f"n-layout {opt.n_layout} r-window {opt.r_window_ms} ms "
-                 f"r-max-reads {opt.r_max_reads} r-plain-src {opt.r_plain_src}")
+                 f"r-max-reads {opt.r_max_reads} r-plain-src {opt.r_plain_src} "
+                 f"w-wait-s {opt.w_wait_s:g} w-fw-read {opt.w_fw_read}")
     print(f"log: {path}")
 
     results = []
