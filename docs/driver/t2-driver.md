@@ -141,8 +141,9 @@ sent exact). For each update the back buffer needs the tiles that differ
 from its copy plus those it still holds at half resolution. If sending
 them exactly would not fit one frame's budget, the needed tiles that
 changed since the last frame (moving content) go out at half resolution
-(2x2 blocks averaged, a `0x13` with scale `0x2000`, upscaled by the chip in
-place without touching the neighbours: `tools/t2_probe.py` steps j and k);
+(2x2 blocks averaged, a `0x13` with scale `0x2000` decoded at `0x560000`
+and upscaled by the chip into the buffer without touching the neighbours:
+`tools/t2_probe.py` step k);
 the rest, such as wallpaper a window just left, goes out exact. Runs of
 tiles merge into rects (checked in userspace: exact coverage, no overlap,
 at most 91 rects for random masks, limit 152). The half-resolution tiles
@@ -184,6 +185,13 @@ together with the new movement, so the blurred area grew along the drag
 path. 0.3.29 uses tiles: only tiles that changed since the last frame go
 half; previously blurred tiles that stopped moving go exact. A model of a
 60-frame drag kept the blurred area at ~80 tiles instead of growing.
+Test of 0.3.29: smoother, but on quick moves parts of a (translucent)
+window near its edges vanished or looked torn out for a moment. The half
+rects were decoded in place: the chip first writes the packed source into
+the target area, then scales over it, and a flip before the scaler
+finishes shows the packed data. 0.3.30 decodes at `0x560000` (past the
+staging area of a worst-case full frame) and scales from there, as in
+probe step k.
 
 ## Software gamma (driver 0.3.23)
 

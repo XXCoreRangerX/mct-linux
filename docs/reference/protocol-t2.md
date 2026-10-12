@@ -206,7 +206,8 @@ gain only ~3% (see throughput below).
 | `0x000000` | cursor image (64x64, 4 bytes per pixel) | |
 | `0x00C000` | framebuffer A, 1024x600 RGB24, stride 3072 | `0x10` |
 | `0x1CE000` | framebuffer B = A + 1024\*600\*3 | `0x20` |
-| `0x390000` | RLD buffer: where `0x13` stages the compressed stream | |
+| `0x390000` | RLD buffer: where `0x13` stages the compressed stream (up to `0x552000` for a worst-case full frame) | |
+| `0x560000` | mct_t2's half-resolution sources (up to `0x5d0800`) | |
 
 The total video memory size is not known.
 

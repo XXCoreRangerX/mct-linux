@@ -67,7 +67,7 @@ MODULE_PARM_DESC(half_motion, "Default for new devices: send full-screen updates
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	29
+#define DRIVER_PATCH	30
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -89,6 +89,12 @@ MODULE_PARM_DESC(half_motion, "Default for new devices: send full-screen updates
 #define T2_MODE_RGB	0x05			/* R, G, B planes per 1024-pixel unit */
 #define T2_FLAGS_INDIR	0x28			/* RldClock 0x20 | 0x13 command 0x08 */
 #define T2_SCALE_2X	0x2000			/* source half the target size */
+/*
+ * Half-resolution sources are decoded here, then scaled into the buffer, so
+ * the visible buffer never holds the packed source: past the staging area
+ * of a worst-case full frame (0x390000 + 0x1c2000), up to 0x5d0800.
+ */
+#define T2_HALF_SRC	0x560000
 #define T2_BOUNCE	65536
 #define T2_ENC_MAX	(T2_WIDTH * (T2_HEIGHT + 16) * 3 + 4096)
 #define T2_TIMEOUT	2000
@@ -439,10 +445,12 @@ static int t2_send_visible_rect(struct mct_t2 *t2, u8 *src, u32 base,
 }
 
 /*
- * A visible-space rect r of src at half resolution, upscaled 2x by the chip
- * in place: each 2x2 block becomes one pixel of the source, a quarter of the
- * data; the pixels next to the target stay untouched (verified 2026-10-12,
- * tools/t2_probe.py steps j and k). The target is aligned for the chip: x a
+ * A visible-space rect r of src at half resolution, decoded at T2_HALF_SRC and
+ * upscaled 2x by the chip into the target: each 2x2 block becomes one pixel
+ * of the source, a quarter of the data; the pixels next to the target stay
+ * untouched (verified 2026-10-12, tools/t2_probe.py step k). Decoding in
+ * place instead left the packed source visible when a flip came before the
+ * scaler finished. The target is aligned for the chip: x a
  * multiple of 64, width a multiple of 128, the source w*h a multiple of
  * 1024 pixels. *out gets the area actually covered, in visible coordinates,
  * which holds the chip's upscale rather than exact pixels afterwards.
@@ -502,8 +510,8 @@ static int t2_send_half_rect(struct mct_t2 *t2, u8 *src, u32 base, const struct 
 	a = base + dy * T2_STRIDE + dx * 3;
 	hdr[0] = 0x13;
 	hdr[1] = 0;
-	put_unaligned_le32(a, hdr + 2);			/* decoded at the target */
-	put_unaligned_le32(a, hdr + 6);
+	put_unaligned_le32(T2_HALF_SRC, hdr + 2);	/* source: decoded here */
+	put_unaligned_le32(a, hdr + 6);			/* target */
 	put_unaligned_le16(sw, hdr + 10);
 	put_unaligned_le16(sh, hdr + 12);
 	put_unaligned_le16(w, hdr + 14);
