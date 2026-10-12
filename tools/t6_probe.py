@@ -89,10 +89,14 @@ def setup_packet(bm, req, value, index, length):
     return struct.pack("<BBHHH", bm, req, value, index, length)
 
 
-def audio_session_header(n):
+def audio_session_header(n, restart=False):
     """Bulk session header for one audio packet (MCT t6_libusb_SendAudio):
-    signature 3, payload length = packet length = n, address 0, rest 0."""
-    return struct.pack("<8I", 3, n, 0, n, 0, 0, 0, 0)
+    signature 3, payload length = packet length = n, address 0. restart sets
+    the function-specific audio Flags byte (offset 24) to 0x01, "restart
+    engine" in MCT's t6bulkdef.h: for playback the engine state "was changed
+    by bulk cmd" (t6auddef.h), and on the 5600 the engine stayed stopped
+    with the flag at 0 as in the 5601 capture (2026-10-12)."""
+    return struct.pack("<6I2I", 3, n, 0, n, 0, 0, 1 if restart else 0, 0)
 
 
 def set_engine_state(activity, fmt_index, cyclic, return_size=9600):
@@ -734,7 +738,7 @@ def step_d(p, st):
     rate = f["rate"]
     pkt = rate // 100 * 4                      # 10 ms: 1920 B at 48 kHz
     cyc = es["cyclic"] or 0x20000
-    secs = max(0.2, min(2.0, p.args.tone_seconds))
+    secs = max(0.2, min(10.0, p.args.tone_seconds))
     amp = max(0.0, min(0.1, p.args.amplitude))
     p.log(f"  playing {secs:.1f} s of 440 Hz at {rate} Hz, amplitude {amp:.3f} "
           f"({20 * math.log10(amp) if amp else -999:.0f} dBFS), {pkt}-byte packets every 10 ms")
@@ -756,7 +760,9 @@ def step_d(p, st):
             p.log(f"  {fmt_engine_state(decode_engine_state(r))}")
         # Windows: one 50 ms packet of silence first (9600 B), then 10 ms packets.
         pre = bytes(pkt * 5)
-        if not (p.bulk(audio_session_header(len(pre)), "audio session (prefill)")
+        restart = not p.args.no_restart_flag
+        if not (p.bulk(audio_session_header(len(pre), restart),
+                       f"audio session (prefill{', restart flag' if restart else ''})")
                 and p.bulk(pre, "audio 50 ms silence")):
             result = "FAIL (bulk)"
             return result
@@ -949,7 +955,9 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="no USB access: print every request")
     ap.add_argument("--self-test", action="store_true", help="check builders and decoders, then exit")
     ap.add_argument("--log", default=None, help="log file (default /tmp/t6_probe-<time>.log)")
-    ap.add_argument("--tone-seconds", type=float, default=1.5, help="tone length, 0.2-2 s (default 1.5)")
+    ap.add_argument("--tone-seconds", type=float, default=5.0, help="tone length, 0.2-10 s (default 5)")
+    ap.add_argument("--no-restart-flag", action="store_true",
+                    help="audio: leave the restart flag of the first packet at 0 (as the 5601 capture)")
     ap.add_argument("--amplitude", type=float, default=0.03,
                     help="tone amplitude, 0-0.1 of full scale (default 0.03, about -30 dBFS)")
     ap.add_argument("--i2c-chunk", type=int, default=16, choices=(8, 16, 32, 64, 128),
