@@ -133,20 +133,25 @@ one tolerance for all channels; at the same luma error, payloads are 4 to
 18% smaller. Red and blue can drift by up to 2 N, so smooth blue gradients
 may band sooner; watch skies when testing.
 
-## Half-resolution motion (driver 0.3.24)
+## Half-resolution motion (driver 0.3.24, per tile since 0.3.29)
 
-`motion=half` (sysfs, or the module parameter `half_motion`): when at least
-80% of the screen changed since the last update (compared with a copy of the
-last presented picture, kept only in half mode) and the exact full frame
-would not fit one frame's budget, the update goes out as a 512x300 image (each 2x2 block averaged:
-150 RLE units, a quarter of the pixels) in a `0x13` with scale `0x2000`,
-which the chip upscales into the back buffer; then the usual flip. The
-upscaler's output isn't modelled, so that buffer's copy is marked unknown
-and the next update to it is a full frame; the refinement after motion
-(two lossless passes) restores the exact picture. Motion shows a slight
-blur instead of the lossy mode's horizontal streaks. Smaller heavy updates
-keep the lossy level. The header form was verified with `tools/t2_probe.py`
-on 2026-10-12.
+`motion=half` (sysfs, or the module parameter `half_motion`) works on
+128x16 device tiles (8 per row, 37 rows plus an 8-row strip that is always
+sent exact). For each update the back buffer needs the tiles that differ
+from its copy plus those it still holds at half resolution. If sending
+them exactly would not fit one frame's budget, the needed tiles that
+changed since the last frame (moving content) go out at half resolution
+(2x2 blocks averaged, a `0x13` with scale `0x2000`, upscaled by the chip in
+place without touching the neighbours: `tools/t2_probe.py` steps j and k);
+the rest, such as wallpaper a window just left, goes out exact. Runs of
+tiles merge into rects (checked in userspace: exact coverage, no overlap,
+at most 91 rects for random masks, limit 152). The half-resolution tiles
+are kept per buffer as a mask and sent again with that buffer's next
+update, exact once they stop moving, so nothing accumulates. Still parts
+are never blurred; the refinement after motion restores everything. With
+the mode off, a buffer still holding half-resolution tiles is resent whole.
+
+History of the mode:
 
 First test (0.3.24, 2026-10-12): the picture stayed pixelated, also when
 still. The motion check compared against the back buffer's copy, which is
@@ -169,6 +174,16 @@ combination the probe has not tested yet.
 detailed wallpaper alone is ~837 KB, over the ~600 KB budget), so any large
 change "did not fit". It now encodes what changed, aligned as it is sent,
 and goes half only if that exceeds the budget.
+
+0.3.28 replaces the whole-screen half frame by half-resolution rects of
+just the changed areas (after steps j and k passed), drops the 80% rule
+and the last-picture copy, and tracks the blurred areas per buffer. Test
+(2026-10-12): window drags got choppier and choppier. The blurred areas
+were added to the buffer's next update and sent at half resolution again
+together with the new movement, so the blurred area grew along the drag
+path. 0.3.29 uses tiles: only tiles that changed since the last frame go
+half; previously blurred tiles that stopped moving go exact. A model of a
+60-frame drag kept the blurred area at ~80 tiles instead of growing.
 
 ## Software gamma (driver 0.3.23)
 

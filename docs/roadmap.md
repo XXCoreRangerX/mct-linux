@@ -47,11 +47,9 @@ Order agreed 2026-10-11:
    Next: use them in mct_t2:
    - 512 KiB payload transfers like Windows (verified; the measured gain is
      ~3% and needs a 512 KiB DMA buffer, so not done yet);
-   - ~~2x hardware upscale during heavy motion~~: done as `motion=half`
-     (mct_t2 0.3.24-0.3.26, whole screen, only when 80% changes). Next:
-     blur only the changed area; needs scaling a partial rectangle
-     without touching its neighbours (`tools/t2_probe.py` steps j and k,
-     not run yet);
+   - ~~2x hardware upscale during heavy motion~~: done as `motion=half`,
+     since 0.3.29 per tile, only for moving content (probe steps j and k
+     passed);
    - YUV 4:2:2 RLE (a third less raw data; colour smears at edges) as
      another motion mode; RGB565 only helps noisy content;
    - the blit engine for scrolling and window moves (highest gain for

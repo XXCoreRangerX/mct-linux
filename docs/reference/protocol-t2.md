@@ -400,6 +400,10 @@ the lab: `captures/t2_probe-20261012-142605.log`). Verified:
   5-6-5): colours as expected.
 - **`0x13` decoding to a separate address** (`0x3a0000`), stretched 1:1 into
   the framebuffer.
+- **Partial 2x upscale without touching the neighbours** (steps j and k,
+  2026-10-12): a 64x32 source scaled into a 128x64 box inside a plain grey
+  band, decoded in place (source = target) and from scratch VRAM: the band
+  stayed clean in both cases.
 - **YUV 4:2:2 RLE through `0x13`** (format `8a`, mode 6, Y/U/V planes of
   1536/768/768 per 3 KiB unit): flat colour bands as expected.
 

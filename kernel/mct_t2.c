@@ -67,7 +67,7 @@ MODULE_PARM_DESC(half_motion, "Default for new devices: send full-screen updates
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	27
+#define DRIVER_PATCH	29
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -89,7 +89,6 @@ MODULE_PARM_DESC(half_motion, "Default for new devices: send full-screen updates
 #define T2_MODE_RGB	0x05			/* R, G, B planes per 1024-pixel unit */
 #define T2_FLAGS_INDIR	0x28			/* RldClock 0x20 | 0x13 command 0x08 */
 #define T2_SCALE_2X	0x2000			/* source half the target size */
-#define T2_HALF_AREA	80			/* % of the screen changed for half mode */
 #define T2_BOUNCE	65536
 #define T2_ENC_MAX	(T2_WIDTH * (T2_HEIGHT + 16) * 3 + 4096)
 #define T2_TIMEOUT	2000
@@ -100,6 +99,13 @@ MODULE_PARM_DESC(half_motion, "Default for new devices: send full-screen updates
 /* rows of unchanged pixels that still get merged into one update rect */
 #define T2_BAND_GAP	16
 #define T2_MAX_BANDS	16
+/* half mode works on 128x16 device tiles: 8 per row, 37 rows + an 8-row strip */
+#define T2_TILE_W	128
+#define T2_TILE_H	16
+#define T2_TILES_X	(T2_WIDTH / T2_TILE_W)
+#define T2_TILE_ROWS	(T2_HEIGHT / T2_TILE_H)		/* full tile rows */
+#define T2_TILE_ROWS_ALL (T2_TILE_ROWS + 1)		/* + the strip, sent exact */
+#define T2_MAX_TRECTS	(T2_TILE_ROWS_ALL * T2_TILES_X / 2)
 
 /* refine lossy frames to lossless this long after the last lossy update */
 #define T2_REFINE_MS	150
@@ -114,12 +120,12 @@ struct mct_t2 {
 	u8 *enc;			/* RLE output */
 	u8 *snap;
 	/*
-	 * Half mode: the picture of the last update, whatever the device made
-	 * of it, so "heavy motion" means what really changed since then and not
-	 * a buffer whose copy is unknown after a half-resolution frame.
+	 * Half mode: per buffer, the areas holding the chip's 2x upscale instead
+	 * of exact pixels (visible coordinates); the copy in hw[] has the exact
+	 * image there, so these are added to the next update of that buffer.
 	 */
-	u8 *last;
-	bool last_valid;
+	u8 stale[2][T2_TILE_ROWS_ALL];	/* tile masks per device tile row */
+	struct drm_rect trects[T2_MAX_TRECTS];	/* t2_present_tiles scratch, io_lock held */
 	u8 enc_ch[3][1024];		/* t2_encode scratch, io_lock held */
 	u8 *enc_pix[1024];			/* shadow snapshot being sent */
 	u8 *hw[2];			/* what device buffers A and B hold */
@@ -433,24 +439,45 @@ static int t2_send_visible_rect(struct mct_t2 *t2, u8 *src, u32 base,
 }
 
 /*
- * The whole screen at half resolution, upscaled 2x by the chip: each 2x2
- * block of the image becomes one pixel of a 512x300 source (150 RLE units
- * of 1024 pixels), a quarter of the data. What the chip's upscaler makes of
- * it isn't tracked, so the buffer's copy becomes unknown (see t2_present).
+ * A visible-space rect r of src at half resolution, upscaled 2x by the chip
+ * in place: each 2x2 block becomes one pixel of the source, a quarter of the
+ * data; the pixels next to the target stay untouched (verified 2026-10-12,
+ * tools/t2_probe.py steps j and k). The target is aligned for the chip: x a
+ * multiple of 64, width a multiple of 128, the source w*h a multiple of
+ * 1024 pixels. *out gets the area actually covered, in visible coordinates,
+ * which holds the chip's upscale rather than exact pixels afterwards.
  */
-static int t2_send_half(struct mct_t2 *t2, u8 *src, u32 base, long *sent)
+static int t2_send_half_rect(struct mct_t2 *t2, u8 *src, u32 base, const struct drm_rect *r,
+			     long *sent, struct drm_rect *out)
 {
 	u8 (*ch)[1024] = t2->enc_ch;	/* io_lock held */
-	const int sw = T2_WIDTH / 2, sh = T2_HEIGHT / 2;
+	int dx = round_down(T2_WIDTH - r->x2, 64);
+	int w = round_up(round_up(T2_WIDTH - r->x1, 64) - dx, 128);
+	int dy, h, sw, sh, sx, sy, c, k = 0, len = 0, ret;
 	ktime_t t0 = ktime_get(), t1;
-	int sx, sy, c, k = 0, len = 0, ret;
+	u32 a;
 	u8 hdr[36];
+
+	sh = roundup(DIV_ROUND_UP(drm_rect_height(r), 2), 16 / gcd(w / 128, 16));
+	if (2 * sh > T2_HEIGHT) {
+		/* too tall for this width: full width allows any even height */
+		dx = 0;
+		w = T2_WIDTH;
+		sh = roundup(DIV_ROUND_UP(drm_rect_height(r), 2), 2);
+	}
+	if (dx + w > T2_WIDTH)
+		dx = T2_WIDTH - w;
+	h = 2 * sh;
+	sw = w / 2;
+	dy = T2_HEIGHT - r->y2;
+	if (dy + h > T2_HEIGHT)
+		dy = T2_HEIGHT - h;
 
 	for (sy = 0; sy < sh; sy++) {
 		for (sx = 0; sx < sw; sx++) {
-			/* device pixels 2sx..2sx+1, 2sy..2sy+1, rotated by 180 degrees */
-			const u8 *p0 = src + ((T2_HEIGHT - 2 - 2 * sy) * T2_WIDTH +
-					      (T2_WIDTH - 2 - 2 * sx)) * 4;
+			/* device pixels at (dx + 2sx, dy + 2sy), rotated by 180 degrees */
+			const u8 *p0 = src + ((T2_HEIGHT - 2 - dy - 2 * sy) * T2_WIDTH +
+					      (T2_WIDTH - 2 - dx - 2 * sx)) * 4;
 			const u8 *p1 = p0 + T2_WIDTH * 4;
 
 			for (c = 0; c < 3; c++) {
@@ -472,15 +499,15 @@ static int t2_send_half(struct mct_t2 *t2, u8 *src, u32 base, long *sent)
 	t2->stats.px_sent += sw * sh;
 	t2->stats.bytes += sizeof(hdr) + len;
 
-	/* decoded at the target, then stretched in place (verified 2026-10-12) */
+	a = base + dy * T2_STRIDE + dx * 3;
 	hdr[0] = 0x13;
 	hdr[1] = 0;
-	put_unaligned_le32(base, hdr + 2);
-	put_unaligned_le32(base, hdr + 6);
+	put_unaligned_le32(a, hdr + 2);			/* decoded at the target */
+	put_unaligned_le32(a, hdr + 6);
 	put_unaligned_le16(sw, hdr + 10);
 	put_unaligned_le16(sh, hdr + 12);
-	put_unaligned_le16(T2_WIDTH, hdr + 14);
-	put_unaligned_le16(T2_HEIGHT, hdr + 16);
+	put_unaligned_le16(w, hdr + 14);
+	put_unaligned_le16(h, hdr + 16);
 	put_unaligned_le16(T2_SCALE_2X, hdr + 18);
 	put_unaligned_le16(T2_SCALE_2X, hdr + 20);
 	hdr[22] = T2_FMT_RGB24;
@@ -493,48 +520,21 @@ static int t2_send_half(struct mct_t2 *t2, u8 *src, u32 base, long *sent)
 	ret = t2_cmd(t2, hdr, sizeof(hdr), t2->enc, len);
 	t2->stats.ns_encode += ktime_to_ns(ktime_sub(t1, t0));
 	t2->stats.ns_usb += ktime_to_ns(ktime_sub(ktime_get(), t1));
+	drm_rect_init(out, T2_WIDTH - dx - w, T2_HEIGHT - dy - h, w, h);
 	return ret;
 }
 
-static int t2_diff_bands(const u8 *cur, const u8 *old, struct drm_rect *bands);
-
-/*
- * Half mode only for heavy updates: most of the screen (T2_HALF_AREA) changed
- * since the last update, and sending exactly what changed would not fit one
- * frame's budget. Half mode blurs the whole screen, so smaller changes (a
- * window moved over a still wallpaper) stay exact: blurring and re-sharpening
- * the still parts around them flickers.
- */
-static bool t2_want_half(struct mct_t2 *t2)
+/* bytes the rects would take sent exactly, aligned as they are sent; stops early */
+static long t2_exact_size(struct mct_t2 *t2, const struct drm_rect *bands, int n, long limit)
 {
-	struct drm_rect bands[T2_MAX_BANDS];
-	long area = 0, size = 0;
-	int i, n, dx, dy, w, h;
+	long size = 0;
+	int i, dx, dy, w, h;
 
-	if (t2->last_valid) {
-		n = t2_diff_bands(t2->snap, t2->last, bands);
-	} else {
-		drm_rect_init(&bands[0], 0, 0, T2_WIDTH, T2_HEIGHT);
-		n = 1;
-	}
-	for (i = 0; i < n; i++)
-		area += (long)drm_rect_width(&bands[i]) * drm_rect_height(&bands[i]);
-	if (area * 100 < (long)T2_WIDTH * T2_HEIGHT * T2_HALF_AREA)
-		return false;
-	/* the exact size of what changed, rectangles aligned as they are sent */
-	for (i = 0; i < n && size <= T2_FRAME_BUDGET; i++) {
+	for (i = 0; i < n && size <= limit; i++) {
 		t2_device_rect(&bands[i], &dx, &dy, &w, &h);
 		size += t2_encode(t2, t2->snap, dx, dy, w, h, 0);
 	}
-	return size > T2_FRAME_BUDGET;
-}
-
-/* half mode: remember this update's picture for the next motion check */
-static void t2_keep_last(struct mct_t2 *t2)
-{
-	t2->last_valid = READ_ONCE(t2->half);
-	if (t2->last_valid)
-		memcpy(t2->last, t2->snap, T2_WIDTH * T2_HEIGHT * 4);
+	return size;
 }
 
 /*
@@ -577,50 +577,180 @@ static int t2_diff_bands(const u8 *cur, const u8 *old, struct drm_rect *bands)
  * tearing. Only pixels that differ from what the back buffer already holds
  * (the image from two updates ago) are sent.
  */
+/* tiles of device tile row ty where a and b differ, as a bit mask */
+static u8 t2_tile_diff(const u8 *a, const u8 *b, int ty)
+{
+	int y, tx, y0 = ty * T2_TILE_H, y1 = min(y0 + T2_TILE_H, T2_HEIGHT);
+	u8 m = 0;
+
+	for (y = y0; y < y1 && m != 0xff; y++) {
+		/* device row y is visible row T2_HEIGHT - 1 - y, mirrored */
+		size_t row = (size_t)(T2_HEIGHT - 1 - y) * T2_WIDTH * 4;
+
+		for (tx = 0; tx < T2_TILES_X; tx++) {
+			size_t off = row + (size_t)(T2_WIDTH - (tx + 1) * T2_TILE_W) * 4;
+
+			if (!(m & BIT(tx)) && memcmp(a + off, b + off, T2_TILE_W * 4))
+				m |= BIT(tx);
+		}
+	}
+	return m;
+}
+
+/*
+ * Runs of set tiles, merged downward while the same run continues, as
+ * visible-space rects. Returns the count.
+ */
+static int t2_mask_rects(const u8 *mask, struct drm_rect *out)
+{
+	u8 open_start[T2_TILES_X] = {}, open_len[T2_TILES_X] = {};
+	int n = 0, ty, tx;
+
+	for (ty = 0; ty <= T2_TILE_ROWS_ALL; ty++) {
+		u8 m = ty < T2_TILE_ROWS_ALL ? mask[ty] : 0;
+		u8 runs[T2_TILES_X] = {};	/* run length starting at tx */
+
+		for (tx = 0; tx < T2_TILES_X; ) {
+			int s = tx;
+
+			if (!(m & BIT(tx))) {
+				tx++;
+				continue;
+			}
+			while (tx < T2_TILES_X && (m & BIT(tx)))
+				tx++;
+			runs[s] = tx - s;
+		}
+		/* close runs that don't continue in this row */
+		for (tx = 0; tx < T2_TILES_X; tx++) {
+			if (open_len[tx] && open_len[tx] != runs[tx]) {
+				int x0 = tx * T2_TILE_W, w = open_len[tx] * T2_TILE_W;
+				int y0 = open_start[tx] * T2_TILE_H;
+				int y1 = min(ty * T2_TILE_H, T2_HEIGHT);
+
+				drm_rect_init(&out[n++], T2_WIDTH - x0 - w, T2_HEIGHT - y1, w,
+					      y1 - y0);
+				open_len[tx] = 0;
+			}
+			if (runs[tx] && !open_len[tx]) {
+				open_start[tx] = ty;
+				open_len[tx] = runs[tx];
+			}
+		}
+	}
+	return n;
+}
+
+/* tiles a visible-space rect covers, added to mask */
+static void t2_mask_add(u8 *mask, const struct drm_rect *r)
+{
+	int x0 = T2_WIDTH - r->x2, x1 = T2_WIDTH - r->x1;	/* device x */
+	int y0 = T2_HEIGHT - r->y2, y1 = T2_HEIGHT - r->y1;	/* device y */
+	int ty, tx;
+
+	for (ty = y0 / T2_TILE_H; ty <= (y1 - 1) / T2_TILE_H; ty++)
+		for (tx = x0 / T2_TILE_W; tx <= (x1 - 1) / T2_TILE_W; tx++)
+			mask[ty] |= BIT(tx);
+}
+
+/*
+ * Half mode (sysfs motion=half): the back buffer needs the tiles that differ
+ * from its copy plus those it holds at half resolution. If that doesn't fit
+ * one frame's budget, the tiles that changed since the last frame (moving
+ * content) go out at half resolution, upscaled by the chip in place; the
+ * rest, such as wallpaper a window just left, goes out exact and sharp.
+ * The half-resolution tiles are remembered per buffer and sent again with
+ * its next update: exact if they stopped moving, so nothing accumulates.
+ */
+static int t2_present_tiles(struct mct_t2 *t2, bool lossless, int back, int *used,
+			    long *sent, bool *went_half)
+{
+	u8 need[T2_TILE_ROWS_ALL], half[T2_TILE_ROWS_ALL] = {}, blur[T2_TILE_ROWS_ALL] = {};
+	struct drm_rect *rects = t2->trects, area;
+	int front = !back, n, i, ty, tol = 0, ret = 0;
+	u32 base = t2_buf_addr(back);
+	bool moving_known = t2->hw_valid[front];
+
+	for (ty = 0; ty < T2_TILE_ROWS_ALL; ty++)
+		need[ty] = t2_tile_diff(t2->snap, t2->hw[back], ty) | t2->stale[back][ty];
+
+	n = t2_mask_rects(need, rects);
+	*went_half = !lossless && moving_known &&
+		     t2_exact_size(t2, rects, n, T2_FRAME_BUDGET) > T2_FRAME_BUDGET;
+	if (*went_half) {
+		for (ty = 0; ty < T2_TILE_ROWS; ty++)
+			half[ty] = need[ty] & t2_tile_diff(t2->snap, t2->hw[front], ty);
+		n = t2_mask_rects(half, rects);
+		for (i = 0; i < n && !ret; i++) {
+			ret = t2_send_half_rect(t2, t2->snap, base, &rects[i], sent, &area);
+			t2_mask_add(blur, &area);
+		}
+		/* everything else exact, also what a half rect grew over */
+		for (ty = 0; ty < T2_TILE_ROWS_ALL; ty++)
+			need[ty] &= ~half[ty];
+	} else if (!lossless && READ_ONCE(t2->lossy) > 0) {
+		tol = READ_ONCE(t2->lossy);
+	}
+	n = t2_mask_rects(need, rects);
+	for (i = 0; i < n && !ret; i++) {
+		ret = t2_send_visible_rect(t2, t2->snap, base, &rects[i], tol, sent, used);
+		t2_mask_add(need, &rects[i]);
+	}
+	for (ty = 0; ty < T2_TILE_ROWS_ALL; ty++)
+		t2->stale[back][ty] = blur[ty] & ~need[ty];
+	return ret;
+}
+
+/*
+ * Every update goes to the back buffer followed by a flip, so there is no
+ * tearing. Only pixels that differ from what the back buffer already holds
+ * (the image from two updates ago) are sent.
+ */
 static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 {
 	struct drm_rect bands[T2_MAX_BANDS];
 	int back = t2->front == T2_FB_A ? 1 : 0;
 	u32 base = t2_buf_addr(back);
 	int i, n, tol = 0, used = 0, ret = 0;
+	bool half = false;
 	long sent = 0;
-	bool half;
 	u8 *tmp;
 
 	ktime_t t0 = ktime_get();
 
-	if (t2->hw_valid[back]) {
-		n = t2_diff_bands(t2->snap, t2->hw[back], bands);
+	if (READ_ONCE(t2->half) && t2->hw_valid[back]) {
+		t2->hw_valid[back] = false;
+		ret = t2_present_tiles(t2, lossless, back, &used, &sent, &half);
 	} else {
-		drm_rect_init(&bands[0], 0, 0, T2_WIDTH, T2_HEIGHT);
-		n = 1;
+		/* still holding half-resolution tiles (half mode just switched off) */
+		if (memchr_inv(t2->stale[back], 0, sizeof(t2->stale[back])))
+			t2->hw_valid[back] = false;
+		if (t2->hw_valid[back]) {
+			n = t2_diff_bands(t2->snap, t2->hw[back], bands);
+		} else {
+			drm_rect_init(&bands[0], 0, 0, T2_WIDTH, T2_HEIGHT);
+			n = 1;
+		}
+		t2->stats.ns_diff += ktime_to_ns(ktime_sub(ktime_get(), t0));
+
+		/* updates too big for one frame may go lossy; refined once motion stops */
+		if (!lossless && READ_ONCE(t2->lossy) > 0)
+			tol = READ_ONCE(t2->lossy);
+
+		t2->hw_valid[back] = false;
+		memset(t2->stale[back], 0, sizeof(t2->stale[back]));
+		for (i = 0; i < n && !ret; i++)
+			ret = t2_send_visible_rect(t2, t2->snap, base, &bands[i], tol, &sent,
+						   &used);
 	}
-	t2->stats.ns_diff += ktime_to_ns(ktime_sub(ktime_get(), t0));
-
-	/* updates too big for one frame may go lossy; refined once motion stops */
-	if (!lossless && READ_ONCE(t2->lossy) > 0)
-		tol = READ_ONCE(t2->lossy);
-	half = !lossless && READ_ONCE(t2->half) && t2_want_half(t2);
-
-	t2->hw_valid[back] = false;
-	if (half)
-		ret = t2_send_half(t2, t2->snap, base, &sent);
-	for (i = 0; i < n && !ret && !half; i++)
-		ret = t2_send_visible_rect(t2, t2->snap, base, &bands[i], tol, &sent, &used);
 	if (!ret)
 		ret = t2_flip(t2, base);
 	if (ret)
 		return ret;
 
 	t2->stats.updates++;
-	t2_keep_last(t2);
-	if (half) {
-		/* the buffer holds the chip's upscale: unknown, sent whole next time */
+	if (half)
 		t2->stats.half_updates++;
-		*went_lossy = true;
-		t2->front = base;
-		return 0;
-	}
 	if (used) {
 		t2->stats.lossy_updates++;
 		t2->stats.lossy_tol[used]++;
@@ -628,7 +758,7 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 	if (sent > T2_FRAME_BUDGET)
 		t2->stats.over_budget++;
 	t2->stats.max_payload = max_t(u64, t2->stats.max_payload, sent);
-	*went_lossy = used;
+	*went_lossy = used || half;
 	t2->front = base;
 	tmp = t2->hw[back];
 	t2->hw[back] = t2->snap;
@@ -1509,7 +1639,6 @@ static void t2_release(struct drm_device *dev, void *res)
 
 	kvfree(t2->enc);
 	kvfree(t2->snap);
-	kvfree(t2->last);
 	kvfree(t2->hw[0]);
 	kvfree(t2->hw[1]);
 	drm_edid_free(t2->edid);
@@ -1570,14 +1699,13 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	t2->cur.shown = drmm_kmalloc(dev, T2_CUR_BYTES, GFP_KERNEL);
 	t2->enc = kvmalloc(T2_ENC_MAX, GFP_KERNEL);
 	t2->snap = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
-	t2->last = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
 	t2->hw[0] = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
 	t2->hw[1] = kvmalloc(T2_WIDTH * T2_HEIGHT * 4, GFP_KERNEL);
 	ret = drmm_add_action_or_reset(dev, t2_release, NULL);
 	if (ret)
 		return ret;
 	if (!t2->bounce || !t2->cur.buf || !t2->cur.img || !t2->cur.shown ||
-	    !t2->enc || !t2->snap || !t2->last || !t2->hw[0] || !t2->hw[1])
+	    !t2->enc || !t2->snap || !t2->hw[0] || !t2->hw[1])
 		return -ENOMEM;
 
 	/* the init sends the (blank) shadow, so it exists from the start */
