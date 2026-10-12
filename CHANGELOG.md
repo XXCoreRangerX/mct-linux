@@ -30,6 +30,8 @@ drm_info and in the kernel log at probe).
 - T2 protocol corrected and extended from the vendor drivers and captures;
   hardware upscale, RGB565, YUV 4:2:2 and 512 KiB transfers verified on the
   tablet with the new `tools/t2_probe.py`. Software gamma tested.
+- T6 HDMI audio verified with `tools/t6_probe.py` (48 kHz stereo); not in
+  the driver yet.
 - README: one status table for both chips; 720p at 240 Hz tested.
 
 ## 0.5.1 (2026-10-11)

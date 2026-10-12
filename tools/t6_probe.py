@@ -760,7 +760,7 @@ def step_d(p, st):
             p.log(f"  {fmt_engine_state(decode_engine_state(r))}")
         # Windows: one 50 ms packet of silence first (9600 B), then 10 ms packets.
         pre = bytes(pkt * 5)
-        restart = not p.args.no_restart_flag
+        restart = p.args.restart_flag
         if not (p.bulk(audio_session_header(len(pre), restart),
                        f"audio session (prefill{', restart flag' if restart else ''})")
                 and p.bulk(pre, "audio 50 ms silence")):
@@ -956,8 +956,9 @@ def main():
     ap.add_argument("--self-test", action="store_true", help="check builders and decoders, then exit")
     ap.add_argument("--log", default=None, help="log file (default /tmp/t6_probe-<time>.log)")
     ap.add_argument("--tone-seconds", type=float, default=5.0, help="tone length, 0.2-10 s (default 5)")
-    ap.add_argument("--no-restart-flag", action="store_true",
-                    help="audio: leave the restart flag of the first packet at 0 (as the 5601 capture)")
+    ap.add_argument("--restart-flag", action="store_true",
+                    help="audio: set the restart-engine flag on the first packet (not needed: "
+                         "playback works without it, 2026-10-12)")
     ap.add_argument("--amplitude", type=float, default=0.03,
                     help="tone amplitude, 0-0.1 of full scale (default 0.03, about -30 dBFS)")
     ap.add_argument("--i2c-chunk", type=int, default=16, choices=(8, 16, 32, 64, 128),

@@ -204,7 +204,8 @@ wValue x, wIndex y; negative values as v - 1 (V).
   restart engine), EngineIndex, 6 reserved}` in its own transfer, then n
   bytes of interleaved 16-bit little-endian stereo PCM; a 9600-byte prefill,
   then 1920-byte (10 ms) packets every 10 ms. Heard on the LG's headphone
-  jack. Whether the restart flag is required is open.
+  jack, with and without the restart flag: it is not required (the
+  stream from MCT's and Windows' drivers, flag 0, works).
 - Stop: `40 24` with Activity 0 (Windows does it; MCT's Linux daemon
   never stops the engine).
 - `a4` reported "stopped, position 0" during playback too: not usable as a

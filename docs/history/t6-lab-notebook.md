@@ -829,8 +829,9 @@ packets): a 5 s 440 Hz tone at about -30 dBFS was heard on headphones in
 the LG 27GN750's jack, while the picture kept running. The first run (no
 restart flag, 1.5 s) was not heard, but the user had no headphones on then;
 the second run set the "restart engine" flag (byte 24 of the first audio
-packet). Whether the flag is needed is open (a run with
-`--no-restart-flag` settles it). The engine state read (`a4`) said
+packet). ~~Whether the flag is needed is open~~ EDIT (2026-10-12, third
+run, `--no-restart-flag`): heard as well, so the flag is not needed; the
+first run was silent only because no headphones were on. The engine state read (`a4`) said
 "stopped, position 0" before, during and after playback in both runs, so
 it doesn't reflect playback on this firmware. I2C (step B): no variant of
 `0x81` returned the monitor's EDID, so DDC/CI (step C) was not tried; the
