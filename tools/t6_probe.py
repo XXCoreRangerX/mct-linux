@@ -50,7 +50,7 @@ Run (driver unbound, root, nothing else talking to the T6):
   tools/t6_probe.py --self-test                     check the builders/decoders
 Log: --log PATH (default /tmp/t6_probe-<time>.log).
 """
-import argparse, math, os, struct, sys, time
+import argparse, math, os, statistics, struct, sys, threading, time
 
 OUTPUT = 0
 EP_OUT = 0x02
@@ -738,7 +738,7 @@ def step_d(p, st):
     rate = f["rate"]
     pkt = rate // 100 * 4                      # 10 ms: 1920 B at 48 kHz
     cyc = es["cyclic"] or 0x20000
-    secs = max(0.2, min(10.0, p.args.tone_seconds))
+    secs = max(0.2, min(30.0 if st.get("watch") else 10.0, p.args.tone_seconds))
     amp = max(0.0, min(0.1, p.args.amplitude))
     p.log(f"  playing {secs:.1f} s of 440 Hz at {rate} Hz, amplitude {amp:.3f} "
           f"({20 * math.log10(amp) if amp else -999:.0f} dBFS), {pkt}-byte packets every 10 ms")
@@ -748,6 +748,9 @@ def step_d(p, st):
     enabled = False
     sent = 0
     result = None
+    watcher = EventWatcher(p) if st.get("watch") else None
+    if watcher:
+        watcher.start()
     try:
         # MCT Linux: a4, then 24 with Activity 1, FormatIndex and CyclicBufferSize
         # from a4, ReturnSize 9600 (t6usbdongle.c t6_libusb_set_AudioEngineStatus).
@@ -796,8 +799,96 @@ def step_d(p, st):
             r = p.cin(REQ_AUD_GET_STATE, 0, 0, 16, "engine state after disable")
             if r and len(r) >= 16:
                 p.log(f"  {fmt_engine_state(decode_engine_state(r))}")
+        if watcher:
+            p.wait(0.3)
+            watcher.stop()
+            watcher.report(t0 if sent else None)
     heard = p.ask("Did the monitor play a short, quiet 440 Hz tone (headphone jack)?")
     return "PASS" if heard else "FAIL (not heard)"
+
+
+class EventWatcher:
+    """Reads the interrupt endpoint (0x83) in a thread while audio plays and
+    logs every 64-byte event: MCT's T6INTERRUPTDATA (t6bulkdef.h): byte 0
+    function mask (0x04 video, 0x20 audio), 0x13 display event, 0x20 u32:
+    audio render DMA pointer (bits 0-23), jack 0 (24), DVO HDMI (25), LVDS
+    HDMI (26). The DMA pointer's rate against the host clock is the audio
+    clock the kernel driver can follow."""
+
+    def __init__(self, p):
+        self.p, self.events, self.stop_flag, self.thread = p, [], False, None
+
+    def start(self):
+        if self.p.dry:
+            self.p.log("  [dry run] would read EP 0x83 in a thread during playback")
+            return
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def run(self):
+        while not self.stop_flag:
+            try:
+                d = bytes(self.p.dev.read(0x83, 64, 100))
+            except Exception as e:                      # timeouts while idle
+                if "timeout" not in str(e).lower() and "timed out" not in str(e).lower():
+                    self.events.append((time.monotonic(), None, str(e)))
+                    time.sleep(0.05)
+                continue
+            self.events.append((time.monotonic(), d, None))
+
+    def stop(self):
+        self.stop_flag = True
+        if self.thread:
+            self.thread.join(1.0)
+
+    def report(self, t0):
+        p = self.p
+        audio = []
+        for t, d, err in self.events:
+            if d is None:
+                p.log(f"  EVENT error {err}", console=False)
+                continue
+            rel = (t - t0) if t0 else t
+            fm = d[0]
+            disp = d[0x13] if len(d) > 0x13 else 0
+            val = struct.unpack_from("<I", d, 0x20)[0] if len(d) >= 0x24 else 0
+            ptr = val & 0xFFFFFF
+            p.log(f"  EVENT {rel * 1000:9.1f} ms fmask {fm:02x} disp {disp:02x} audio "
+                  f"{val:08x} (ptr {ptr}, jack {val >> 24 & 1}, dvo-hdmi {val >> 25 & 1}, "
+                  f"lvds-hdmi {val >> 26 & 1}) raw {d.hex()}", console=False)
+            if fm & 0x20:
+                audio.append((t, ptr))
+        p.log(f"  events read: {len(self.events)}, with the audio bit: {len(audio)}")
+        if len(audio) >= 3:
+            gaps = [(b[0] - a[0]) * 1000 for a, b in zip(audio, audio[1:])]
+            p.log(f"  audio events every {statistics.median(gaps):.1f} ms (median; min "
+                  f"{min(gaps):.1f}, max {max(gaps):.1f})")
+            # pointer advance per second, unwrapping at the cyclic buffer
+            span = audio[-1][0] - audio[0][0]
+            adv, prev = 0, audio[0][1]
+            for _, ptr in audio[1:]:
+                step = ptr - prev
+                if step < 0:
+                    step += max(prev, 1 << 17)          # wrapped at the cyclic buffer
+                adv += step
+                prev = ptr
+            if span > 0:
+                rate = adv / span
+                p.log(f"  DMA pointer advance: {adv} B in {span:.3f} s = {rate:.1f} B/s "
+                      f"(48 kHz stereo 16-bit = 192000 B/s: "
+                      f"{(rate / 192000 - 1) * 1e6:+.0f} ppm against the host clock)")
+            p.log(f"  pointer values: first {audio[0][1]}, last {audio[-1][1]}, "
+                  f"distinct steps {sorted(set(b[1] - a[1] for a, b in zip(audio, audio[1:])))[:8]}")
+        elif not self.events:
+            p.log("  no events at all during playback")
+
+
+def step_e(p, st):
+    """Step D with a 20 s tone while logging interrupt events (the audio clock)."""
+    st["watch"] = True
+    if p.args.tone_seconds == 5.0:
+        p.args.tone_seconds = 20.0
+    return step_d(p, st)
 
 
 STEPS = {
@@ -805,6 +896,7 @@ STEPS = {
     "B": ("EDID through the I2C read request vs 0x80 (read-only)", step_b, "low"),
     "C": ("DDC/CI Get VCP brightness, LG only (I2C write + read)", step_c, "low-medium"),
     "D": ("HDMI audio test tone (enable, bulk sessions, disable)", step_d, "MEDIUM"),
+    "E": ("audio clock: 20 s tone while logging interrupt events (EP 0x83)", step_e, "MEDIUM"),
 }
 
 

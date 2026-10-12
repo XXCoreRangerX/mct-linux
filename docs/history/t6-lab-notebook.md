@@ -837,3 +837,23 @@ it doesn't reflect playback on this firmware. I2C (step B): no variant of
 `0x81` returned the monitor's EDID, so DDC/CI (step C) was not tried; the
 I2C request probably reaches the board's own bus to the HDMI transmitter.
 
+**ALSA support: plan and the audio clock (2026-10-12).** The user wants real
+ALSA playback in the module. MCT's daemon (triggerdm `main2.c`
+`audio_capture_process`) reads 10 ms blocks from an ALSA loopback and sends
+each at once (`t6_libusb_SendAudio`): it is paced by the host clock only and
+never looks at the device, so drift between the host and the adapter's
+48 kHz crystal is ignored (the 128 KiB cyclic buffer, ~680 ms, hides it for
+a while). MCT's `T6INTERRUPTDATA` (`t6bulkdef.h`) defines the 64-byte
+EP 0x83 event: byte 0 function mask (0x04 video, 0x20 audio), 0x13 display
+event, and at 0x20 a u32 with the **audio render DMA pointer** (bits 0-23)
+and jack bits (24 jack 0, 25 DVO HDMI, 26 LVDS HDMI); `ReturnSize` (9600)
+is "the interrupt interval in bytes" for playback. If the chip sends these
+events, the driver can follow the adapter's real clock. `tools/t6_probe.py`
+step E plays 20 s while logging every event, their cadence and the
+pointer's rate against the host clock (ppm). Design notes for the driver:
+a sound card per T6 device (48 kHz, S16_LE stereo playback, a volume
+control on node 0 via `40 23`), audio sessions queued on the same bulk
+endpoint as the frames (a large frame can delay a packet; the device
+buffer gives room), paced by the device's events if they exist, else by a
+host timer with a fill target and drift correction.
+
