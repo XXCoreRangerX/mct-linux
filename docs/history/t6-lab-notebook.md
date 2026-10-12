@@ -789,3 +789,6 @@ hrtimer) vs 120.00 on 7.2; `modetest -v` page flips 119.5-120.4 Hz vs
 service): feed them `sleep 30 |`. QEMU resets the device when it lets go
 of it (each VM exit): the T6 came back on the host every time.
 
+**720p240 (2026-10-12).** 1280x720 at 240 Hz (279.94 MHz, reduced
+blanking) tested by the user on the LG 27GN750: works well.
+
