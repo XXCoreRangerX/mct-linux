@@ -152,10 +152,17 @@ chip converts while writing, VRAM stays 24-bit:
 | RGB565 | `04` | not RLE-encoded by the driver | 2 |
 | 8-bit palette (`0x0a` table) | `00` | `00` | 1 (inferred) |
 | YUV 4:2:2 (YUY2) | `8a` | `8a` (mode 6: Y, U, V planes of 1536/768/768 per 3 KiB unit) | 2 |
-| YUV 4:2:0 | `96` | `96` | 1.5 |
+| YUV 4:1:1, packed per row: `Y0 U V Y1 Y2 Y3` for 4 pixels (code; the format byte was first read as 4:2:0, but the vendor's converter does no vertical subsampling) | `96` | not RLE-encoded by the driver | 1.5 |
 
 Windows 11 only ever sends 24-bit. cyrozap's T2 notes show a `0x11` with
-format `04` and scale `0x1000` on the wire, which fits this table.
+format `04` and scale `0x1000` on the wire, which fits this table. The
+vendor's YUV conversion is BT.601 limited range (Y = (66R + 129G + 25B +
+0x1080) >> 8, U = (0x8080 - 38R - 74G + 112B) >> 8, V = (0x8080 + 112R -
+94G - 18B) >> 8), chroma averaged over 2 (4:2:2) or 4 (4:1:1) pixels. The
+8-bit palette table (`0x0a`) holds 256 entries of B, G, R; 8-bit sources
+use format byte `00` like 24-bit, told apart only by the length (code).
+`tools/t2_probe.py` steps l, m, n and p test 32-bit, YUV 4:2:2 and 4:1:1
+through `0x11` and the palette.
 
 ### Scaling (code; 2x upscale verified 2026-10-12)
 

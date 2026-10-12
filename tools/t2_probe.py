@@ -18,6 +18,20 @@ of risk, each one skippable:
   g  0x13 2x upscale (half-size source)
   h  0x13 YUV 4:2:2 RLE (format 0x8a, mode 6, Y/U/V planes 1536/768/768 per unit)
   i  HIGH RISK, VRAM blit engine: not implemented, see captures/t2-research/blit-engine.md
+  j  partial 2x upscale, src = target: are the neighbouring pixels untouched?
+  k  partial 2x upscale from scratch VRAM: are the neighbouring pixels untouched?
+  l  0x11 32-bit source (format 0x0e), 4 bytes per pixel B,G,R,X
+  m  0x11 YUV 4:2:2 source (format 0x8a), YUY2 = Y0 U Y1 V
+  n  0x11 YUV 12-bit source (format 0x96): the legacy driver's packing is
+     per row, per 4 px Y0 U V Y1 Y2 Y3 (FUN_140038d44); --n-layout i420/nv12
+     tries real 4:2:0 planes instead
+  p  8-bit palette: EP3 0x0a table (256 x B,G,R) loaded, 0x11 format 0x00 at
+     1 byte per pixel, table set back to 768 zeros (as the init sends) after
+     the step, also when it fails or you quit
+
+There is no step o (0x13 RLE of the 12-bit YUV format): the legacy RLE
+builder only encodes 24/32-bit (mode 5) and YUY2 (mode 6) and returns
+early for every other format, so there is no layout to copy.
 
 How it works: run the normal init, paint buffer A dark blue and show it,
 paint buffer B (hidden) dark green. Every step draws into B only: a
@@ -38,7 +52,9 @@ first; if the chip does not answer within 45 s it needs a power cycle
 (unplug and replug the tablet). The tool never sends a USB reset (that can
 make this chip drop off the bus until a power cycle). Step f writes VRAM
 at 0x3a0000 (above the RLE staging buffer at 0x390000, inside space Windows
-uses for staging big frames). Step b overwrites all of buffer B.
+uses for staging big frames). Step b overwrites all of buffer B. Step p
+changes a table on EP 0x03 that nothing else touches after the init; the
+normal init (also run by every recovery) loads the zeros again.
 
 Needs the tablet unbound from mct (the tool refuses otherwise and prints the
 commands), pyusb and access to the device node (the NixOS module's uaccess
@@ -154,6 +170,12 @@ def describe(hdr):
     if op == 0x15:
         a = hdr[10] | hdr[13] << 8 | hdr[16] << 16
         return f"0x15 flip  SEL {hdr[4]:#04x}  scanout {a << 2:#08x}"
+    if op == 0x0a and len(hdr) == 769:
+        used = [(i, hdr[1 + 3 * i:4 + 3 * i]) for i in range(256) if any(hdr[1 + 3 * i:4 + 3 * i])]
+        if not used:
+            return "0x0a table (EP3): 768 zeros, as the init sends"
+        return "0x0a table (EP3), entries B,G,R: " + "  ".join(
+            f"[{i:#04x}] {e.hex(' ')}" for i, e in used) + "  (all others 0)"
     return f"opcode {op:#04x}, {len(hdr)} bytes"
 
 
@@ -164,13 +186,14 @@ def solid(w, h, c):
     return bytes(c) * (w * h)
 
 
-def quads(w, h):
+def quads(w, h, border=True):
     """Red top left, green top right, blue bottom left, yellow bottom right,
-    1 px white border. Tells R/B swaps, mirroring and row shifts apart."""
+    1 px white border. Tells R/B swaps, mirroring and row shifts apart.
+    The YUV steps leave the border out (subsampled chroma would smear it)."""
     img = bytearray(w * h * 3)
     for y in range(h):
         for x in range(w):
-            if x in (0, w - 1) or y in (0, h - 1):
+            if border and (x in (0, w - 1) or y in (0, h - 1)):
                 c = WHITE
             elif y < h // 2:
                 c = RED if x < w // 2 else GREEN
@@ -259,6 +282,100 @@ def yuv_bands(w, h):
     return bytes(out), bytes(ref)
 
 
+def to_bgrx(rgb):
+    """32-bit source for format 0x0e: B, G, R, X per pixel (the legacy driver
+    sends the GDI 32 bpp surface, BGRX in memory; its black-level code ORs
+    bytes 0..2 of every 4). X = 0."""
+    out = bytearray(len(rgb) // 3 * 4)
+    out[0::4], out[1::4], out[2::4] = rgb[2::3], rgb[1::3], rgb[0::3]
+    return bytes(out)
+
+
+# RGB -> YUV exactly like the legacy driver's tables (FUN_140038af0, BT.601
+# limited range, 8 fraction bits, 0x80 rounding): per channel value
+#   Y = (66 R + 129 G + 25 B + 0x1080) >> 8
+#   U = (0x8080 - 38 R - 74 G + 112 B) >> 8,  V = (0x8080 + 112 R - 94 G - 18 B) >> 8
+# Chroma of 2 (4:2:2) or 4 (12-bit) pixels is summed and shifted by 9 / 10.
+
+def _yuv_terms(rgb, i):
+    r, g, b = rgb[i:i + 3]
+    return ((66 * r + 129 * g + 25 * b + 0x1080) >> 8,
+            0x8080 - 38 * r - 74 * g + 112 * b, 0x8080 + 112 * r - 94 * g - 18 * b)
+
+
+def rgb_to_yuv(c):
+    y, u, v = _yuv_terms(bytes(c), 0)
+    return y, u >> 8, v >> 8
+
+
+def to_yuy2(rgb, w):
+    """Format 0x8a payload: per 2 px Y0 U Y1 V, chroma averaged over the pair
+    (FUN_140039000, the converter for interface type 5 / format 0x20000)."""
+    assert w % 2 == 0
+    out = bytearray()
+    for i in range(0, len(rgb), 6):
+        y0, u0, v0 = _yuv_terms(rgb, i)
+        y1, u1, v1 = _yuv_terms(rgb, i + 3)
+        out += bytes((y0, (u0 + u1) >> 9 & 0xFF, y1, (v0 + v1) >> 9 & 0xFF))
+    return bytes(out)
+
+
+def to_y411(rgb, w):
+    """Format 0x96 payload as the legacy driver builds it (FUN_140038d44,
+    called by FUN_14002b798 with format 0x40000 and length w*h*6>>2): every
+    row on its own, per 4 px Y0 U V Y1 Y2 Y3, chroma averaged over the 4 px.
+    No vertical subsampling, so it is 4:1:1 packed, not planar 4:2:0."""
+    assert w % 4 == 0
+    out = bytearray()
+    for i in range(0, len(rgb), 12):
+        t = [_yuv_terms(rgb, i + 3 * k) for k in range(4)]
+        out += bytes((t[0][0], sum(x[1] for x in t) >> 10 & 0xFF,
+                      sum(x[2] for x in t) >> 10 & 0xFF, t[1][0], t[2][0], t[3][0]))
+    return bytes(out)
+
+
+def to_420(rgb, w, h, nv12):
+    """Real 4:2:0 for --n-layout (not what the driver does): Y plane, then
+    U and V planes (I420) or interleaved U,V (NV12), chroma averaged over 2x2."""
+    assert w % 2 == 0 and h % 2 == 0
+    ys, us, vs = bytearray(), bytearray(), bytearray()
+    for y in range(h):
+        for x in range(w):
+            ys.append(_yuv_terms(rgb, (y * w + x) * 3)[0])
+    for y in range(0, h, 2):
+        for x in range(0, w, 2):
+            t = [_yuv_terms(rgb, ((y + dy) * w + x + dx) * 3) for dy in (0, 1) for dx in (0, 1)]
+            us.append(sum(a[1] for a in t) >> 10 & 0xFF)
+            vs.append(sum(a[2] for a in t) >> 10 & 0xFF)
+    if nv12:
+        uv = bytearray(len(us) * 2)
+        uv[0::2], uv[1::2] = us, vs
+        return bytes(ys + uv)
+    return bytes(ys + us + vs)
+
+
+# step p palette: index -> colour, at spread-out indices so that a chip
+# that ignores the table (index used as a grey level) shows greys
+PALETTE = {0x20: WHITE, 0x40: RED, 0x80: GREEN, 0xC0: BLUE, 0xE0: YELLOW}
+
+
+def lut_bytes(pal):
+    """EP3 0x0a command: 0x0a + 256 entries of B, G, R (interleaved). Layout
+    from the legacy miniport (t2exgrp64.sys FUN_00019030, 8 bpp branch): it
+    turns the VIDEO_CLUT entries (R, G, B, 0) into table[3i..3i+2] =
+    B, G, R and hands the 768 bytes to t2usb64.sys, which sends 0a + them
+    unchanged (FUN_14003b1c8, length 0x301)."""
+    t = bytearray(768)
+    for i, (r, g, b) in pal.items():
+        t[3 * i:3 * i + 3] = bytes((b, g, r))
+    return b"\x0a" + bytes(t)
+
+
+def to_index(rgb, pal):
+    inv = {bytes(c): i for i, c in pal.items()}
+    return bytes(inv[rgb[i:i + 3]] for i in range(0, len(rgb), 3))
+
+
 # ---------------------------------------------------------------------------
 # encoders (t2rle does the RLE itself)
 
@@ -315,10 +432,12 @@ def fb_addr(buf, vx, vy, w, h):
 
 class Cmd:
     """One EP2 command: header in its own transfer, payload in `chunk`-sized
-    transfers (the firmware parses EP2 per transfer, protocol-t2.md)."""
+    transfers (the firmware parses EP2 per transfer, protocol-t2.md).
+    ep=3: one EP3 command without reply, sent as a single transfer."""
 
-    def __init__(self, name, header, payload=b"", chunk=CHUNK_13):
+    def __init__(self, name, header, payload=b"", chunk=CHUNK_13, ep=2):
         self.name, self.header, self.payload, self.chunk = name, header, payload, chunk
+        self.ep = ep
 
     def transfers(self):
         yield self.header
@@ -481,6 +600,65 @@ def step_k(opt):
     return partial_half(opt, True)
 
 
+def cmd_raw11(name, w, h, fmt, pay):
+    """0x11 test box: source size = target size, scale 0x4000."""
+    a = fb_addr(FB_B, TEST_VX, BOX_VY, w, h)
+    return Cmd(name, hdr11(a, w, h, w, h, fmt, len(pay)), pay, CHUNK_11)
+
+
+PASS_SAME = f"PASS = both boxes identical ({QUADS_TEXT})"
+
+
+def step_l(opt):
+    img = quads(BOX_W, BOX_H)
+    pay = to_bgrx(rot180(img))
+    return (prep(img) + [cmd_raw11("test box: 0x11 32-bit B,G,R,X (fmt 0x0e)",
+                                   BOX_W, BOX_H, 0x0e, pay)],
+            f"{PASS_SAME}. FAIL = anything else: red and blue swapped, colours shifted "
+            "or striped, box only partly drawn, or garbage")
+
+
+YUV_TEXT = ("red top left, green top right, blue bottom left, yellow bottom right, "
+            "no border")
+YUV_PASS = (f"PASS = both boxes show the same 4 colours in the same places ({YUV_TEXT}); "
+            "slightly different shades are normal for YUV. FAIL = colours swapped "
+            "(e.g. red shown as blue or purple), green/pink tint, stripes, garbage, "
+            "or the box only partly drawn")
+
+
+def step_m(opt):
+    img = quads(BOX_W, BOX_H, border=False)
+    pay = to_yuy2(rot180(img), BOX_W)
+    return (prep(img) + [cmd_raw11("test box: 0x11 YUV 4:2:2 YUY2 (fmt 0x8a)",
+                                   BOX_W, BOX_H, 0x8a, pay)], YUV_PASS)
+
+
+def step_n(opt):
+    img = quads(BOX_W, BOX_H, border=False)
+    dev = rot180(img)
+    if opt.n_layout == "y411":
+        pay, what = to_y411(dev, BOX_W), "driver packing Y0 U V Y1 Y2 Y3"
+    else:
+        pay, what = to_420(dev, BOX_W, BOX_H, opt.n_layout == "nv12"), opt.n_layout.upper()
+    return (prep(img) + [cmd_raw11(f"test box: 0x11 YUV 12-bit (fmt 0x96), {what}",
+                                   BOX_W, BOX_H, 0x96, pay)], YUV_PASS)
+
+
+def step_p(opt):
+    img = quads(BOX_W, BOX_H)
+    pay = to_index(rot180(img), PALETTE)
+    return ([Cmd("load the 0x0a table with the test palette (EP3)", lut_bytes(PALETTE), ep=3)]
+            + prep(img)
+            + [cmd_raw11("test box: 0x11 8-bit indices (fmt 0x00, 1 byte per pixel)",
+                         BOX_W, BOX_H, 0x00, pay)],
+            f"{PASS_SAME}, and the dark green around them looks as in the other steps. "
+            "FAIL = the right box grey, black, red/blue swapped, only a third drawn or "
+            "garbage. ALSO FAIL (and say so in the note): the background or the left box "
+            "changed colour, which would mean the table acts on 24-bit output too",
+            [Cmd("restore the 0x0a table: 768 zeros, as the init sends (EP3)",
+                 lut_bytes({}), ep=3)])
+
+
 STEPS = [
     ("a", "control: 0x13 RGB24 RLE rect as Windows sends it", "low", step_a),
     ("b", "full frame, payload in 512 KiB transfers", "low", step_b),
@@ -494,6 +672,11 @@ STEPS = [
     ("j", "partial 2x upscale, src = target: are the neighbours untouched?", "medium", step_j),
     ("k", "partial 2x upscale from scratch VRAM: are the neighbours untouched?", "medium",
      step_k),
+    ("l", "0x11 32-bit BGRX source (format 0x0e)", "low-medium", step_l),
+    ("m", "0x11 YUV 4:2:2 YUY2 source (format 0x8a)", "low-medium", step_m),
+    ("n", "0x11 YUV 12-bit source (format 0x96)", "medium", step_n),
+    ("p", "8-bit palette: 0x0a table + 0x11 at 1 byte per pixel; the table is set back to "
+     "zeros afterwards", "medium", step_p),
 ]
 
 
@@ -544,8 +727,13 @@ class Log:
 
 
 def print_cmd(cmd, full, timeout_ms):
-    print(f"  EP2  {cmd.name}")
-    print(f"       header {len(cmd.header)} B: {hexs(cmd.header)}")
+    print(f"  EP{cmd.ep}  {cmd.name}")
+    if full or len(cmd.header) <= 64:
+        print(f"       {'header' if cmd.ep == 2 else 'command'} {len(cmd.header)} B: "
+              f"{hexs(cmd.header)}")
+    else:
+        print(f"       command {len(cmd.header)} B in one transfer, sha256 "
+              f"{hashlib.sha256(cmd.header).hexdigest()[:16]}: {hexs(cmd.header[:16])} ...")
     print(f"       {describe(cmd.header)}")
     p = cmd.payload
     if p:
@@ -688,12 +876,12 @@ class Probe:
         with HoldCtrlC():
             try:
                 for i, tr in enumerate(cmd.transfers()):
-                    self._out(2, tr, 2000 if i == 0 else 30000)
+                    self._out(cmd.ep, tr, 2000 if i == 0 else 30000)
             except usb.core.USBError as e:
                 if not is_timeout(e):
                     raise Fatal(f"USB error while sending {cmd.name}: {e}")
-                self.log("EP2 TIMEOUT", cmd.name)
-                print(f"!! EP2 write timed out during '{cmd.name}'")
+                self.log(f"EP{cmd.ep} TIMEOUT", cmd.name)
+                print(f"!! EP{cmd.ep} write timed out during '{cmd.name}'")
                 return self.stuck(cmd.name, read_queued=False)
             return self.health(cmd.name)
 
@@ -832,7 +1020,10 @@ def run_step(p, key, title, risk, fn, opt, results):
         p.log("STEP", f"{key} stub")
         results.append((key, "not implemented"))
         return
-    cmds, expect = fn(opt)
+    # a step returns (commands, expect) or (commands, expect, restore commands);
+    # the restore commands are sent after the step however it ends
+    cmds, expect, *rest = fn(opt)
+    after = rest[0] if rest else []
     print("sends:")
     if p.dry:
         for c in cmds:
@@ -842,18 +1033,42 @@ def run_step(p, key, title, risk, fn, opt, results):
         print(f"  expect on the panel: {expect}")
         p.send(cmd_flip(FB_A))
         print("  expect: plain dark blue again")
+        if after:
+            print("  then, however the step ended:")
+            for c in after:
+                p.send(c)
         results.append((key, "dry run"))
         return
     for c in cmds:
         print_cmd(c, False, p.timeout_ms)
     print(f"  then flip to B ({hexs(flip_bytes(FB_B))}), look, flip back to A, "
           "fc01 check after each flip")
+    if after:
+        print("  afterwards, also on failure or quit:")
+    for c in after:
+        print_cmd(c, False, p.timeout_ms)
     print(f"expect: {expect}")
     if ask(f"run step {key}?", "ynq") == "n":
         p.log("STEP", f"{key} skipped")
         results.append((key, "skipped"))
         return
     p.log("STEP", f"{key} start: {title}")
+    restore = bool(after)
+    try:
+        run_live(p, key, cmds, expect, results)
+    except Fatal:
+        restore = False             # the chip does not answer, nothing to send
+        raise
+    finally:
+        if restore:
+            for c in after:
+                print(f"-> {c.name}")
+                if not p.send(c):
+                    # the recovery ran the normal init, which restores it as well
+                    p.log("RESTORE", f"{key}: parser stuck after '{c.name}', recovered")
+
+
+def run_live(p, key, cmds, expect, results):
     for c in cmds + [cmd_flip(FB_B)]:
         print(f"-> {c.name}")
         if not p.send(c):
@@ -863,7 +1078,10 @@ def run_step(p, key, title, risk, fn, opt, results):
             if ask("continue with the next step?") == "n":
                 raise Quit()
             return
-    seen = ask(f"do you see: {expect}?")
+    if expect.startswith("PASS"):
+        seen = ask(f"{expect}.\nPASS (y) or FAIL (n)?")
+    else:
+        seen = ask(f"do you see: {expect}?")
     note = ask_note()
     p.log("ANSWER", f"{key} seen={seen} note={note!r}")
     res = f"{'as expected' if seen == 'y' else 'NOT as expected'}{': ' + note if note else ''}"
@@ -929,13 +1147,54 @@ def self_test():
     g = rot180(gradient_frame())
     pay_b = rle_rect(g, W, H)
     assert t2rle.decode(pay_b, W, H) == g.replace(b"\x30", b"\x31")
-    # every step builds, headers parse
+    # 32-bit, YUV and palette builders (steps l-p)
+    assert to_bgrx(bytes(RED + BLUE)) == bytes.fromhex("0000ff00ff000000")
+    assert rgb_to_yuv(RED) == (82, 90, 240) and rgb_to_yuv(WHITE) == (235, 128, 128)
+    assert rgb_to_yuv((0, 0, 0)) == (16, 128, 128) and rgb_to_yuv(BLUE) == (41, 240, 110)
+    assert rgb_to_yuv(GREEN) == (144, 54, 34) and rgb_to_yuv(YELLOW) == (210, 16, 146)
+    assert to_yuy2(bytes(RED) * 2, 2) == bytes((82, 90, 82, 240))
+    assert to_yuy2(bytes(WHITE + (0, 0, 0)), 2) == bytes((235, 128, 16, 128))
+    assert to_y411(bytes(RED) * 4, 4) == bytes((82, 90, 240, 82, 82, 82))
+    assert to_y411(bytes(BLUE) * 4 + bytes(YELLOW) * 4, 8) == bytes(
+        (41, 240, 110, 41, 41, 41, 210, 16, 146, 210, 210, 210))
+    img = rot180(quads(BOX_W, BOX_H, border=False))
+    assert len(to_yuy2(img, BOX_W)) == BOX_W * BOX_H * 2
+    assert len(to_y411(img, BOX_W)) == BOX_W * BOX_H * 6 >> 2        # FUN_14002b798
+    for nv in (False, True):
+        assert len(to_420(img, BOX_W, BOX_H, nv)) == BOX_W * BOX_H * 6 >> 2
+    q = quads(4, 4, border=False)                   # 2x2 blocks: red, green / blue, yellow
+    assert to_420(q, 4, 4, False) == bytes((82, 82, 144, 144) * 2 + (41, 41, 210, 210) * 2
+                                           + (90, 54, 240, 16) + (240, 34, 110, 146))
+    assert to_420(q, 4, 4, True)[16:] == bytes((90, 240, 54, 34, 240, 110, 16, 146))
+    lut = lut_bytes(PALETTE)
+    assert len(lut) == 769 and lut[0] == 0x0a and lut[1 + 3 * 0x40:4 + 3 * 0x40] == b"\0\0\xff"
+    assert lut[1 + 3 * 0xC0:4 + 3 * 0xC0] == b"\xff\0\0" and sum(lut[1:]) == 255 * 8
+    assert lut_bytes({}) == b"\x0a" + bytes(768)                     # init.bin record 13
+    assert set(to_index(quads(BOX_W, BOX_H), PALETTE)) == set(PALETTE)
+    # every step builds, headers parse, 0x11 length fields match the payload
     class O:
-        scratch, stretch_src = SCRATCH, "target"
+        scratch, stretch_src, n_layout = SCRATCH, "target", "y411"
+    sizes = {"l": BOX_W * BOX_H * 4, "m": BOX_W * BOX_H * 2, "n": BOX_W * BOX_H * 3 // 2,
+             "p": BOX_W * BOX_H}
+    fmts = {"l": 0x0e, "m": 0x8a, "n": 0x96, "p": 0x00}
     for key, _, _, fn in STEPS:
         if fn:
-            for c in fn(O)[0]:
+            ret = fn(O)
+            for c in ret[0] + (ret[2] if len(ret) > 2 else []):
                 assert describe(c.header).startswith(f"0x{c.header[0]:02x}")
+                if c.header[0] == 0x11:
+                    assert int.from_bytes(c.header[18:21], "little") == len(c.payload)
+            if key in sizes:
+                t = ret[0][-1]
+                assert t.header[0] == 0x11 and t.header[17] == fmts[key]
+                assert len(t.payload) == sizes[key], key
+                assert t.header[1:5] == fb_addr(FB_B, TEST_VX, BOX_VY, BOX_W, BOX_H).to_bytes(
+                    4, "little")
+    for lay in ("i420", "nv12"):
+        O.n_layout = lay
+        assert len(step_n(O)[0][-1].payload) == sizes["n"]
+    ret = step_p(O)
+    assert ret[0][0].ep == 3 and ret[0][0].header == lut and ret[2][0].header == lut_bytes({})
     print(f"self-test ok (step b payload {len(pay_b)} B, {len(pay_b) % 512} B in the last "
           f"512 B packet, {(len(pay_b) + CHUNK_BIG - 1) // CHUNK_BIG} transfers)")
 
@@ -943,7 +1202,7 @@ def self_test():
 def main():
     ap = argparse.ArgumentParser(description="Interactive probe for unverified T2 frame "
                                  "commands; read the docstring first.")
-    ap.add_argument("--steps", default="all", help="e.g. a,c-e (default all: a-i)")
+    ap.add_argument("--steps", default="all", help="e.g. a,c-e (default all: a-p, no o)")
     ap.add_argument("--dry-run", action="store_true", help="print every packet, no USB access")
     ap.add_argument("--full-hex", action="store_true", help="dry run: print whole payloads")
     ap.add_argument("--self-test", action="store_true", help="check the packet builders and exit")
@@ -954,6 +1213,10 @@ def main():
     ap.add_argument("--stretch-src", choices=("target", "scratch"), default="target",
                     help="0x13 source address for steps g/h: = target like the legacy "
                     "driver (default), or the scratch address (try after f worked)")
+    ap.add_argument("--n-layout", choices=("y411", "i420", "nv12"), default="y411",
+                    help="payload of step n (format 0x96): y411 = per row, per 4 px "
+                    "Y0 U V Y1 Y2 Y3 as the legacy driver builds it (default); i420/nv12 = "
+                    "planar 4:2:0, only to try if y411 fails")
     opt = ap.parse_args()
     keys = parse_steps(opt.steps)
 
@@ -990,7 +1253,8 @@ def main():
             if opt.log else f"/tmp/t2_probe-{ts}.log")
     log = Log(path)
     log("START", f"steps {''.join(keys)} intf {intf} pid {pid} timeout {opt.timeout_ms} ms "
-                 f"scratch {opt.scratch:#x} stretch-src {opt.stretch_src}")
+                 f"scratch {opt.scratch:#x} stretch-src {opt.stretch_src} "
+                 f"n-layout {opt.n_layout}")
     print(f"log: {path}")
 
     results = []

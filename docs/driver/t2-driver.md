@@ -191,7 +191,12 @@ rects were decoded in place: the chip first writes the packed source into
 the target area, then scales over it, and a flip before the scaler
 finishes shows the packed data. 0.3.30 decodes at `0x560000` (past the
 staging area of a worst-case full frame) and scales from there, as in
-probe step k.
+probe step k. Test of 0.3.30: the edges still glitch, also on small
+moves. Remaining suspect: the scaler still running when the `0x15` flip
+is executed (the vendor's blit path never waits either, but it only wrote
+the front buffer). Next: a probe experiment for a "scaler done" signal
+(register `fe70`/`fc59` reads after a large scaled rect), then wait for it
+before flipping. Until then half mode has this artifact.
 
 ## Software gamma (driver 0.3.23)
 
