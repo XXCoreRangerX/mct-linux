@@ -210,4 +210,11 @@ wValue x, wIndex y; negative values as v - 1 (V).
   never stops the engine).
 - `a4` reported "stopped, position 0" during playback too: not usable as a
   progress counter on this firmware.
+- Audio plays only while the output is on with a mode set (HDMI carries
+  audio inside the video signal).
+- Interrupt events (MCT's `T6INTERRUPTDATA`, `t6bulkdef.h`): byte 0 is a
+  function mask (0x04 video, 0x20 audio); at 0x20 a u32 with the audio
+  render DMA pointer (bits 0-23) and jack bits (24 jack 0, 25 DVO HDMI, 26
+  LVDS HDMI). Whether the 5600 sends audio events during playback is not
+  known yet (C).
 

@@ -857,3 +857,14 @@ endpoint as the frames (a large frame can delay a packet; the device
 buffer gives room), paced by the device's events if they exist, else by a
 host timer with a fill target and drift correction.
 
+**Step E results (2026-10-12, lab `captures/t6_probe-20261012-17*.log`).**
+Two runs were silent because the headphone plug wasn't fully in. With it
+in: audio plays only when the probe sets a mode and the output is on (with
+the output off after the kernel driver was unbound, nothing): HDMI audio
+rides on the video signal, so the driver can play only while the CRTC is
+on. The event reader (pyusb, a thread reading EP 0x83 with 100 ms
+timeouts) got one frame-done event (`04 ... 04`) and then only I/O errors
+(EIO) for the rest of each run, so no conclusion about audio events; the
+kernel driver, which already reads EP 0x83 reliably, will count events
+with the audio function bit (0x20) and their DMA pointer instead.
+
