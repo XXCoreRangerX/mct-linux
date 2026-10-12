@@ -26,50 +26,40 @@ of the vendor drivers for interoperability, and testing on real hardware.
 
 ## Status
 
-✅ works &nbsp; ⚠️ works with limits, or untested &nbsp; ❌ not supported
+✅ works &nbsp; ⚠️ works with limits, or untested &nbsp; ❌ not supported &nbsp; ➖ doesn't apply
 
-**Trigger 6 (j5create JUA254, `0711:5600`)**
-
-| | Feature | Notes |
+| Feature | Trigger 6: j5create JUA254 (`0711:5600`) | Trigger II: Wacom DTU-1031X |
 |---|---|---|
-| ✅ | Picture on any HDMI monitor | modes from the monitor's EDID |
-| ✅ | High refresh rates | up to 1080p at 144 Hz |
-| ✅ | Large modes | 2560x1440@60, 3440x1440@60, 3840x2160@30 |
-| ✅ | Lossless picture | RGB or YUV 4:4:4 at rest, NV12 during motion (automatic) |
-| ✅ | Hardware cursor | up to 128 px |
-| ✅ | Monitor and adapter hotplug | |
-| ✅ | DPMS, suspend/resume | |
-| ✅ | Gamma (night light) | |
-| ✅ | Text console | |
-| ⚠️ | USB 2 ports | works, but modes up to 2048 wide and slower motion |
-| ⚠️ | `0711:5601` single-output adapters | should work, untested |
-| ❌ | Second output of dual-head adapters and docks | |
-| ❌ | HDMI audio | |
-| ❌ | JPEG mode | would need an encoder in the kernel ([roadmap](docs/roadmap.md)) |
-| ❌ | Hardware rotation | the compositor rotates instead |
+| **Display** | | |
+| Picture | ✅ any HDMI monitor | ✅ built-in 1024x600 panel |
+| Modes | ✅ from the monitor's EDID, up to 3440x1440@60 and 3840x2160@30 | ✅ 1024x600 (fixed panel) |
+| Refresh rates | ✅ up to 144 Hz at 1080p; higher at lower resolutions where the monitor allows | ✅ 60 Hz (fixed panel) |
+| Pixel formats | ✅ RGB24, RGB32, YUV 4:4:4, NV12; automatic or fixed | ✅ RGB24, sent run-length encoded |
+| Picture quality | ✅ lossless at rest; NV12 during large motion (automatic) | ✅ lossless by default; optional lossy mode during heavy motion |
+| Tear-free updates, only changed areas sent | ✅ | ✅ |
+| Hardware cursor | ✅ up to 128 px | ✅ 64 px |
+| Gamma (night light) | ✅ | ❌ not yet |
+| Brightness | ➖ the monitor's own controls | ✅ standard backlight interface |
+| Hardware rotation | ❌ the compositor rotates | ❌ the compositor rotates |
+| JPEG mode | ❌ would need an encoder in the kernel ([roadmap](docs/roadmap.md)) | ➖ the chip has none |
+| Second output | ❌ dual-head adapters and docks | ➖ |
+| Audio | ❌ | ➖ |
+| **Devices and connection** | | |
+| Hotplug | ✅ monitor and adapter | ✅ the tablet |
+| DPMS, suspend/resume | ✅ | ✅ |
+| Text console | ✅ | ✅ |
+| USB link | ✅ USB 3; ⚠️ USB 2 works with modes up to 2048 wide and slower motion | ✅ USB 2 (by design) |
+| Pen | ➖ | ✅ in-kernel wacom driver |
+| Other devices with the chip | ⚠️ `0711:5601` single-output adapters should work, untested | ❌ other Trigger II devices need their own init (see the note above) |
+| Known hardware issues | | ⚠️ faint vertical lines on some starts; a reload or replug fixes it ([known issues](#known-issues)) |
 
-**Trigger II (Wacom DTU-1031X)**
-
-| | Feature | Notes |
-|---|---|---|
-| ✅ | Picture | 1024x600, tear-free, lossless by default |
-| ✅ | Hardware cursor | |
-| ✅ | Brightness | through the standard backlight interface |
-| ✅ | Pen | in-kernel wacom driver |
-| ✅ | DPMS, suspend/resume, hotplug | |
-| ✅ | Lossy mode for heavy motion | optional |
-| ⚠️ | Faint vertical lines on some starts | hardware; a reload or replug fixes it ([known issues](#known-issues)) |
-| ❌ | Other Trigger II devices | see the note above |
-
-**General**
-
-| | Feature | Notes |
-|---|---|---|
-| ✅ | Wayland and X11 compositors | |
-| ✅ | Linux 7.2 and later | mainly developed and tested on 7.2 |
-| ✅ | Linux 6.12 LTS to 7.1 | through a compatibility layer; built in CI for 6.12 and 6.18, tested on 6.12 in a VM with the JUA254 |
-| ❌ | Linux older than 6.12 | |
-| ✅ | Desktop app and command line tool | MCT Display Manager, `mctctl` |
+| General | |
+|---|---|
+| ✅ Wayland and X11 compositors | |
+| ✅ Linux 7.2 and later | mainly developed and tested on 7.2 |
+| ✅ Linux 6.12 LTS to 7.1 | through a compatibility layer; built in CI for 6.12 and 6.18, tested on 6.12 in a VM with the JUA254 |
+| ❌ Linux older than 6.12 | |
+| ✅ Desktop app and command line tool | MCT Display Manager and `mctctl`: settings per display, saved and restored, live status, device details |
 
 ## Features
 
