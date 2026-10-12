@@ -140,7 +140,7 @@ gammastep, wlsunset). The chip has no gamma tables, so a non-identity LUT
 is applied to the update's snapshot before diffing: the device copies, the
 lossy write-back and the refinement all work on the corrected image, and a
 LUT change re-diffs the whole screen. With the identity LUT nothing extra
-runs. Not yet tested on the tablet.
+runs. Tested on the tablet 2026-10-12 (night light): works.
 
 ## Performance research backlog
 

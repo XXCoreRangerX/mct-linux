@@ -38,7 +38,7 @@ of the vendor drivers for interoperability, and testing on real hardware.
 | Picture quality | ✅ lossless at rest; NV12 during large motion (automatic) | ✅ lossless by default; optional lossy mode during heavy motion |
 | Tear-free updates, only changed areas sent | ✅ | ✅ |
 | Hardware cursor | ✅ up to 128 px | ✅ 64 px |
-| Gamma (night light) | ✅ in software | ⚠️ in software, not tested on the tablet yet |
+| Gamma (night light) | ✅ in software | ✅ in software |
 | Brightness | ➖ the monitor's own controls | ✅ standard backlight interface |
 | Hardware rotation | ❌ the compositor rotates | ❌ the compositor rotates |
 | JPEG mode | ❌ would need an encoder in the kernel ([roadmap](docs/roadmap.md)) | ➖ the chip has none |
