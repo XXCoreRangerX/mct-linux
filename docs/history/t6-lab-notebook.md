@@ -818,3 +818,21 @@ docs, the vendor drivers, the other projects and the web (lab
 - A Trigger 5 driver ("drm/trigger5") is under review on dri-devel (v2,
   2026-09); its review comments match mct's open items.
 
+**HDMI audio works (2026-10-12, `tools/t6_probe.py`, lab
+`captures/t6_probe-20261012-*.log`).** Descriptors (step A): one playback
+engine, one format, 48 kHz 16-bit stereo (fs 128, BCLK 1.536 MHz), one
+volume node (0-31, at 15 on all channels), cyclic buffer 128 KiB, jack
+state `0x05` (speaker 1, DVO HDMI 0, LVDS HDMI 1). Playback (step D):
+`40 24` with Activity 1, format 0, ReturnSize 9600, cyclic buffer from `a4`,
+then signature-3 bulk sessions (a 9600 B prefill, then 1920 B = 10 ms
+packets): a 5 s 440 Hz tone at about -30 dBFS was heard on headphones in
+the LG 27GN750's jack, while the picture kept running. The first run (no
+restart flag, 1.5 s) was not heard, but the user had no headphones on then;
+the second run set the "restart engine" flag (byte 24 of the first audio
+packet). Whether the flag is needed is open (a run with
+`--no-restart-flag` settles it). The engine state read (`a4`) said
+"stopped, position 0" before, during and after playback in both runs, so
+it doesn't reflect playback on this firmware. I2C (step B): no variant of
+`0x81` returned the monitor's EDID, so DDC/CI (step C) was not tried; the
+I2C request probably reaches the board's own bus to the HDMI transmitter.
+

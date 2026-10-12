@@ -54,7 +54,7 @@ Nothing here shares code or framing with the T2.
 | `40 14` | 0 | 0 | none | cancel after a failed bulk write (C); on the 5600 it restarts the device: it leaves the bus and re-enumerates ~3 s later (V) |
 | `40 30` | | level | none | hardware reset (C) |
 | `40 1f` | | 0..3 | none | hardware rotation (C); stalls on the 5600, also with 0 (V) |
-| `40 23`, `40 24`, `c0 a1..a5` | | | | audio (C) |
+| `40 23`, `40 24`, `c0 a1..a5` | | | | audio: `a1` engine caps, `a2`/`a3` node caps/values, `a4` engine state, `a5` formats, `24` set engine state, `23` node value (volume). **V** 2026-10-12: playback works on the 5600, see "Audio" below |
 
 Outputs: the 5600 drives its HDMI port as output 0, the 5601 in the capture
 as output 1. Probe `87` for both.
@@ -190,3 +190,23 @@ wValue x, wIndex y; negative values as v - 1 (V).
 - USB: ~330-360 MB/s while busy, synchronous 100 KB transfers.
 - Full raw NV12 1080p: ~98 fps; raw BGR24: ~52 fps; NV12 720p: ~195 fps.
 - Partial updates only cost what changed.
+
+## Audio (verified 2026-10-12 on the 5600, `tools/t6_probe.py` step D)
+
+- Descriptors: one playback engine (`a1` index 0; index 1, capture, returns
+  nothing), one format (`a5`: 48 kHz, 16-bit, 2 channels), one volume node
+  (`a2`/`a3`: 0-31, 15 at start), cyclic buffer 128 KiB (`a4`).
+- Start: `40 24` with 16 bytes `{Activity 1, 0, FormatIndex u16, 0 u32,
+  ReturnSize u32 = 9600, CyclicBufferSize u32}` (MCT; for playback the
+  Activity byte is ignored, the bulk stream drives the engine).
+- Data: bulk sessions with signature 3: a 32-byte header `{3, n, 0, n, 0,
+  flags u8 at byte 20 = 0, function-specific at 24: Audio.Flags (0x01 =
+  restart engine), EngineIndex, 6 reserved}` in its own transfer, then n
+  bytes of interleaved 16-bit little-endian stereo PCM; a 9600-byte prefill,
+  then 1920-byte (10 ms) packets every 10 ms. Heard on the LG's headphone
+  jack. Whether the restart flag is required is open.
+- Stop: `40 24` with Activity 0 (Windows does it; MCT's Linux daemon
+  never stops the engine).
+- `a4` reported "stopped, position 0" during playback too: not usable as a
+  progress counter on this firmware.
+

@@ -77,9 +77,10 @@ candidate with evidence, effort S/M/L, hardware risk and whether it needs
 hardware we don't have, plus a "not recommended" list: drm_panic, VRR, HDR,
 writeback, a T5 backend now). Its top 10, not yet ordered with the user:
 
-1. **T6 HDMI audio.** The JUA254 most likely has it (over the vendor
-   endpoint, MCT's daemon shows how). Read-only probe first (S), then ALSA
-   playback in the module (L).
+1. **T6 HDMI audio.** ~~The JUA254 most likely has it~~: it works
+   (2026-10-12, `tools/t6_probe.py`, 48 kHz stereo heard on the LG's
+   jack). Next: ALSA playback in the module (L), sharing the bulk endpoint
+   with the frames.
 2. **DDC/CI through the T6** (firmware I2C requests `0x81`/`0x02`): monitor
    brightness and input from ddcutil. Reads first, on the LG only (S to M).
 3. **Cursor independent of `io_lock`:** no cursor stutter during large
