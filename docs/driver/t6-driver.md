@@ -73,6 +73,38 @@ USB transfers are queued without waiting (up to 16), each write under
 - Event endpoint errors: reset the endpoint and resubmit with backoff;
   after 10 failures fall back to polling.
 
+## Audio
+
+Since 0.29.0, when the kernel has ALSA PCM support (`CONFIG_SND_PCM`) and
+the adapter reports 48 kHz, 16-bit stereo (`a5`), the driver registers a
+sound card named after the board, with one playback device "HDMI". If
+that fails, the display still works.
+
+- Start (ALSA trigger): an hrtimer ticks every 5 ms and queues a work item
+  on the high-priority workqueue.
+- The work takes `io_lock`, so packets go between frames, never inside one.
+  On the first run it enables the engine (`40 24`, Activity 1, the format
+  and cyclic buffer size read from `a4` at probe, ReturnSize 9600).
+- It then sends 1920-byte (10 ms) packets, each a 32-byte session header
+  (signature 3) and the PCM, until about 120 ms more than the host clock's
+  elapsed playback has been sent. Data due now is sent whether or not the
+  application has written it (ALSA reports the underrun); the lead only
+  from what it has written.
+- The ALSA position is what has been sent. The delay reported is sent
+  minus played by the host clock, at most one second.
+- Stop: the timer stops and the work sends Activity 0. `sync_stop` waits
+  for the work before ALSA frees or resets the buffer.
+- Unplug: the card is disconnected and the timer and work stopped before
+  the DRM device goes. Suspend: streams are suspended and the timer and
+  work stopped; the next start enables the engine again.
+- Events with the audio function bit (0x20) are counted with their DMA
+  pointer (debugfs `audio` line), to find out whether the adapter can
+  pace playback itself.
+
+Audio is heard only while the display is on (HDMI carries it in the video
+signal). With the display off, playback runs but nothing is heard. The volume node
+is not exposed yet; use the system's software volume.
+
 ## Cursor
 
 The core hands over the cursor as pixels and a screen position. The backend

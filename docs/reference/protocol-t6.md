@@ -216,5 +216,8 @@ wValue x, wIndex y; negative values as v - 1 (V).
   function mask (0x04 video, 0x20 audio); at 0x20 a u32 with the audio
   render DMA pointer (bits 0-23) and jack bits (24 jack 0, 25 DVO HDMI, 26
   LVDS HDMI). Whether the 5600 sends audio events during playback is not
-  known yet (C).
+  known yet (C); mct_t6 0.29.0 counts them in debugfs (`audio` line).
+- The driver (mct_t6 0.29.0) does what MCT's daemon does: `40 24` with
+  Activity 1 when the stream starts, 10 ms packets paced by the host clock
+  about 120 ms ahead of playback, Activity 0 when it stops.
 

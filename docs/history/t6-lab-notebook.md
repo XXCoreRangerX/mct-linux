@@ -868,3 +868,26 @@ timeouts) got one frame-done event (`04 ... 04`) and then only I/O errors
 kernel driver, which already reads EP 0x83 reliably, will count events
 with the audio function bit (0x20) and their DMA pointer instead.
 
+
+**ALSA playback in the driver (2026-10-12, mct_t6 0.29.0, not yet tested).**
+Written as planned, with the host clock pacing (see
+[t6-driver.md](../driver/t6-driver.md#audio)). Choices:
+- The work runs under `io_lock`, so audio waits at most one frame. The
+  120 ms lead covers that, and the device's 128 KiB buffer has room for
+  much more.
+- The lead is sent only from data the application has written. A start
+  with a small buffer (2 x 10 ms) doesn't send stale buffer contents or
+  make ALSA report an underrun at once.
+- A stop followed by a start before the work runs (an xrun restart) resets
+  the timing (`restart` flag), so there is no catch-up burst.
+- `t6_ctrl_out` returns the byte count; the first version took that as an
+  error and would never have marked the engine on. Found in review before
+  testing.
+- Not done yet: the volume node (`40 23`), drift correction, and a stream
+  that starts while the display is off (it plays into nothing).
+
+To test: `aplay -l` should list the board's name ("JUA254H"). Then
+`speaker-test -D hw:<card>,0 -c 2 -r 48000 -F S16_LE -t sine -l 1` with the
+display on, then a PipeWire sink for a few minutes (drift shows as growing
+delay or glitches). Afterwards check the debugfs `audio` line: if the
+event count grows during playback, the DMA pointer can drive the clock.
