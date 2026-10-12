@@ -3,11 +3,21 @@
 > **Reference**, kept current with the code.
 
 Source: cyrozap's [Protocol-T2.md](https://github.com/cyrozap/mct-usb-display-adapter-re/blob/master/doc/Protocol-T2.md)
-(CC BY-SA 4.0) + live probing + `T2Indisp.dll` disassembly
-+ Win11 VM usbmon capture. All multi-byte fields little-endian unless noted.
+(CC BY-SA 4.0) + live probing + analysis of the vendor drivers for
+interoperability (`T2Indisp.dll`, and since 2026-10-12 the older kernel
+driver `t2usb64.sys` from the same installer, whose assert strings name the
+command fields) + Win11 VM usb-redir and usbmon captures. The 2026-10-12
+analyses are in the lab (`captures/t2-research/binary-analysis.md`,
+`capture-analysis.md`). All multi-byte fields little-endian unless noted.
 
-Commands go to EP `0x03` (control-ish) or `0x02` (framebuffer); replies on
-EP `0x81`. EP `0x04` OUT: `0x05` var-len list (MC8032 10 B, see init doc).
+Marks: **verified** = tested on the tablet; **captured** = seen in Windows
+traffic; **code** = read from the vendor drivers, not tested on the tablet.
+
+Commands go to EP `0x03` (registers and mode setup) or `0x02` (framebuffer
+pipe: `0x11`-`0x16`, executed in order with the frames); replies on EP `0x81`.
+EP `0x04` OUT: register lists, first byte the bank (`01` fb, `03` fc, `04` fd,
+`05` fe; code), then a length and `(reg val)` pairs; the cursor and the MC8032
+setup use it.
 EP `0x85/0x06`: not used by the Windows driver; live EP85 polls returned no
 data either idle or mid-frame. **OUT/IN are paired**: after a command with a
 reply, read `0x81` before the next OUT or the firmware stalls. Pace ~50 ms.
@@ -18,12 +28,14 @@ reply, read `0x81` before the next OUT or the firmware stalls. Pace ~50 ms.
 |---|---|---|---|
 | `0x02` | `02 0001 <addr16> <val>` (6 B) | none | write 1 B register |
 | `0x05` | `05 <addr_lo> <addr_hi>` (3 B) | 1 B | read 1 B register |
-| `0x04` | `04 <len16> <payload>` | none | var-len list; observed: `(6a,idx)(6b,val)` and `(a3..a7/f3..f7/b1..b5, val)` register-pair programs |
+| `0x04` | `04 <len16> <payload>` | none | fc-bank `(reg val)` list; observed: `(6a,idx)(6b,val)` and `(a3..a7/f3..f7/b1..b5, val)` register-pair programs |
+| `0x14` | `14 <len16> (reg val)*` (27 B in the init) | none | fb-bank pairs: `66/67` y, `68/69` x, `6a/6b` h, `6c/6d` w (a window), `65` SEL, then `6e 01, 60 01, 6e 01`: **display enable** (captured, field names inferred from code) |
 | `0x16` | `16 <len16=0x20> <32 B pairs>` (35 B) | none | **timing packet**: regs `0x20-0x2f` = width/height-derived + mode params (full template in init doc) |
 | `0x22` | 62 B | none | second mode packet (regs incl. `0xfc`-area mirrors); template TBD from driver |
-| `0x0a` | `0a` + 768 zeros (769 B) | none | clear/reset, or a 256x3 gamma/palette table (untested, `tools/gamma_test.py`) |
+| `0x0a` | `0a` + 768 zeros (769 B) | none | a 256x3 lookup table (code); the legacy driver pairs it with the 8-bit palette format; Windows sends zeros. Effect untested (`tools/gamma_test.py`) |
 | `0x1b` | `1b8000a000800000` (8 B) | 512 zeros (idle) | EDID query (zeros until inited?) |
 | `0x1d` | `1d8000ae00000100` (8 B) | 512 B | **device info**: `55aa00ff...`, `07115200`, `MCT`, `DTU-1031X`, **EDID at +0x80** |
+| `0x28` | `28 <a> <b> 00` (4 B) | none | write MC8032 port 1, the counterpart of `0x29` (code; never sent by Windows) |
 | `0x29` | `29000000` (4 B) | 512 B, first byte used | `CT2Hal::ReadMC8032P1`; live reply starts `0f 00...` |
 | `0x90` | `90 040400 00061a80` (8 B), `90 030100 00` / `90 080100 02` (5 B) | none | mode/pipe setup variants |
 | `0x91` | `91 <arg1> <arg16>` (4 B) | 512 B | ID-ROM query; driver uses `91 00 0200` -> reply starts `03 02 00 00...` |
@@ -47,45 +59,129 @@ known independently readable parser-status register.
   It did reveal `0x29`, which is not present in the captured init, but live
   testing showed that it is serialized behind EP2 just like `0x05`.
 - For a test with 924672 payload bytes missing, a queued `0x05` reply arrived
-  after 938496 bytes of zero padding (47 vendor-sized 19968-byte transfers).
+  after 938496 bytes of zero padding (47 ~~vendor-sized~~ 19968-byte transfers;
+  EDIT (2026-10-12): 19968 is not the vendor's size but QEMU's split of
+  Windows' 512 KiB transfers, see Transfer framing).
   Overshoot can be parsed as new commands and garble the following frame, so
   recovery must drain stale replies, run the normal init to realign the
   parser, and verify known post-init register values.
 
-## EP `0x02` framebuffer
+## EP `0x02` framebuffer pipe
 
-### `0x11` color fill (21 B header + `w*h*3` RGB bytes)
+| Op | Header | Vendor name (legacy driver) | Use |
+|---|---|---|---|
+| `0x11` | 21 B | `StretchCmd` | uncompressed rectangle write, with format conversion and scaling |
+| `0x12` | 14 B | `DirRldCmd` | RLE decode straight to a VRAM address (the cursor upload uses it) |
+| `0x13` | 36 B | `IndirRldCmd` | RLE decode, then a stretch into the target: the frame update |
+| `0x14` | 48 B | firmware memory blit | VRAM-to-VRAM blit (code; legacy driver only, never sent by Windows 11) |
+| `0x15` | 2 + 3n B | register batch | `(bank reg val)` triplets in order with the frames: the flip |
+| `0x16` | 5 B | | a flip variant for 1366/1400-wide modes (code) |
+
+The current Windows driver sends only `0x11`, `0x12`, `0x13` and `0x15`, and
+only in the forms below. The other forms are known from code only.
+
+### `0x13` frame update (36 B header + payload)
 
 ```
-11 <addr32> <w16> <h16> <w16> <h16> <X16> <Y16> <flag8> <len24> + RGB payload
+13 00 <src32> <dst32> <srcW16> <srcH16> <dstW16> <dstH16> <scaleX16> <scaleY16>
+   <fmt8> <rld32> <rawlen24> <complen24> <esc8> <mode8> <flags8>  + payload
 ```
 
-- Fullscreen clear (captured): `11 00c00000 0400 0258 0400 0258 0400 0400 00 00201c`
-  - addr `0x0000c000` (FB base from `SetFBAddress`), `1024 600 1024 600`,
-    X=Y=`0x0400`, flag `0x00`, len `0x1C2000` = 1,843,200 = `1024*600*3`.
-  - Tiny fill (captured): addr 0, `32 1 32 1`, X=0 Y=`0x40`, flag `0x40`,
-    then 96 zero bytes (payload length implicit `w*h*3`).
-- NOTE: cyrozap documents the two word fields as `0x1000`; the driver sends
-  `0x4000` (bytes `00 40`) and the live clear has `0400`. Fills with `0x1000`
-  were ignored; **use captured-exact headers**.
-- Our red fill = captured clear header + `FF0000`x614400 (BGR order TBD:
-  if the screen shows blue, swap to `0000FF`).
+| Byte | Field | Value from Windows (all 178 captured headers) |
+|---|---|---|
+| 0, 1 | `13 00` | |
+| 2 | source address (VRAM byte address, plain u32) | the target address |
+| 6 | target address | buffer + y\*3072 + x\*3 |
+| 10 | source width, height | the rectangle |
+| 14 | target width, height | the same |
+| 18 | scale x, scale y: 2.14 fixed point, = source/target | `0x4000` (1.0) |
+| 22 | format | `00` (24-bit) |
+| 23 | RLD buffer: VRAM address the compressed stream is staged at | `0x390000`, the first byte after framebuffer B |
+| 27 | raw length = target w\*h\*3 | |
+| 30 | compressed length = payload bytes | |
+| 33 | escape byte | `0x30` (the RLE escape) |
+| 34 | mode: plane layout | `05` = R, G, B planes per 1024-pixel unit |
+| 35 | flags | `0x28` = `0x20` (`RldClock`, a legacy registry value; the same value goes to register `fe57`) \| `0x08` (`0x13`) |
+
+- The stream is decoded into the source address, then stretched into the
+  target. Windows decodes in place (source = target, scale 1.0).
+- The framebuffer is always 3 bytes per pixel; other formats are converted
+  by the chip (below).
+- The `0x13` bytes on the wire equal the older reading of this doc
+  (`addr << 8` twice, then `00`): for addresses below 16 MiB the two readings
+  give the same bytes. The kernel driver builds the header field by field.
+- Flag `0x04` marks an uncompressed payload (raw length = compressed length,
+  escape `00`, mode `01`; code, inferred).
+
+### `0x11` uncompressed rectangle (21 B header + payload)
+
+```
+11 <dst32> <srcW16> <srcH16> <dstW16> <dstH16> <scaleX16> <scaleY16> <fmt8> <len24> + payload
+```
+
+- Windows uses it only during init, with zero payloads (captured): clear
+  buffer A and B (`1024 600 1024 600 4000 4000 00 1c2000`), and a 32x1 write
+  at VRAM 0 (`0020 0001 0020 0001 4000 4000 00 000060`), between
+  `90 040400 00001000` and `90 040400 00061a80`.
+- 24-bit payload is **B, G, R** per pixel (code: `EncodeRgbDTR`), unlike the
+  RLE planes, which are R, G, B.
+- The payload is source w\*h\*bytes per pixel of the format (code).
+- Earlier tests "ignored" fills with `0x1000` in the scale fields: that
+  claimed a 4x stretch of a quarter-size source, so the payload size no
+  longer matched (explained by the code, 2026-10-12).
+
+### `0x12` direct RLE decode (14 B header + payload)
+
+```
+12 <addr32> <rawlen24> <complen24> <esc8> <mode8> <flags8> + payload
+```
+
+Decoded linearly to `addr`. The cursor upload is the only use (captured):
+`12 00000000 004000 004000 00 01 25`, i.e. 16384 bytes stored uncompressed
+(escape `00`, mode `01`, flags `0x20 | 0x04 | 0x01`).
+
+### Source formats (code, untested on the tablet)
+
+The legacy driver maps the desktop depth to a format byte per command; the
+chip converts while writing, VRAM stays 24-bit:
+
+| Source | `0x11` format byte | `0x13` format byte | Bytes per pixel |
+|---|---|---|---|
+| 24-bit (B, G, R) | `00` | `00` (mode 5, R, G, B planes) | 3 |
+| 32-bit (BGRX) | `0e` | `00` (the encoder drops X) | 4 |
+| RGB565 | `04` | not RLE-encoded by the driver | 2 |
+| 8-bit palette (`0x0a` table) | `00` | `00` | 1 (inferred) |
+| YUV 4:2:2 (YUY2) | `8a` | `8a` (mode 6: Y, U, V planes of 1536/768/768 per 3 KiB unit) | 2 |
+| YUV 4:2:0 | `96` | `96` | 1.5 |
+
+Windows 11 only ever sends 24-bit. cyrozap's T2 notes show a `0x11` with
+format `04` and scale `0x1000` on the wire, which fits this table.
+
+### Scaling (code, untested on the tablet)
+
+`scale = source / target` in 2.14 fixed point: `0x4000` = 1.0, `0x2000` = a
+2x upscale, `0x1000` = 4x. With source smaller than target the chip
+stretches; the payload is the source size.
 
 ### Transfer framing (important: this caused the "lit but blank" screen)
 
 The firmware parses EP `0x02` **per USB transfer, not as a byte stream**:
 
-- Every command header (`0x11` 21 B, `0x13` 36 B, `0x15` 23 B) is sent as its
-  **own bulk transfer** (a short packet ends it).
-- The payload follows in **separate** transfers. Windows chunks `0x13`
-  payloads at 19968 B and `0x11` payloads at 16384 B (size probably free).
+- Every command header (`0x11` 21 B, `0x12` 14 B, `0x13` 36 B, `0x15` 23 B)
+  is sent as its **own bulk transfer** (a short packet ends it).
+- The payload follows in **separate** transfers.
 - Header+payload merged into one write is **silently ignored** (no stall,
   nothing drawn). Replays must keep the captured transfer boundaries.
 
-Payload transfer size: keep payload transfers at the vendor's 19968 bytes.
-A whole 837 KB frame sent as one transfer showed sparse corrupted pixels near
-the end of the frame (2026-09-24); the same frame in 19968-byte chunks was
-clean. Larger chunks gain only ~3% anyway (see throughput below).
+Payload transfer size: Windows submits payloads as 512 KiB transfers. The
+19968-byte pieces in the usb-redir captures are QEMU's emulated controller
+splitting them (the pattern 19968 + 30 x 16384 + 12800 = 512 KiB repeats),
+not a vendor rule; none of the pieces ends in a short packet, so the chip
+cannot see them. The drivers here send 19968-byte transfers, which work. A
+whole 837 KB frame sent as one transfer from Linux showed sparse corrupted
+pixels near the end of the frame (2026-09-24); with the above, the cause is
+more likely on the host side than a chip limit (inferred). Larger transfers
+gain only ~3% (see throughput below).
 
 ### `0x15` register batch / buffer flip (EP `0x02`, 23 B)
 
@@ -103,34 +199,20 @@ clean. Larger chunks gain only ~3% anyway (see throughput below).
   next frame into the other buffer. **Without a flip nothing new is shown.**
 - Same sequence also exists as EP3 register writes / `0x04` list during init.
 
-### Framebuffers
+### Video memory
 
-| Buffer | Byte addr (`0x11`) | `0x13` addr field | flip `SEL` |
-|---|---|---|---|
-| A | `0x0000C000` | `0x00C00000` (`00 00 c0 00`) | `0x10` |
-| B | `0x001CE000` = A + `1024*600*3` | `0x1CE00000` | `0x20` |
+| Address | Contents | flip `SEL` |
+|---|---|---|
+| `0x000000` | cursor image (64x64, 4 bytes per pixel) | |
+| `0x00C000` | framebuffer A, 1024x600 RGB24, stride 3072 | `0x10` |
+| `0x1CE000` | framebuffer B = A + 1024\*600\*3 | `0x20` |
+| `0x390000` | RLD buffer: where `0x13` stages the compressed stream | |
 
-The `0x13` address field is `byte address << 8`. Partial updates point it at
-the sub-rectangle start inside the buffer (`+3*x` for x offset; rows via
-stride 3072), e.g. `0x00CB4000` = buffer A + x 960.
+The total video memory size is not known.
 
-### `0x13` frame update (36 B header + payload)
-
-```
-13 <addr32> <addr32> 00 <w16> <h16> <w16> <h16> 00 <tile16=64> <tile16=64>
-   00 <unk32> <rawlen24> <complen24> 30 05 <flags> + payload
-```
-
-- Fullscreen RGB (captured): addr `0x1CE00000`x2, `1024 600 1024 600`,
-  tiles `64 64`, unk `0x39000000`, rawlen `0x1C2000`, complen+magic cut off
-  in capture (see below).
-- Partial updates use other addrs (e.g. `0x00CB4000`) + smaller w/h.
-- Payload is **RGB-raw** (`EncodeRgbDTR`: driver packs RGBX->RGB24) or
-  **RLE** (`EncodeRleDTR`, 64-px units, "3K alignment"); selected by flags
-  byte (`|8` in driver). Windows always sent RLE (`30 05 28`) in all captures.
-- Exact header (verified live, full screen): `13` + `addr<<8` (4 B) x2 + `00`
-  + `0004 5802 0004 5802` (w h w h) + `0040 0040` + `00 00003900`
-  + rawlen24 (`0x1C2000`) + complen24 (= payload length) + `30 05 28`.
+The flip latches the scanout address; the full layout of the `0x13` header,
+including the exact values the tablet accepts, is in the `0x13` section
+above (verified live for the 24-bit RLE form: full frames and partials).
 
 ### RLE payload (fully decoded 2026-09-24)
 
@@ -158,15 +240,26 @@ re-encoding it **byte-identically** (`tools/t2rle.py`).
 
 ### Partial updates (verified live via wacom-t2d)
 
-- Same 36 B `0x13` header with the rect's `w h w h`; address fields =
-  `(buffer + y*3072 + x*3) << 8` (device coordinates, i.e. after 180 degrees rotation).
+- Same 36 B `0x13` header with the rect's `w h w h`; both addresses =
+  `buffer + y*3072 + x*3` (device coordinates, i.e. after 180 degrees rotation).
 - Payload: the rect's pixels in **row-major order, cut into 1024-px units**; each
   unit is encoded as R, G, B channel lines (a full-width row is simply one unit).
-  Hence `w*h % 1024 == 0`. Windows keeps `x`, `w` multiples of 64 and rounds
-  `h` up (it even overshoots row 600, e.g. `64x608`).
-- Windows policy: big change -> full frame into back buffer + `0x15` flip.
-  Small change -> partials straight into the **front** buffer, no flip.
-  All 172 frames in `captures/redir4.bin` decode under this model.
+  Hence `w*h % 1024 == 0`: the vendor's "3K alignment" (`w*h*3` a multiple of
+  3072 bytes). Windows keeps `x`, `w` multiples of 64 and rounds `h` up; that
+  overshoots row 600 (e.g. `64x608`, 8 rows into buffer B; done to buffer B
+  it would run past the end of the framebuffers). mct_t2 widens or moves the
+  rectangle instead, so it never writes past the buffer.
+- Windows policy (code): the dirty rectangles are joined into one; if it
+  covers 10% of the screen or more, a full frame goes into the back buffer +
+  `0x15` flip, otherwise the rectangle goes straight into the **front**
+  buffer, no flip. In the captures 66 full frames and 106 partials (5% of
+  the bytes); 17 full frames went into the visible buffer followed by a flip
+  to it, so repeated flips are harmless. After a full frame Windows often
+  sends the same picture to the other buffer to keep both in step.
+- Windows tries RLE first, raw `0x11` as fallback, and only on this tablet
+  (`fc01` >= 7 and the device name "DTU-1031X"); other T2 devices get raw
+  `0x11` only (code).
+- All 178 frames in the captures decode under this model.
 
 ## Throughput (measured 2026-09-24, `tools/bench.py`)
 
@@ -180,6 +273,12 @@ USB 2.0 bulk tops out around 42-44 MB/s here, and full-frame updates reach it:
 
 Transfer size 19968 / 64 KiB / 256 KiB: 40.1 / 41.2 / 41.6 MB/s. Typical
 desktop use is mostly partial updates and much cheaper.
+
+The chip also has a decode limit (usbmon timing of the Windows driver,
+2026-10-12, two data points): a black full frame (27 KB compressed) took
+10.04 ms, about 184 MB/s of decoded RGB; a 64x608 partial about 0.55 ms. So
+the chip decodes roughly 60-70 Mpixel/s, and a full-screen update costs at
+least ~10 ms however well it compresses. Raw `0x11` writes ran at 39.4-40 MB/s.
 
 A lossy variant like the vendor's (merge values within +-4 into runs) halves a
 photo's payload (+-2: -36%, +-4: -46%) but leaves visible banding in smooth
@@ -283,6 +382,21 @@ The T2 has a 64x64 ARGB cursor overlay, drawn by the chip on top of scanout.
   writes `24` then `04` around some shape changes.
 - To show a cursor hanging off the visible right/bottom edge (negative device
   coordinates), upload a copy shifted by the overhang, with transparent fill, and position it at 0.
+
+## Not yet tested on the tablet (2026-10-12)
+
+From the code analysis; `tools/t2_probe.py` tests them one at a time in the
+hidden buffer, checking after each command that the chip still answers a
+register read:
+
+- hardware upscale (`0x11`/`0x13` with a half-size source and scale `0x2000`)
+- RGB565 and YUV source formats
+- `0x13` decoding to a separate source address, then stretching
+- 512 KiB payload transfers like Windows
+- the blit engine (`0x14`, or `0x15` register batches on `fc50-5d`, `fc34`,
+  `fc59`, `fe60-89`, `fe70`), which could make scrolling a short command
+  instead of resending the rows; the riskiest, since a wrong command may hang
+  the chip until the tablet is power-cycled
 
 ## Gaps (resolved by the usbredir capture, kept for history)
 

@@ -186,11 +186,17 @@ Keep proposed work distinct from the measurements above. In priority order:
    may help scattered desktop damage, although measured desktop traffic is
    already low, so the expected benefit is modest.
 4. If useful after the above, visually validate intermediate USB payload sizes
-   such as 32 or 64 KiB. The measured throughput gain over the vendor's 19968 B
+   such as 32 or 64 KiB. The measured throughput gain over the ~~vendor's~~ 19968 B
    chunks is only about 3%, while very large writes have corrupted frames.
+   EDIT (2026-10-12): 19968 B is QEMU's split of Windows' 512 KiB transfers,
+   not the vendor's size; the corruption with one huge transfer is more likely
+   a host-side issue. 512 KiB transfers are a test step in `tools/t2_probe.py`.
 5. Treat the DLL's undocumented transfer/stretch operations as longer-term
    reverse-engineering candidates for hardware-assisted moves or scaling, not
-   as a known optimization.
+   as a known optimization. EDIT (2026-10-12): now understood from the older
+   vendor kernel driver: `0x11`/`0x13` can scale (2.14 factors) and take
+   RGB565/YUV sources, and the chip has a blit engine (`0x14` or `0x15`
+   register batches); see protocol-t2.md, "Not yet tested on the tablet".
 
 Do not prioritize asynchronous URBs, front-buffer writes, or diff-loop
 micro-optimization: queued URBs were already slower, front-buffer updates risk

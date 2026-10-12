@@ -76,7 +76,14 @@ MODULE_PARM_DESC(lossy, "Default for new devices: maximum lossy tolerance (1-8; 
 #define T2_EP_MCU	0x04
 #define T2_EP_IN	0x81
 
-#define T2_CHUNK	19968			/* vendor payload transfer size */
+#define T2_CHUNK	19968			/* payload transfer size (works; Windows uses 512 KiB) */
+/* 0x13 frame command fields, see docs/reference/protocol-t2.md */
+#define T2_RLD_BUF	0x390000		/* VRAM the compressed stream is staged at */
+#define T2_SCALE_1	0x4000			/* scale factor 1.0 (2.14 fixed point) */
+#define T2_FMT_RGB24	0x00
+#define T2_RLE_ESC	0x30
+#define T2_MODE_RGB	0x05			/* R, G, B planes per 1024-pixel unit */
+#define T2_FLAGS_INDIR	0x28			/* RldClock 0x20 | 0x13 command 0x08 */
 #define T2_BOUNCE	65536
 #define T2_ENC_MAX	(T2_WIDTH * (T2_HEIGHT + 16) * 3 + 4096)
 #define T2_TIMEOUT	2000
@@ -316,7 +323,7 @@ static int t2_pick_tol(long need, int max)
 static int t2_send_rect(struct mct_t2 *t2, u8 *src, u32 base, int dx, int dy, int w, int h,
 			int tol, long *sent, int *used)
 {
-	u32 a = (base + dy * T2_STRIDE + dx * 3) << 8;
+	u32 a = base + dy * T2_STRIDE + dx * 3;
 	ktime_t t0 = ktime_get(), t1;
 	int len = t2_encode(t2, src, dx, dy, w, h, 0);
 	u8 hdr[36];
@@ -334,18 +341,24 @@ static int t2_send_rect(struct mct_t2 *t2, u8 *src, u32 base, int dx, int dy, in
 	t2->stats.px_sent += w * h;
 	t2->stats.bytes += sizeof(hdr) + len;
 
+	/* decode at the target itself (source = target), 1:1, 24-bit RGB planes */
 	hdr[0] = 0x13;
-	put_unaligned_le32(a, hdr + 1);
-	put_unaligned_le32(a, hdr + 5);
-	hdr[9] = 0;
-	put_unaligned_le16(w, hdr + 10);
+	hdr[1] = 0;
+	put_unaligned_le32(a, hdr + 2);			/* source address */
+	put_unaligned_le32(a, hdr + 6);			/* target address */
+	put_unaligned_le16(w, hdr + 10);		/* source size */
 	put_unaligned_le16(h, hdr + 12);
-	put_unaligned_le16(w, hdr + 14);
+	put_unaligned_le16(w, hdr + 14);		/* target size */
 	put_unaligned_le16(h, hdr + 16);
-	memcpy(hdr + 18, "\x00\x40\x00\x40\x00\x00\x00\x39\x00", 9);
-	put_unaligned_le24(w * h * 3, hdr + 27);
-	put_unaligned_le24(len, hdr + 30);
-	memcpy(hdr + 33, "\x30\x05\x28", 3);
+	put_unaligned_le16(T2_SCALE_1, hdr + 18);	/* scale x, y */
+	put_unaligned_le16(T2_SCALE_1, hdr + 20);
+	hdr[22] = T2_FMT_RGB24;
+	put_unaligned_le32(T2_RLD_BUF, hdr + 23);
+	put_unaligned_le24(w * h * 3, hdr + 27);	/* raw length */
+	put_unaligned_le24(len, hdr + 30);		/* compressed length */
+	hdr[33] = T2_RLE_ESC;
+	hdr[34] = T2_MODE_RGB;
+	hdr[35] = T2_FLAGS_INDIR;
 	ret = t2_cmd(t2, hdr, sizeof(hdr), t2->enc, len);
 	t2->stats.ns_encode += ktime_to_ns(ktime_sub(t1, t0));
 	t2->stats.ns_usb += ktime_to_ns(ktime_sub(ktime_get(), t1));

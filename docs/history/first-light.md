@@ -6,6 +6,9 @@ The DTU-1031X panel shows solid colours sent from Linux: red, green, blue,
 white, full screen (`tools/replay.py`).
 
 ## Symptom before
+(EDIT 2026-10-12: `0x11` is the uncompressed rectangle write; the "fills" below
+were `0x11` writes with a solid-colour payload. See protocol-t2.md.)
+
 The init replay turned the backlight on, but every `0x11` fill and `0x13` frame
 we sent left the panel blank: red fills to 4 candidate addresses, RGB-raw frames,
 and a verbatim Windows RLE frame. All transfers completed OK (no stalls).

@@ -29,8 +29,12 @@ no USB), `WinXP_Target_SiS` (sisusb-era, unrelated).
   `0x0f`). It is serialized behind incomplete EP2 payloads, so it is not an
   independent parser-status query.
 - `CT2VideoControl`: `EncodeRgbDTR` (RGBX->RGB24 pack), `EncodeRleDTR`
-  (RLE, 64-px units, "3K alignment"), `DrawColorBlock` (`0x11` fills),
+  (RLE, 64-px units, "3K alignment"), `DrawColorBlock` ~~(`0x11` fills)~~,
   `TransferQJob` (`dir/indir/stretch` DTR records), enc/xfr threads.
+  EDIT (2026-10-12): `0x11` is the uncompressed rectangle write
+  (`StretchCmd`, with scaling and a format byte); `DrawColorBlock` sends it
+  with a solid payload. `dir`/`indir`/`stretch` are `0x12`/`0x13`/`0x11`.
+  See protocol-t2.md and the lab's `captures/t2-research/`.
 - `CT2VideoTimingCluster::CalculatePixelClockPLL` -> regs `fcf3-fcf7`.
 - `CT2Display::SetFBAddress/SetOVAddress` (FB base `0xc000` class),
   `StartVideo` (timing lookup by EDID `%dx%dx%d`).

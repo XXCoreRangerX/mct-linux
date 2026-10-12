@@ -47,8 +47,10 @@ The decisive first-light findings on 2026-09-24 were:
 
 - EP2 command headers must be sent as their own USB transfers. Joining a
   `0x11` or `0x13` header to its payload is silently ineffective.
-- Windows divides `0x13` payloads into 19,968-byte transfers and `0x11`
-  payloads into 16,384-byte transfers.
+- ~~Windows divides `0x13` payloads into 19,968-byte transfers and `0x11`
+  payloads into 16,384-byte transfers.~~ EDIT (2026-10-12): Windows submits
+  512 KiB transfers; the 19,968/16,384-byte pieces were QEMU's emulated USB
+  controller splitting them in the captures.
 - A framebuffer update needs the `0x15` register batch/buffer flip. The T2 has
   two relevant framebuffer bases, A at `0x0000c000` and B at `0x001ce000`.
 - The `0x13` codec is row-wise planar R, G, B RLE. `30 NN VV` represents
@@ -315,6 +317,33 @@ Git records the exact diffs and parent relationships.
 | `024dd06` | Record performance research backlog |
 | `099d6fb` | Add development roadmap |
 | `0e8b44a` | Add this project history |
+
+## 2026-10-12: the T2 vendor drivers read again
+
+Two read-only analyses (lab `captures/t2-research/`): the Windows captures
+re-parsed command by command, and the vendor drivers analysed for
+interoperability, now including the older kernel driver `t2usb64.sys` from
+the same installer, whose assert strings name the command fields. Results:
+
+- The `0x13` header was misread in places: two plain addresses (source and
+  target of an in-VRAM stretch), source and target sizes, 2.14 scale factors
+  (the "tiles 64" were `0x4000` = 1.0), a format byte, the VRAM address the
+  stream is staged at (`0x390000`), escape, plane mode and flags. The bytes
+  the drivers send were right all along.
+- `0x11` is the uncompressed rectangle write with format and scale, not a
+  fill. `0x12` is a direct RLE decode (the cursor). `0x14` is a blit command
+  of the older driver.
+- The chip accepts RGB565, 32-bit and YUV 4:2:2/4:2:0 sources and converts
+  them, can upscale, and has a blit engine. Windows 11 uses none of it.
+- Windows submits 512 KiB payload transfers; the 19,968-byte pieces were
+  QEMU's split. The chip decodes about 60-70 Mpixel/s, so a full-screen
+  update takes at least ~10 ms.
+- The same day: software gamma and per-channel lossy tolerance in mct_t2
+  0.3.23 (measured offline first), and `tools/t2_probe.py` to test the new
+  features one at a time with the user watching.
+
+All corrections went into protocol-t2.md; dated statements elsewhere carry
+an EDIT note.
 
 ## Detailed source records
 

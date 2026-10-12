@@ -26,6 +26,10 @@ Ideas, roughly by expected payoff:
    T2Indisp.dll for other 0x13 header flags (`004000400000003900`,
    `300528`) and mode setups with 2 bytes per pixel. Unknown whether the T2
    has such a mode at all.
+   EDIT (2026-10-12): the framebuffer has no 16-bit mode, but the chip
+   accepts RGB565 and YUV sources per command and converts them, and it can
+   upscale (found in the older vendor kernel driver; untested on the tablet).
+   See protocol-t2.md, "Source formats" and "Scaling".
 
 3. **Per-channel lossy tolerance.** If lossy stays, let blue (and red) absorb
    more than green, where the eye is most sensitive. Same encoder, a
@@ -37,6 +41,10 @@ Ideas, roughly by expected payoff:
    aren't understood. A VRAM-to-VRAM copy would turn scrolling into a tiny
    command plus the newly exposed rows, the biggest win for desktop use.
    Needs reverse engineering in the DLL and captures of Windows scrolling.
+   EDIT (2026-10-12): no copy opcode, but a blit engine (`0x14`, or `0x15`
+   register batches) exists in the older vendor driver; Windows 11 never uses
+   it and re-sends moved areas as pixels. Analysis in the lab
+   (`captures/t2-research/blit-engine.md`).
 
 5. **Cost-based damage band merging.** Decide per gap whether spanning
    unchanged rows is cheaper than another header. Small expected gain, since
