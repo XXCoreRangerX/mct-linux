@@ -4,6 +4,7 @@
 //! The page of one display: driver, display, settings, status, device.
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use mct::device::{FORMATS, LOSSY_MAX, PERMISSION_HINT};
@@ -59,7 +60,11 @@ pub struct Page {
     prefs: adw::PreferencesPage,
     /// Product, chip, USB, driver, monitor: rebuilt when they change.
     ident_groups: RefCell<Vec<adw::PreferencesGroup>>,
-    shown_ident: RefCell<(Vec<Section>, bool)>,
+    /// What the identity groups were built for: sections and their field
+    /// keys, and whether the driver row is left out. Values alone change
+    /// in place, so open expanders and the scroll position stay.
+    ident_shape: RefCell<(Vec<(&'static str, Vec<String>)>, bool)>,
+    ident_rows: RefCell<HashMap<(&'static str, String), adw::ActionRow>>,
 }
 
 /// A row showing a value under its name.
@@ -214,7 +219,8 @@ impl Page {
             recoveries_icon,
             prefs,
             ident_groups: RefCell::new(Vec::new()),
-            shown_ident: RefCell::new((Vec::new(), false)),
+            ident_shape: RefCell::new((Vec::new(), false)),
+            ident_rows: RefCell::new(HashMap::new()),
         }
     }
 
@@ -222,33 +228,56 @@ impl Page {
     /// the Driver group above shows it.
     fn show_ident(&self, sections: &[Section]) {
         let skip_route = self.driver_group.is_visible();
-        let mut shown = self.shown_ident.borrow_mut();
-        if shown.0 == sections && shown.1 == skip_route {
+        let shown = |f: &mct::ident::Field| !(skip_route && f.key == "driver");
+        let shape: Vec<(&'static str, Vec<String>)> = sections
+            .iter()
+            .map(|s| {
+                let keys = s.fields.iter().filter(|f| shown(f)).map(|f| f.key.clone());
+                (s.key, keys.collect())
+            })
+            .collect();
+
+        // the same rows as before: only the values change
+        if *self.ident_shape.borrow() == (shape.clone(), skip_route) {
+            let rows = self.ident_rows.borrow();
+            for s in sections {
+                for f in s.fields.iter().filter(|f| shown(f)) {
+                    if let Some(row) = rows.get(&(s.key, f.key.clone())) {
+                        if row.subtitle().as_deref() != Some(f.value.as_str()) {
+                            row.set_subtitle(&f.value);
+                        }
+                    }
+                }
+            }
             return;
         }
-        *shown = (sections.to_vec(), skip_route);
+
+        *self.ident_shape.borrow_mut() = (shape, skip_route);
         for g in self.ident_groups.borrow_mut().drain(..) {
             self.prefs.remove(&g);
         }
-        let row = |f: &mct::ident::Field| {
+        let mut rows = self.ident_rows.borrow_mut();
+        rows.clear();
+        let mut row = |section: &'static str, f: &mct::ident::Field| {
             let row = property_row(&f.label);
             row.set_subtitle(&f.value);
             if f.key == "edid_hex" {
                 row.add_css_class("monospace");
             }
+            rows.insert((section, f.key.clone()), row.clone());
             row
         };
         for s in sections.iter().filter(|s| !s.detail) {
-            let rows: Vec<adw::ActionRow> = s
+            let group_rows: Vec<adw::ActionRow> = s
                 .fields
                 .iter()
-                .filter(|f| !(skip_route && f.key == "driver"))
-                .map(row)
+                .filter(|f| shown(f))
+                .map(|f| row(s.key, f))
                 .collect();
-            if rows.is_empty() {
+            if group_rows.is_empty() {
                 continue;
             }
-            let g = group(s.title, &rows.iter().collect::<Vec<_>>());
+            let g = group(s.title, &group_rows.iter().collect::<Vec<_>>());
             self.prefs.add(&g);
             self.ident_groups.borrow_mut().push(g);
         }
@@ -261,7 +290,7 @@ impl Page {
             for s in details {
                 let expander = adw::ExpanderRow::builder().title(s.title).build();
                 for f in &s.fields {
-                    expander.add_row(&row(f));
+                    expander.add_row(&row(s.key, f));
                 }
                 g.add(&expander);
             }
