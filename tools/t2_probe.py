@@ -449,6 +449,38 @@ def step_h(opt):
             "swapped; coloured noise = wrong plane layout")
 
 
+GREY = (0x80, 0x80, 0x80)
+BAND_VY, BAND_H = BOX_VY - 32, BOX_H + 96   # full-width grey band around the box
+
+
+def partial_half(opt, src_at_scratch):
+    """A half-size source scaled 2x into the box, inside a plain grey band, to
+    see whether the chip touches pixels next to the box (in-place decoding
+    could write the packed source over the neighbouring columns)."""
+    sw, sh = BOX_W // 2, BOX_H // 2
+    src = quads(sw, sh)
+    dst = fb_addr(FB_B, TEST_VX, BOX_VY, BOX_W, BOX_H)
+    s = opt.scratch if src_at_scratch else dst
+    pay = rle_rect(rot180(src), sw, sh)
+    return ([cmd_full("clear buffer B (dark green)", FB_B, BG_B),
+             cmd_rle("grey band across the screen", FB_B, 0, BAND_VY, W, BAND_H,
+                     solid(W, BAND_H, GREY)),
+             Cmd(f"test box: 0x13 {sw}x{sh} -> {BOX_W}x{BOX_H}, scale 0x2000, "
+                 f"src {'scratch' if src_at_scratch else '= target'}",
+                 hdr13(s, dst, sw, sh, BOX_W, BOX_H, 0x00, sw * sh * 3, len(pay)), pay)],
+            "PASS = one box with the 4 colours inside a plain grey band, and the grey "
+            "band is clean everywhere (look right of and below the box). FAIL = any "
+            "coloured specks, lines or garbage in the grey band")
+
+
+def step_j(opt):
+    return partial_half(opt, False)
+
+
+def step_k(opt):
+    return partial_half(opt, True)
+
+
 STEPS = [
     ("a", "control: 0x13 RGB24 RLE rect as Windows sends it", "low", step_a),
     ("b", "full frame, payload in 512 KiB transfers", "low", step_b),
@@ -459,6 +491,9 @@ STEPS = [
     ("g", "0x13 2x upscale (half-size source)", "medium-high", step_g),
     ("h", "0x13 YUV 4:2:2 RLE (format 0x8a, mode 6)", "medium-high", step_h),
     ("i", "VRAM blit engine (0x14 / 0x15 register program)", "HIGH", None),
+    ("j", "partial 2x upscale, src = target: are the neighbours untouched?", "medium", step_j),
+    ("k", "partial 2x upscale from scratch VRAM: are the neighbours untouched?", "medium",
+     step_k),
 ]
 
 
