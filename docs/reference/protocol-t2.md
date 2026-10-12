@@ -396,7 +396,32 @@ register read:
 - the blit engine (`0x14`, or `0x15` register batches on `fc50-5d`, `fc34`,
   `fc59`, `fe60-89`, `fe70`), which could make scrolling a short command
   instead of resending the rows; the riskiest, since a wrong command may hang
-  the chip until the tablet is power-cycled
+  the chip until the tablet is power-cycled.
+
+### The blit engine (code, 2026-10-12; lab `captures/t2-research/blit-engine.md`)
+
+- `0x14` (48 B, one transfer): `14 dst32 dst32 srcW srcH dstW dstH scaleX
+  scaleY fmtflag 90 srcfmt plane src32 plane2_32 plane3_32 dst32 srcW srcH
+  pitchPx16 01`. The `0x15` form writes the same values as 51 register
+  triplets: a reset (`fc59=01 fe70=80 fc59=00 fe70=00`), the scaler
+  (`fc50-5d`, `fc34`, `fc59=90`) and the copier (`fe71` source format,
+  `fe72` planes, `fe74-77` source, `fe60-67` extra planes, `fe80-83` target,
+  `fe78-7b` source size, `fe88/89` target pitch in pixels, `fe70=01` start).
+- It copies a **packed** `srcW x srcH` source to a target rectangle with a
+  pixel pitch (1024 here), scaling and converting on the way. No source
+  pitch, no fill mode. A full-width band of a framebuffer is packed, so a
+  scroll (front buffer rows into the back buffer, shifted) fits; a window
+  move would need one command per row unless the source honours a pitch.
+- Plain RGB24 copy: scale `0x4000`, `fc34 = 00`, `fe71 = 05`, `fe72 = 00`.
+- The older driver checks nothing before `0x14` and never waits for it; the
+  `0x15` form polls `fe70` bit 2 first (probably a "done" bit: `fe70` reads 0
+  at rest). It used the engine only from staging slots into the
+  framebuffer, never framebuffer to framebuffer, never overlapping.
+- **On this tablet the older driver would not use the engine by default**:
+  it needs the ID ROM's byte `0x16` bit 0 (here `00`) and a non-default
+  transfer method. So whether firmware `0x32` handles `0x14` at all is
+  unknown. Startup resets seen: Windows 11 `fe70=80 fe57=a0 fe36=20`, 1 ms,
+  `fe70=00 fe57=20 fe36=00`.
 
 ## Gaps (resolved by the usbredir capture, kept for history)
 
