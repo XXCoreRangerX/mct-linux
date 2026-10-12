@@ -6,9 +6,12 @@ Source: cyrozap's [Protocol-T2.md](https://github.com/cyrozap/mct-usb-display-ad
 (CC BY-SA 4.0) + live probing + analysis of the vendor drivers for
 interoperability (`T2Indisp.dll`, and since 2026-10-12 the older kernel
 driver `t2usb64.sys` from the same installer, whose assert strings name the
-command fields) + Win11 VM usb-redir and usbmon captures. The 2026-10-12
-analyses are in the lab (`captures/t2-research/binary-analysis.md`,
-`capture-analysis.md`). All multi-byte fields little-endian unless noted.
+command fields, and j5create's macOS driver, written for MCT, whose T2
+backend names commands and ROM fields) + [rhgndf/trigger2](https://github.com/rhgndf/trigger2)
+(a GPL Linux driver for the j5create JUA230) + Win11 VM usb-redir and
+usbmon captures. The 2026-10-12 analyses are in the lab
+(`captures/t2-research/binary-analysis.md`, `capture-analysis.md`,
+`other-t2-drivers.md`). All multi-byte fields little-endian unless noted.
 
 Marks: **verified** = tested on the tablet; **captured** = seen in Windows
 traffic; **code** = read from the vendor drivers, not tested on the tablet.
@@ -33,11 +36,13 @@ reply, read `0x81` before the next OUT or the firmware stalls. Pace ~50 ms.
 | `0x16` | `16 <len16=0x20> <32 B pairs>` (35 B) | none | **timing packet**: regs `0x20-0x2f` = width/height-derived + mode params (full template in init doc) |
 | `0x22` | 62 B | none | second mode packet (regs incl. `0xfc`-area mirrors); template TBD from driver |
 | `0x0a` | `0a` + 768 zeros (769 B) | none | a 256x3 lookup table (B, G, R entries) acting on **all output** when non-zero (verified 2026-10-12: a palette loaded for an 8-bit test recoloured the 24-bit picture too); all zeros, as Windows sends, leaves the picture unchanged. The legacy driver pairs it with the 8-bit format. Possible hardware gamma, untested |
-| `0x1b` | `1b8000a000800000` (8 B) | 512 zeros (idle) | EDID query (zeros until inited?) |
-| `0x1d` | `1d8000ae00000100` (8 B) | 512 B | **device info**: `55aa00ff...`, `07115200`, `MCT`, `DTU-1031X`, **EDID at +0x80** |
+| `0x1b` | `1b8000a000800000` (8 B) | 512 zeros (idle) | I2C read, bus 0 (`EP3CMD_READ_I2C_2` in the macOS driver): `cmd 80 00 <addr> <offset> <len16> 00`; bus 0 is not wired on this tablet |
+| `0x1d` | `1d8000ae00000100` (8 B) | 512 B | I2C read, bus 1 (`EP3CMD_READ_I2C_EX`): the **ID ROM** at `0xae`: `55aa00ff...`, `07115200`, `MCT`, `DTU-1031X`, **EDID at +0x80** (layout below) |
+| `0x1a` | `1a 80 00 <addr> <reg> <len16> fa` + data | none | I2C **write**, bus 0 (macOS driver, for HDMI transmitters at `0x72`); not for this tablet |
+| `0x1c` | | | by analogy I2C write on bus 1, **where the ID ROM lives: never send** |
 | `0x28` | `28 <a> <b> 00` (4 B) | none | write MC8032 port 1, the counterpart of `0x29` (code; never sent by Windows) |
 | `0x29` | `29000000` (4 B) | 512 B, first byte used | `CT2Hal::ReadMC8032P1`; live reply starts `0f 00...` |
-| `0x90` | `90 040400 00061a80` (8 B), `90 030100 00` / `90 080100 02` (5 B) | none | mode/pipe setup variants |
+| `0x90` | `90 <reg> <len16> <data>`: `90 040400 00061a80` (8 B), `90 030100 00` / `90 080100 02` (5 B) | none | write a register of the on-chip MC8032 firmware (macOS driver). Register 4 = `REG8032_EP2_TIMEOUT` (big-endian; Windows sets 0x1000 around the init and then 400000, the macOS driver 0x7fffffff; unit unknown) |
 | `0x91` | `91 <arg1> <arg16>` (4 B) | 512 B | ID-ROM query; driver uses `91 00 0200` -> reply starts `03 02 00 00...` |
 
 ### Detecting an interrupted framebuffer payload (verified 2026-09-25)
@@ -75,7 +80,7 @@ known independently readable parser-status register.
 | `0x13` | 36 B | `IndirRldCmd` | RLE decode, then a stretch into the target: the frame update |
 | `0x14` | 48 B | firmware memory blit | VRAM-to-VRAM blit (code; legacy driver only, never sent by Windows 11) |
 | `0x15` | 2 + 3n B | register batch | `(bank reg val)` triplets in order with the frames: the flip |
-| `0x16` | 5 B | | a flip variant for 1366/1400-wide modes (code) |
+| `0x16` | 3 + 2n B | | in-band register list for one bank: `16 <bank> <n> (reg val)*`, e.g. `16 fc 06 b4 11 b1 .. b2 .. b3 .. b4 15 b4 11` (rhgndf/trigger2); Windows uses the one-pair form `16 fc 01 b4 SEL` for 1366/1400-wide modes |
 
 The current Windows driver sends only `0x11`, `0x12`, `0x13` and `0x15`, and
 only in the forms below. The other forms are known from code only.
@@ -299,13 +304,65 @@ keeps it for experiments.
 
 The vendor driver has no power control for this panel: `CT2RomSink`'s
 display-power method (vtable `0x18001e358` slot `+0x18`) is `xor eax,eax; ret`.
-What works: **`fcf6` = pixel-clock PLL enable** (single register write on EP3,
-`02 00 01 fc f6 VV`).
+What works: **`fcf6`**, the pixel-clock PLL's reference divider (see the PLL
+below; so writing 0 stops the PLL, and restoring must write the original
+value, `01` here), as a single register write on EP3, `02 00 01 fc f6 VV`.
 
 - `fcf6 = 00`: video signal stops and the panel electronics switch the **backlight off**.
 - `fcf6 = 01`: picture back immediately, framebuffer contents intact, no re-init.
 
 Tried without effect: `fb60` (also via `0x14 60=00`), `fe36`, `fe57`, `fe70`, `feb0`.
+
+The macOS driver's power sets (code, untested on this tablet; `fcb0` and
+`fc6f` bit 2 were never tried here):
+
+| Function | Writes (EP3 `0x02`) |
+|---|---|
+| display sleep | `fc4d=80 fc4f=80 fc6f=04` |
+| power down | `fc4b=08 fc4d=80 fc4f=80 fc6f=04`, `fcb0=04 fcb0=20` |
+| monitor off / on | `fb60=00 fcb0=04 fcb0=20` / `fcb0=04 fcb0=09` |
+
+A freshly plugged tablet idles at `fc4b=08 fc4d=80 fc4f=80`, the power-down
+values; the init writes `fc4b=02`.
+
+## Timing and PLL (rhgndf/trigger2, checked against this tablet)
+
+- Pixel clock = 12 MHz x `fcf7` / `fcf6` x `fcf4` / `fcf3` (first loop at
+  most 600 MHz; `fcf5` bit 4 / bit 0 = high band of the first / output
+  loop). The tablet's init values (`f3=20 f4=2d f6=01 f7=03`) give 50.625
+  MHz; its EDID asks for 50.63 MHz.
+- Timing: `fcc4/c5` hdisplay-1, `fcc6` hback-1, `fcc7` hsync-1, `fcc8/c9`
+  vdisplay-1, `fcca` vback-1, `fccb` vsync-1, `fccc/cd` vtotal-1, `fcce/cf`
+  htotal-1; `fc6f` bit 0/1 = negative h/v sync.
+- On the JUA230, widths must be a multiple of 16 and at most 2032, the clock
+  below 200 MHz; other sizes hang it until a replug. The tablet keeps its
+  panel mode.
+
+## ID ROM (from j5create's macOS driver, applied to this tablet's ROM)
+
+`data/t2_1d_info.bin`, read with `0x1d`:
+
+| Byte | Meaning (code) | This tablet |
+|---|---|---|
+| `0x06` | ROM version | `0x18`: v1.8 |
+| `0x08` | bits 0-1: DRAM address mode (flip address `>> 2` if 0, else `>> 1`; `fbff` = `81`/`82`) | `0x64`: `>> 2`, `fbff=81` |
+| `0x09` | DRAM geometry; size `((1 << ((b & 0xf) + 1)) & 0xfe) << 22` | `0x21`: **16 MiB** (inferred) |
+| `0x0b` | bits 0-1: DVO mode (`fb96` = `00`, or `91` for 24-bit DVO); bits 2-3 = 1: HDMI model | `0x80`: `fb96=00`, no HDMI |
+| `0x0d-0x0f` | DDR PLL `fcf0-fcf2` | `01 19 00`, as Windows writes |
+| `0x17` | video timing source; 4 (with OEM type 1) = the EDID in the ROM at `+0x80` | `0x04` |
+| `0x18` | if bits 0-1 are set, bit 6 = **rotated 180 degrees** | `0xf1`: rotated |
+| `0x6f` | OEM type | `0x01` |
+
+So the orientation and the EDID the drivers here hard-code for the
+DTU-1031X are stated in its ROM. The macOS driver stages `0x13` streams at
+`0xD37000`, which fits 16 MiB of video memory (untested here).
+
+## Second address set (rhgndf/trigger2; untested)
+
+`fb65` = 1 / 2 selects channel 1 / 2 with `fb62-64` as its address, and
+`fcb4` `22, 2a, 22` latches `fcb1-b3` for channel 2 (channel 1: `11, 15,
+11`). This matches `CT2Display::SetOVAddress` in Windows' DLL: likely an
+overlay plane.
 
 ## Backlight brightness (verified live 2026-09-24)
 
@@ -385,7 +442,13 @@ The T2 has a 64x64 ARGB cursor overlay, drawn by the chip on top of scanout.
 - Coordinates must be >= 0. Negative (two's complement) values make the cursor vanish.
   The chip clips boxes that run past the far edges (x > 960 / y > 536).
 - `0x44` / `0x45` shrink the drawn box from the **far** end (e.g. `0x44 = 32` ->
-  only image columns 0-31 are drawn). This is not an image offset.
+  only image columns 0-31 are drawn). This is not an image offset. The
+  macOS driver uses them as clip offsets for a cursor hanging off the
+  top/left edge, with `fe36 = 0x4f` (x <= 0) or `0x47` (y <= 0) instead of
+  `0x07`; with its 180 degree compensation that is probably our far end
+  (code, untested).
+- `fe30-fe33` = the cursor image's VRAM address >> 2 (macOS driver): other
+  shapes can be kept in VRAM and switched by address (untested).
 - `0x36`: `07` = cursor shown, `04` = hidden (verified by blinking). Windows
   writes `24` then `04` around some shape changes.
 - To show a cursor hanging off the visible right/bottom edge (negative device

@@ -56,6 +56,15 @@ Order agreed 2026-10-11:
      desktop use, highest risk; the older vendor driver itself would not use
      it on this tablet, so firmware support is unknown; tested last, after
      the other probe steps, see protocol-t2.md).
+   From other vendors' T2 drivers (2026-10-12, lab
+   `captures/t2-research/other-t2-drivers.md`): read the 180 degree flag and
+   the EDID source from the ID ROM instead of hard-coding them; use the
+   16 MiB of video memory; the macOS driver's power states (`fcb0`,
+   `fc6f`); several cursor shapes in VRAM (`fe30-33`) and its edge clipping;
+   the EP2 timeout (`0x90` register 4) so a cut-off frame heals by itself;
+   a background refresh like the macOS driver's (every tile once per 10 s);
+   in-band `0x16` flips; the second address set (overlay?). Probe steps s
+   onward test them.
    Also next (2026-10-12): a "scaler done" signal so half mode's edges stop
    glitching (wait before the flip), and the `0x0a` table as hardware gamma
    (it recolours all output when non-zero). Then decide which go into mct_t2. Also to test on the tablet: software

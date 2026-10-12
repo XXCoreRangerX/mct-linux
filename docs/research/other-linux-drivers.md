@@ -9,6 +9,7 @@
 | [mcttrigger/triggerdm](https://github.com/mcttrigger/triggerdm) | MCT's own Linux driver: a userspace daemon on EVDI + libusb + libjpeg-turbo, built for ChromeOS developer mode | GPL-2.0-or-later (headers and LICENSE) | on GitHub since 2024-08, last change 2026-10-07 |
 | MCT's Ubuntu package (`T6evdi`) | the same code base packaged for Ubuntu, from MCT's download page | no licence in the package; its headers say "All rights reserved" | the version read for [t6-vendor-review.md](t6-vendor-review.md) |
 | [ramifriedman/mct-t6-linux](https://github.com/ramifriedman/mct-t6-linux) ("trigger6") | a kernel DRM driver plus a Python userspace driver and GTK tools, for the StarTech USBC2HD4 (two T6 chips, four HDMI ports, `0711:5601`) | kernel GPL-2.0-only, tools MIT | "beta"; last push 2026-04-08 |
+| [rhgndf/trigger2](https://github.com/rhgndf/trigger2) | a GPL DRM driver for the Trigger II in j5create JUA230 dongles, by the author of the drm/trigger5 patch | GPL-2.0-only | added 2026-10-12: published 2026-09-25, last change 2026-10-08; timing registers, the PLL formula and the in-band `0x16` register list are now in protocol-t2.md |
 | [JingYenLoh/trigger6](https://github.com/JingYenLoh/trigger6) and forks ([y-chan](https://github.com/y-chan/trigger6), [MatthieuLeboeuf](https://github.com/MatthieuLeboeuf/trigger6), [benjaminpotter](https://github.com/benjaminpotter/trigger6)) | the first open kernel driver for the T6, the starting point for mct's T6 work | GPL-2.0 | experimental |
 
 triggerdm's README describes the ChromeOS setup; its code is close to the
