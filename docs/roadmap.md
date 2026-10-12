@@ -56,7 +56,9 @@ Order agreed 2026-10-11:
      desktop use, highest risk; the older vendor driver itself would not use
      it on this tablet, so firmware support is unknown; tested last, after
      the other probe steps, see protocol-t2.md).
-   Then decide which go into mct_t2. Also to test on the tablet: software
+   Also next (2026-10-12): a "scaler done" signal so half mode's edges stop
+   glitching (wait before the flip), and the `0x0a` table as hardware gamma
+   (it recolours all output when non-zero). Then decide which go into mct_t2. Also to test on the tablet: software
    gamma and the per-channel lossy tolerance (mct_t2 0.3.23).
 
 ## Candidates from the scout (2026-10-12)

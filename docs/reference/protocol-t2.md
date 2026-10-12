@@ -32,7 +32,7 @@ reply, read `0x81` before the next OUT or the firmware stalls. Pace ~50 ms.
 | `0x14` | `14 <len16> (reg val)*` (27 B in the init) | none | fb-bank pairs: `66/67` y, `68/69` x, `6a/6b` h, `6c/6d` w (a window), `65` SEL, then `6e 01, 60 01, 6e 01`: **display enable** (captured, field names inferred from code) |
 | `0x16` | `16 <len16=0x20> <32 B pairs>` (35 B) | none | **timing packet**: regs `0x20-0x2f` = width/height-derived + mode params (full template in init doc) |
 | `0x22` | 62 B | none | second mode packet (regs incl. `0xfc`-area mirrors); template TBD from driver |
-| `0x0a` | `0a` + 768 zeros (769 B) | none | a 256x3 lookup table (code); the legacy driver pairs it with the 8-bit palette format; Windows sends zeros. Effect untested (`tools/gamma_test.py`) |
+| `0x0a` | `0a` + 768 zeros (769 B) | none | a 256x3 lookup table (B, G, R entries) acting on **all output** when non-zero (verified 2026-10-12: a palette loaded for an 8-bit test recoloured the 24-bit picture too); all zeros, as Windows sends, leaves the picture unchanged. The legacy driver pairs it with the 8-bit format. Possible hardware gamma, untested |
 | `0x1b` | `1b8000a000800000` (8 B) | 512 zeros (idle) | EDID query (zeros until inited?) |
 | `0x1d` | `1d8000ae00000100` (8 B) | 512 B | **device info**: `55aa00ff...`, `07115200`, `MCT`, `DTU-1031X`, **EDID at +0x80** |
 | `0x28` | `28 <a> <b> 00` (4 B) | none | write MC8032 port 1, the counterpart of `0x29` (code; never sent by Windows) |
@@ -415,8 +415,28 @@ the lab: `captures/t2_probe-20261012-142605.log`). Verified:
 - **YUV 4:2:2 RLE through `0x13`** (format `8a`, mode 6, Y/U/V planes of
   1536/768/768 per 3 KiB unit): flat colour bands as expected.
 
+Also on 2026-10-12 (steps l, m, n, p; log
+`captures/t2_probe-20261012-165352.log`):
+
+- **`0x11` 32-bit BGRX** (format `0e`, 4 bytes per pixel, X = 0): correct.
+- **`0x11` YUV 4:2:2 YUY2** (format `8a`) and **packed 4:1:1** (format
+  `96`, `Y0 U V Y1 Y2 Y3`): correct colours, shades as expected for YUV.
+- **8-bit palette: not as expected.** With the `0x0a` table loaded (B, G, R
+  entries; a few colours, the rest zero) the **24-bit** background and
+  reference box changed colour too (purple background, the box reduced to
+  two flat blocks), the 8-bit `0x11` box was wrong, and a strip of
+  black/white/grey lines ~12 px high ran across the top. Restoring the 768
+  zero bytes brought the normal picture back; the chip kept answering. So
+  `0x0a` is an output lookup table that acts on everything; an all-zero
+  table (what Windows loads) apparently means "off". Untested: whether an
+  identity or gamma ramp gives a usable hardware gamma (instead of the
+  software gamma), the channel order, and how the 8-bit source is really
+  selected (format `00` with a w*h length was read as something else).
+
 Still untested:
 
+- the `0x0a` table as hardware gamma (identity ramp first, then a curve)
+- a "scaler done" signal (half mode's edge glitch, see t2-driver.md)
 - the blit engine (`0x14`, or `0x15` register batches on `fc50-5d`, `fc34`,
   `fc59`, `fe60-89`, `fe70`), which could make scrolling a short command
   instead of resending the rows; the riskiest, since a wrong command may hang
