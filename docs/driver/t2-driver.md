@@ -136,7 +136,7 @@ may band sooner; watch skies when testing.
 ## Half-resolution motion (driver 0.3.24)
 
 `motion=half` (sysfs, or the module parameter `half_motion`): when at least
-half the screen changed since the last update (compared with a copy of the
+80% of the screen changed since the last update (compared with a copy of the
 last presented picture, kept only in half mode) and the exact full frame
 would not fit one frame's budget, the update goes out as a 512x300 image (each 2x2 block averaged:
 150 RLE units, a quarter of the pixels) in a `0x13` with scale `0x2000`,
@@ -154,6 +154,16 @@ unknown right after a half frame, so every later update to that buffer
 counted as a full-screen change and went half again, and each half frame
 re-armed the refinement timer, so with anything updating it never ran.
 0.3.25 compares with the last presented picture instead.
+
+Second test (0.3.25, 2026-10-12): works well, but moving a window over the
+still wallpaper blurred and re-sharpened the still parts too, which looks
+unsteady ("like under a microscope"). Half mode replaces the whole screen,
+so 0.3.26 uses it only when at least 80% of the screen changed (full-screen
+video, workspace switches); smaller changes stay exact or use the lossy
+level. Blurring only the changed area would need the chip to scale a
+partial rectangle without touching the pixels next to it: decoding the
+source elsewhere (scratch VRAM) and scaling into the rectangle, a
+combination the probe has not tested yet.
 
 ## Software gamma (driver 0.3.23)
 

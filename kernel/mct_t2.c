@@ -67,7 +67,7 @@ MODULE_PARM_DESC(half_motion, "Default for new devices: send full-screen updates
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	25
+#define DRIVER_PATCH	26
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -89,6 +89,7 @@ MODULE_PARM_DESC(half_motion, "Default for new devices: send full-screen updates
 #define T2_MODE_RGB	0x05			/* R, G, B planes per 1024-pixel unit */
 #define T2_FLAGS_INDIR	0x28			/* RldClock 0x20 | 0x13 command 0x08 */
 #define T2_SCALE_2X	0x2000			/* source half the target size */
+#define T2_HALF_AREA	80			/* % of the screen changed for half mode */
 #define T2_BOUNCE	65536
 #define T2_ENC_MAX	(T2_WIDTH * (T2_HEIGHT + 16) * 3 + 4096)
 #define T2_TIMEOUT	2000
@@ -490,8 +491,11 @@ static int t2_send_half(struct mct_t2 *t2, u8 *src, u32 base, long *sent)
 static int t2_diff_bands(const u8 *cur, const u8 *old, struct drm_rect *bands);
 
 /*
- * Half mode only for heavy updates: at least half the screen changed since
- * the last update and the exact full frame would not fit one frame's budget.
+ * Half mode only for heavy updates: most of the screen (T2_HALF_AREA) changed
+ * since the last update and the exact full frame would not fit one frame's
+ * budget. Half mode blurs the whole screen, so smaller changes (a window
+ * moved over a still wallpaper) stay exact: blurring and re-sharpening the
+ * still parts around them flickers.
  */
 static bool t2_want_half(struct mct_t2 *t2)
 {
@@ -504,7 +508,7 @@ static bool t2_want_half(struct mct_t2 *t2)
 		for (area = 0, i = 0; i < n; i++)
 			area += (long)drm_rect_width(&bands[i]) * drm_rect_height(&bands[i]);
 	}
-	if (area * 2 < (long)T2_WIDTH * T2_HEIGHT)
+	if (area * 100 < (long)T2_WIDTH * T2_HEIGHT * T2_HALF_AREA)
 		return false;
 	return t2_encode(t2, t2->snap, 0, 0, T2_WIDTH, T2_HEIGHT, 0) > T2_FRAME_BUDGET;
 }

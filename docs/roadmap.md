@@ -48,7 +48,9 @@ Order agreed 2026-10-11:
    - 512 KiB payload transfers like Windows (verified; the measured gain is
      ~3% and needs a 512 KiB DMA buffer, so not done yet);
    - ~~2x hardware upscale during heavy motion~~: done as `motion=half`
-     (mct_t2 0.3.24), to be compared with the lossy mode on the tablet;
+     (mct_t2 0.3.24-0.3.26, whole screen, only when 80% changes). Next:
+     blur only the changed area; needs a probe step for scaling a partial
+     rectangle from a scratch source without touching its neighbours;
    - YUV 4:2:2 RLE (a third less raw data; colour smears at edges) as
      another motion mode; RGB565 only helps noisy content;
    - the blit engine for scrolling and window moves (highest gain for
