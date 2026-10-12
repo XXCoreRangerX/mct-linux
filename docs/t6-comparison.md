@@ -84,7 +84,9 @@ mct_t2's mould; the code was separate then (mct_t2.c ~1360 lines, mct_t6.c
 - **JPEG:** far less data for full-screen video. Out of reach for a kernel
   driver (below).
 - **Dual-output models and HDMI audio** (not present on the 5600; a general
-  MCT driver would need them).
+  MCT driver would need them). EDIT (2026-10-12): audio most likely *is*
+  present on the 5600 (it goes over the vendor endpoint, not a USB audio
+  interface); see the lab notebook.
 - Hardware rotation (request 0x1f) only exists in MCT's Ubuntu driver; the
   5600 stalls on it and the Windows driver leaves rotation to the OS, as
   Linux compositors do.
@@ -125,6 +127,7 @@ mct_t2's mould; the code was separate then (mct_t2.c ~1360 lines, mct_t6.c
 | Transfer errors | cancel (restarts the 5600), resend | cancel | clear stall, retry | cancel |
 | Capability checks | feature level, VRAM, DISP flags | yes | yes | yes |
 | USB 2 link | smaller writes, modes up to 2048 wide | same | smaller packets | JPEG |
-| HDMI audio, second output | no (5600 has neither) | yes | yes | yes |
+| HDMI audio | not yet (the 5600 most likely has it, over the vendor endpoint) | yes | yes | yes |
+| Second output | no (the 5600 has one) | yes | yes | yes |
 | Suspend / DPMS | yes | yes | yes | |
 

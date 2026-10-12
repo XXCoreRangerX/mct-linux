@@ -18,7 +18,9 @@ drop off the bus until a power cycle).
 - Adapter: "T6 USB Station", USB `0711:5600`, bcdDevice 0x1010, SuperSpeed
   5 Gbit/s, 248 mA. One vendor interface: bulk OUT 0x02 and bulk IN 0x81
   (1024 B, bMaxBurst 15), interrupt IN 0x83 (64 B). No audio or network
-  functions. Dump: `captures/t6-device/lsusb-v.txt`.
+  functions. Dump: `captures/t6-device/lsusb-v.txt`. EDIT (2026-10-12): no
+  USB audio *interface*, but T6 audio never uses one; see the 2026-10-12
+  entry at the end.
 - Monitor: LG 27GN750 (EDID name "27GN7", made week 8/2020), a **1920x1080
   240 Hz panel**, on the adapter's HDMI port. EDID 1.3 with a CTA extension,
   `captures/t6-device/lg-27gn7.edid` and `lg-27gn7-edid-decode.txt`. HDMI VSDB:
@@ -767,10 +769,14 @@ and shown in sysfs: platform 1 ("Super Lite"), boot code `16062899`, image
 code `17091401` (both look like BCD dates: 2016-06-28 and 2017-09-14),
 board "JUA254H" (j5create JUA254), no serial (8 zero bytes). Function
 descriptors (`b1`): index 0 is function 0x5620 "Trigger 6 External
-Graphics", index 3 is 0x5640 "USB Audio Device". The 5600 enumerates with
+Graphics", index 3 is 0x5640 "USB Audio Device". ~~The 5600 enumerates with
 no audio interface, so the chip has the audio function but this board
-doesn't expose it on USB (the 5601 in the capture reported 0x5621 for its
+doesn't expose it on USB~~ (the 5601 in the capture reported 0x5621 for its
 display function). Reading `b1` at probe caused no problems.
+EDIT (2026-10-12): wrong conclusion. T6 audio goes over the vendor bulk
+endpoint (session signature 3, after requests `a0`-`a5`, `23`, `24` in MCT's
+daemon), not a USB audio interface, and j5create's spec sheet lists HDMI
+audio for the JUA254. So the 5600 most likely has HDMI audio; untested.
 
 **Older kernels (2026-10-11).** Built against 6.18.53 and 6.12.111: 6.18
 lacks only the 7.2 rename of `struct drm_atomic_state` to
@@ -791,4 +797,24 @@ of it (each VM exit): the T6 came back on the host every time.
 
 **720p240 (2026-10-12).** 1280x720 at 240 Hz (279.94 MHz, reduced
 blanking) tested by the user on the LG 27GN750: works well.
+
+**Scout of future work (2026-10-12).** A read-only research pass over the
+docs, the vendor drivers, the other projects and the web (lab
+`captures/scout/todo-candidates.md`). For the T6:
+
+- HDMI audio is likely available on the JUA254 (see the EDIT above); MCT's
+  daemon (`t6.h`, `t6auddef.h`, `t6usbdongle.c`) shows the requests and the
+  audio session. A read-only probe first.
+- The firmware has I2C requests (`0x81` read, `0x02` write in MCT's
+  `t6.h`), so DDC/CI to the monitor (brightness, input) looks possible;
+  neither vendor driver uses them. Reads first, on the LG only (the
+  MO34WQC2's controller hangs easily). Never send `0x01`/`0x13` (ROM writes)
+  or `0x30` (hardware reset).
+- cyrozap's captures include a JUA365 with both HDMI ports active and JCD543
+  sessions: the second-output protocol can be worked out offline. Two other
+  projects saw a 5601 drop off the bus when idle and added a keepalive.
+- The Wacom DTU-1031AX is a T6 device (its board name is in MCT's firmware
+  list); its USB ID is unknown.
+- A Trigger 5 driver ("drm/trigger5") is under review on dri-devel (v2,
+  2026-09); its review comments match mct's open items.
 

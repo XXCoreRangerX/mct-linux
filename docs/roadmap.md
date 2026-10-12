@@ -1,4 +1,4 @@
-# Roadmap and status (2026-10-11, mct_t6 0.26.0)
+# Roadmap and status (2026-10-12, mct_t6 0.28.0, mct_t2 0.3.23)
 
 > **Status**: updated as work goes on.
 
@@ -20,7 +20,7 @@ left to do. Percentages are estimates, not a checklist score.
 | Compared to | Estimate | Notes |
 |---|---|---|
 | Vendor drivers, same device | ~95%, ahead in most areas | Missing: JPEG (only matters for full-screen motion and USB 2). Same: error recovery, debounced hotplug, capability checks, USB 2 handling, cursor up to 128 px. Ahead: up to 144 Hz and 3440x1440@60 / 4K30 (vendor 60 Hz, table modes), lossless / full colour at rest, adaptive format, gamma on any feature level, exact row diffing. |
-| Trigger 6 family | ~80% | Not done: second output, HDMI audio, the chip's JPEG decoder. The 5600 is a single-output "Super Lite". Up to 3440x1440@60 (NV12; 4:4:4 up to 51 Hz) and 4K30 (NV12) work. |
+| Trigger 6 family | ~80% | Not done: second output, HDMI audio (the 5600 most likely has it), the chip's JPEG decoder. The 5600 is a single-output "Super Lite". Up to 3440x1440@60 (NV12; 4:4:4 up to 51 Hz) and 4K30 (NV12) work. |
 | Speed headroom | ~15-25% | Hard limits: ~350 MHz pixel clock (1080p144 max, no 1080p240), ~360 MB/s USB, per-format scanout bandwidth. Raw full-screen NV12 1080p ~98 fps. |
 
 ## Work items
@@ -53,6 +53,37 @@ Order agreed 2026-10-11:
      desktop use, highest risk).
    Then decide which go into mct_t2. Also to test on the tablet: software
    gamma and the per-channel lossy tolerance (mct_t2 0.3.23).
+
+## Candidates from the scout (2026-10-12)
+
+A read-only research pass (lab `captures/scout/todo-candidates.md`: every
+candidate with evidence, effort S/M/L, hardware risk and whether it needs
+hardware we don't have, plus a "not recommended" list: drm_panic, VRR, HDR,
+writeback, a T5 backend now). Its top 10, not yet ordered with the user:
+
+1. **T6 HDMI audio.** The JUA254 most likely has it (over the vendor
+   endpoint, MCT's daemon shows how). Read-only probe first (S), then ALSA
+   playback in the module (L).
+2. **DDC/CI through the T6** (firmware I2C requests `0x81`/`0x02`): monitor
+   brightness and input from ddcutil. Reads first, on the LG only (S to M).
+3. **Cursor independent of `io_lock`:** no cursor stutter during large
+   updates (S to M; already in the edge-case list below).
+4. **T2 resync as a work item** (M; below).
+5. **T6 buffers allocated in `atomic_check`** (M; below; also what upstream
+   review asked of drm/trigger5).
+6. **Upstream readiness:** checkpatch, sparse, KUnit tests for the PLL,
+   colour conversion and RLE, a CI build against drm-next (M).
+7. **Distribution packages:** AUR, Fedora COPR, a .deb (S to M).
+8. **More T6 USB IDs behind feature checks** (untested ones opt-in), and
+   the Wacom DTU-1031AX, a T6 device with an unknown USB ID (S).
+9. **Upstream the two niri patches** (S, review time).
+10. **The userspace JPEG path** (L): measure decode speed first; it helps
+    full-screen motion at large sizes and USB 2 links.
+
+Also new: the T6 second output can be worked out offline from cyrozap's
+JUA365/JCD543 captures (plan an idle keepalive, as two other projects needed
+for the 5601), and a Trigger 5 driver is under review upstream ("drm/trigger5",
+2026-09); contact its author rather than duplicating it.
 
 Later:
 
@@ -89,7 +120,8 @@ Later:
   - On USB 2 links, JPEG is what keeps the vendor drivers usable.
 - **Other compositors:** KDE/GNOME read the frame from VRAM (~5.8 ms per
   1080p frame). Test them; upstream the niri display-only allocation patch.
-- **T6 second output and audio:** needs a 5601 or a dock.
+- **T6 second output:** needs a 5601 or a dock; the protocol can be worked
+  out offline from cyrozap's dual-output captures first.
 - **Device profiles:** separate Wacom quirks from plain T2 once a plain T2
   dongle is available.
 
