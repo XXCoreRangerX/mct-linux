@@ -86,23 +86,36 @@ that fails, the display still works.
   On the first run it enables the engine (`40 24`, Activity 1, the format
   and cyclic buffer size read from `a4` at probe, ReturnSize 9600).
 - It then sends 1920-byte (10 ms) packets, each a 32-byte session header
-  (signature 3) and the PCM, until about 120 ms more than the host clock's
-  elapsed playback has been sent. Data due now is sent whether or not the
-  application has written it (ALSA reports the underrun); the lead only
-  from what it has written.
-- The ALSA position is what has been sent. The delay reported is sent
-  minus played by the host clock, at most one second.
+  (signature 3) and the PCM, until the device is 90 ms ahead of what it
+  plays by the host clock (`audio_lead_ms`). It sends only what the application has written.
+  When the application falls behind and the device has less than 30 ms
+  left, it sends silence. The stream then plays that much later. A device
+  that runs dry replays old contents of its ring buffer, which sounds like
+  crackling rain.
+- The ALSA position moves smoothly with the host clock: what the device
+  plays now plus the lead. It never passes what was sent and never
+  goes back. The reported delay is the lead. The PCM is marked "batch", so
+  PipeWire keeps a period more queued. During a drain the last partial
+  packet is padded with silence.
 - Stop: the timer stops and the work sends Activity 0. `sync_stop` waits
   for the work before ALSA frees or resets the buffer.
 - Unplug: the card is disconnected and the timer and work stopped before
   the DRM device goes. Suspend: streams are suspended and the timer and
   work stopped; the next start enables the engine again.
+- debugfs `audio` line: starts, data packets, silence fills (underruns),
+  audio events.
 - Events with the audio function bit (0x20) are counted with their DMA
   pointer (debugfs `audio` line), to find out whether the adapter can
   pace playback itself.
 
 Audio is heard only while the display is on (HDMI carries it in the video
-signal). With the display off, playback runs but nothing is heard. The volume node
+signal). With the display off, playback runs but nothing is heard. In
+modes above 297 MHz pixel clock it buzzes (tested: clean at 1080p 60, 75
+and 120 Hz, buzzing at 1080p144, 333 MHz). The adapter's firmware sets up
+the HDMI audio clock, so the driver can't fix it; it logs once per mode
+when a stream starts in such a mode, or with the display off. The lead
+is the module parameter `audio_lead_ms` (default 90, 20-500, read at
+stream start). The volume node
 is not exposed yet; use the system's software volume.
 
 ## Cursor

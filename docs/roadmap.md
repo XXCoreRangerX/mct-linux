@@ -80,7 +80,9 @@ writeback, a T5 backend now). Its top 10, not yet ordered with the user:
 1. **T6 HDMI audio.** ~~The JUA254 most likely has it~~: it works
    (2026-10-12, `tools/t6_probe.py`, 48 kHz stereo heard on the LG's
    jack). ~~Next: ALSA playback in the module (L), sharing the bulk endpoint
-   with the frames.~~ EDIT (2026-10-12): in mct_t6 0.29.0, being tested.
+   with the frames.~~ EDIT (2026-10-12): in mct_t6 0.29, working (clean up
+   to 297 MHz pixel clock; above, it buzzes, which looks like a firmware
+   limit).
    Left: the volume control (node 0, `40 23`), drift correction if the
    adapter sends audio events, and starting audio when the display is off.
 2. **DDC/CI through the T6** (firmware I2C requests `0x81`/`0x02`): monitor

@@ -211,7 +211,9 @@ wValue x, wIndex y; negative values as v - 1 (V).
 - `a4` reported "stopped, position 0" during playback too: not usable as a
   progress counter on this firmware.
 - Audio plays only while the output is on with a mode set (HDMI carries
-  audio inside the video signal).
+  audio inside the video signal), and only cleanly up to 297 MHz pixel
+  clock: 1080p 60/75/120 clean, 1080p144 (333 MHz) buzzes on the LG
+  27GN7, with the same stream (2026-10-12, mct_t6 0.29).
 - Interrupt events (MCT's `T6INTERRUPTDATA`, `t6bulkdef.h`): byte 0 is a
   function mask (0x04 video, 0x20 audio); at 0x20 a u32 with the audio
   render DMA pointer (bits 0-23) and jack bits (24 jack 0, 25 DVO HDMI, 26
@@ -219,5 +221,5 @@ wValue x, wIndex y; negative values as v - 1 (V).
   known yet (C); mct_t6 0.29.0 counts them in debugfs (`audio` line).
 - The driver (mct_t6 0.29.0) does what MCT's daemon does: `40 24` with
   Activity 1 when the stream starts, 10 ms packets paced by the host clock
-  about 120 ms ahead of playback, Activity 0 when it stops.
+  about 90 ms ahead of playback, Activity 0 when it stops.
 

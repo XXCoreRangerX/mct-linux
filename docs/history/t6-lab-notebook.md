@@ -891,3 +891,57 @@ To test: `aplay -l` should list the board's name ("JUA254H"). Then
 display on, then a PipeWire sink for a few minutes (drift shows as growing
 delay or glitches). Afterwards check the debugfs `audio` line: if the
 event count grows during playback, the DMA pointer can drive the clock.
+
+**First ALSA test (2026-10-12, mct_t6 0.29.0).** The card registered as
+"JUA254H" (`aplay -l`, card 5). `speaker-test -D hw:JUA254H,0` (1 s
+buffer, 4 periods) ran with exact period timing. Spotify through PipeWire
+sounded "like buzzing falling rain instead of music".
+
+~~Likely cause~~ EDIT (2026-10-12): not the cause of the buzz, which was the 1080p144 mode (below), but real problems all the same, so the changes stay. Suspected cause: 0.29.0 reported the ALSA position as what was sent. It
+jumped in 10 ms steps and ran 120 ms ahead of what the device played.
+PipeWire, which keeps little queued and paces by that position, let the
+buffer run dry. The driver then sent the "due now" part anyway, from
+buffer contents not yet rewritten (stale audio). The device plays its
+128 KiB ring regardless, so when it runs dry it replays old contents too.
+0.29.1 changes:
+- The position moves smoothly with the host clock plus the lead.
+- Only written data is sent, with silence when the device has less than
+  30 ms left (counted as "silence fills" in debugfs).
+- The PCM is marked BATCH.
+- Drain pads the last packet.
+
+**Second ALSA test (2026-10-12, 0.29.1): still buzzing.** debugfs: 2
+starts, 2448 packets, 2 silence fills, 1 audio event (pointer word
+0x45000000: jack 0 and LVDS-HDMI bits, DMA pointer 0). Pacing therefore
+isn't starving. The user clarified that the probe's tones (step D/E)
+were clean but every ALSA playback, `speaker-test` included, buzzed. The
+header and format match MCT's daemon exactly (`t6_libusb_SendAudio`:
+`{3, len, 0, len, 0...}` then the PCM, 1920 bytes, S16_LE stereo).
+Remaining differences from the probe:
+- The lead: driver 120 ms against the probe's ~40-90 ms and Windows'
+  ~50 ms. A buzz is a discontinuity every 10 ms packet, which fits a
+  device FIFO smaller than the 128 KiB it reports overflowing.
+- Video sessions interleaved with the audio.
+- Bursts on the 5 ms tick rather than one packet per 10 ms.
+~~0.29.2~~ EDIT (2026-10-12): 0.29.1 (one commit with the pacing changes) makes the lead a runtime module parameter (`audio_lead_ms`,
+default 40, read at stream start) to test the first.
+
+**Found: the mode, not the driver (2026-10-12).** The LG was at 1080p144
+through the T6; the probe's clean tones had been at 60 Hz (the user had
+noted that audio worked "on 60hz mode"). Same driver and stream, by mode:
+
+| Mode | Pixel clock | Audio |
+|---|---|---|
+| 1080p60 | 148.5 MHz | clean (`speaker-test` and Spotify through PipeWire) |
+| 1080p75 | 174.6 MHz | clean |
+| 1080p120 | 297.0 MHz | clean |
+| 1080p144 | 333.2 MHz | buzzing |
+
+297 MHz is the top HDMI 1.4 clock (4K30). The firmware sets up the HDMI
+audio clock (N/CTS); it apparently doesn't handle clocks above that,
+although video runs to 340 MHz. Not between 297 and 333 MHz yet (e.g.
+1080p121.99 at 293.7 doesn't narrow it). The lead isn't the cause (20-90 ms
+all buzzed at 144 Hz); the default goes to 90 ms, the value of the clean
+Spotify run. The driver logs a warning once per mode when a stream starts
+above 297 MHz or with the display off. Both 0.29.1 and the lead
+parameter are in one commit (0.29.1).
