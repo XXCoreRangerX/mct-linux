@@ -67,7 +67,7 @@ MODULE_PARM_DESC(half_motion, "Default for new devices: send full-screen updates
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	26
+#define DRIVER_PATCH	27
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -403,12 +403,10 @@ static u32 t2_buf_addr(int buf)
  * wants x and w in 64-pixel units and w * h a multiple of 1024; rows are
  * rounded up but never past the buffer (that would write into the other one).
  */
-static int t2_send_visible_rect(struct mct_t2 *t2, u8 *src, u32 base,
-				const struct drm_rect *r, int tol, long *sent, int *used)
+static void t2_device_rect(const struct drm_rect *r, int *dx, int *dy, int *w, int *h)
 {
 	int dx1 = round_down(T2_WIDTH - r->x2, 64), dx2 = round_up(T2_WIDTH - r->x1, 64);
 	int dy1 = T2_HEIGHT - r->y2, rows = drm_rect_height(r);
-	int w, h;
 
 	if (roundup(rows, 16 / gcd((dx2 - dx1) / 64, 16)) > T2_HEIGHT && ((dx2 - dx1) / 64) & 1) {
 		/* full-height rect: an even number of 64-px columns makes h = 600 legal */
@@ -417,11 +415,21 @@ static int t2_send_visible_rect(struct mct_t2 *t2, u8 *src, u32 base,
 		else
 			dx1 -= 64;
 	}
-	w = dx2 - dx1;
-	h = roundup(rows, 16 / gcd(w / 64, 16));
-	if (dy1 + h > T2_HEIGHT)
-		dy1 = T2_HEIGHT - h;
-	return t2_send_rect(t2, src, base, dx1, dy1, w, h, tol, sent, used);
+	*w = dx2 - dx1;
+	*h = roundup(rows, 16 / gcd(*w / 64, 16));
+	if (dy1 + *h > T2_HEIGHT)
+		dy1 = T2_HEIGHT - *h;
+	*dx = dx1;
+	*dy = dy1;
+}
+
+static int t2_send_visible_rect(struct mct_t2 *t2, u8 *src, u32 base,
+				const struct drm_rect *r, int tol, long *sent, int *used)
+{
+	int dx, dy, w, h;
+
+	t2_device_rect(r, &dx, &dy, &w, &h);
+	return t2_send_rect(t2, src, base, dx, dy, w, h, tol, sent, used);
 }
 
 /*
@@ -492,25 +500,33 @@ static int t2_diff_bands(const u8 *cur, const u8 *old, struct drm_rect *bands);
 
 /*
  * Half mode only for heavy updates: most of the screen (T2_HALF_AREA) changed
- * since the last update and the exact full frame would not fit one frame's
- * budget. Half mode blurs the whole screen, so smaller changes (a window
- * moved over a still wallpaper) stay exact: blurring and re-sharpening the
- * still parts around them flickers.
+ * since the last update, and sending exactly what changed would not fit one
+ * frame's budget. Half mode blurs the whole screen, so smaller changes (a
+ * window moved over a still wallpaper) stay exact: blurring and re-sharpening
+ * the still parts around them flickers.
  */
 static bool t2_want_half(struct mct_t2 *t2)
 {
 	struct drm_rect bands[T2_MAX_BANDS];
-	long area = (long)T2_WIDTH * T2_HEIGHT;
-	int i, n;
+	long area = 0, size = 0;
+	int i, n, dx, dy, w, h;
 
 	if (t2->last_valid) {
 		n = t2_diff_bands(t2->snap, t2->last, bands);
-		for (area = 0, i = 0; i < n; i++)
-			area += (long)drm_rect_width(&bands[i]) * drm_rect_height(&bands[i]);
+	} else {
+		drm_rect_init(&bands[0], 0, 0, T2_WIDTH, T2_HEIGHT);
+		n = 1;
 	}
+	for (i = 0; i < n; i++)
+		area += (long)drm_rect_width(&bands[i]) * drm_rect_height(&bands[i]);
 	if (area * 100 < (long)T2_WIDTH * T2_HEIGHT * T2_HALF_AREA)
 		return false;
-	return t2_encode(t2, t2->snap, 0, 0, T2_WIDTH, T2_HEIGHT, 0) > T2_FRAME_BUDGET;
+	/* the exact size of what changed, rectangles aligned as they are sent */
+	for (i = 0; i < n && size <= T2_FRAME_BUDGET; i++) {
+		t2_device_rect(&bands[i], &dx, &dy, &w, &h);
+		size += t2_encode(t2, t2->snap, dx, dy, w, h, 0);
+	}
+	return size > T2_FRAME_BUDGET;
 }
 
 /* half mode: remember this update's picture for the next motion check */

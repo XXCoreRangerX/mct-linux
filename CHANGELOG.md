@@ -21,7 +21,8 @@ drm_info and in the kernel log at probe).
   once motion stops; in the app as "Half resolution during heavy motion".
   0.3.25 fixes it staying pixelated (the motion check now compares with the
   last presented picture); 0.3.26 uses it only when at least 80% of the
-  screen changes, so moving a window doesn't blur the still wallpaper.
+  screen changes, so moving a window doesn't blur the still wallpaper;
+  0.3.27 measures the real size of what changed instead of the full frame.
 - T2 protocol corrected and extended from the vendor drivers and captures;
   hardware upscale, RGB565, YUV 4:2:2 and 512 KiB transfers verified on the
   tablet with the new `tools/t2_probe.py`. Software gamma tested.

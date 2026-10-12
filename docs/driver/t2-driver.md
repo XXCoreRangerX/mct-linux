@@ -165,6 +165,11 @@ partial rectangle without touching the pixels next to it: decoding the
 source elsewhere (scratch VRAM) and scaling into the rectangle, a
 combination the probe has not tested yet.
 
+0.3.27 corrects the size test: it measured the exact *full frame* (a
+detailed wallpaper alone is ~837 KB, over the ~600 KB budget), so any large
+change "did not fit". It now encodes what changed, aligned as it is sent,
+and goes half only if that exceeds the budget.
+
 ## Software gamma (driver 0.3.23)
 
 The T2 offers a 256-entry gamma LUT on the CRTC, like the T6 (night light,
