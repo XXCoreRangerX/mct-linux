@@ -53,7 +53,7 @@ docstring first; the interactive ones wait for a y/n answer per step.**
 | `t2i2c.py` | the T2's I2C masters |
 | `bench.py` | throughput for different transfer sizes |
 | `t2_recovery_test.py` | the stuck parser after an interrupted frame, and the driver's recovery |
-| `t2_probe.py` | interactive: untested frame commands from the vendor binaries (raw `0x11`, hardware upscale, RGB565, 32-bit, YUV 4:2:2 and 12-bit sources, YUV RLE, 8-bit palette via `0x0a`, 512 KiB transfers) in the hidden buffer, with a parser check and recovery after each command |
+| `t2_probe.py` | interactive: untested frame commands from the vendor binaries (raw `0x11`, hardware upscale, RGB565, 32-bit, YUV 4:2:2 and 12-bit sources, YUV RLE, 8-bit palette via `0x0a`, 512 KiB transfers, the `0x0a` table as hardware gamma, register reads after a full-screen 2x `0x13` to find a "scaler done" signal) in the hidden buffer, with a parser check and recovery after each command |
 | `probes/` | the first live probes, before any capture (own README) |
 
 ## Captures and the vendor driver

@@ -28,6 +28,20 @@ of risk, each one skippable:
   p  8-bit palette: EP3 0x0a table (256 x B,G,R) loaded, 0x11 format 0x00 at
      1 byte per pixel, table set back to 768 zeros (as the init sends) after
      the step, also when it fails or you quit
+  q  0x0a table as hardware gamma (the step p test showed it acts on all
+     output when non-zero): test picture (4 ramps, 4-colour box) in B, then
+     with B shown q1 identity table, q2 red only (B 0, G 0, R i: tells the
+     entry order), q3 gamma 2.2 on all channels, q4 the 768 zeros again
+     (also sent when the step fails or you quit); a PASS/FAIL answer for each
+  r  scaler completion signal: r1 reads 58 candidate registers at rest
+     (fe70-72, fe57, fe36, fc59, fc34, fc50-5d, fe60-67, fe78-7b, fe80-89,
+     fb60-6e, fc01 as control) 3 times; then four full-screen 0x13 into B
+     (2x from 512x300 at 0x560000 like mct_t2's half mode, 1:1, 2x, 2x), each
+     followed at once by a bounded tight loop of register reads (--r-window-ms,
+     --r-max-reads) timed from the end of the payload transfer, the health
+     check and one settled read of all 58; prints which registers/bits changed
+     and when, and the read latencies (a read blocked while the chip is busy
+     is a signal as well), then flips to B for a PASS/FAIL look
 
 There is no step o (0x13 RLE of the 12-bit YUV format): the legacy RLE
 builder only encodes 24/32-bit (mode 5) and YUY2 (mode 6) and returns
@@ -54,7 +68,10 @@ make this chip drop off the bus until a power cycle). Step f writes VRAM
 at 0x3a0000 (above the RLE staging buffer at 0x390000, inside space Windows
 uses for staging big frames). Step b overwrites all of buffer B. Step p
 changes a table on EP 0x03 that nothing else touches after the init; the
-normal init (also run by every recovery) loads the zeros again.
+normal init (also run by every recovery) loads the zeros again; step q
+loads three more tables into it. Step r only adds register reads (EP3 0x05)
+to commands of the kind the driver sends; a read gets no reply only when
+the EP2 parser waits for payload bytes, which then goes to the recovery.
 
 Needs the tablet unbound from mct (the tool refuses otherwise and prints the
 commands), pyusb and access to the device node (the NixOS module's uaccess
@@ -174,6 +191,11 @@ def describe(hdr):
         used = [(i, hdr[1 + 3 * i:4 + 3 * i]) for i in range(256) if any(hdr[1 + 3 * i:4 + 3 * i])]
         if not used:
             return "0x0a table (EP3): 768 zeros, as the init sends"
+        if len(used) > 8:
+            cols = [list(hdr[1 + k::3]) for k in range(3)]
+            return ("0x0a table (EP3), columns as sent: byte 0 (B) " + curve_name(cols[0])
+                    + ", byte 1 (G) " + curve_name(cols[1]) + ", byte 2 (R) "
+                    + curve_name(cols[2]))
         return "0x0a table (EP3), entries B,G,R: " + "  ".join(
             f"[{i:#04x}] {e.hex(' ')}" for i, e in used) + "  (all others 0)"
     return f"opcode {op:#04x}, {len(hdr)} bytes"
@@ -438,6 +460,7 @@ class Cmd:
     def __init__(self, name, header, payload=b"", chunk=CHUNK_13, ep=2):
         self.name, self.header, self.payload, self.chunk = name, header, payload, chunk
         self.ep = ep
+        self.watch = None       # step r: a Watch, register reads right after the payload
 
     def transfers(self):
         yield self.header
@@ -659,6 +682,256 @@ def step_p(opt):
                  lut_bytes({}), ep=3)])
 
 
+# --- step q: the 0x0a table as a hardware gamma ramp
+
+def lut_channels(r, g, b):
+    """0x0a command from three 256-value curves: entry i = B[i], G[i], R[i]
+    (the order lut_bytes uses; step q2 checks it)."""
+    assert len(r) == len(g) == len(b) == 256
+    t = bytearray(768)
+    t[0::3], t[1::3], t[2::3] = bytes(b), bytes(g), bytes(r)
+    return b"\x0a" + bytes(t)
+
+
+IDENT = list(range(256))
+ZEROS = [0] * 256
+GAMMA22 = [round(255 * (i / 255) ** 2.2) for i in range(256)]
+
+LUT_IDENT = lut_channels(IDENT, IDENT, IDENT)
+LUT_RED = lut_channels(IDENT, ZEROS, ZEROS)
+LUT_GAMMA = lut_channels(GAMMA22, GAMMA22, GAMMA22)
+LUT_ZERO = lut_bytes({})
+
+
+def curve_name(c):
+    if c == IDENT:
+        return "identity"
+    if c == ZEROS:
+        return "zeros"
+    if c == GAMMA22:
+        return "gamma 2.2"
+    return "curve " + ",".join(f"{c[i]:02x}" for i in (0, 64, 128, 192, 255))
+
+
+def ramp(w, h, chan):
+    """Ramp dark (left) to bright (right), visible orientation; chan = (r, g, b) in 0/1."""
+    row = b"".join(bytes(x * 255 // (w - 1) * k for k in chan) for x in range(w))
+    return row * h
+
+
+Q_RAMPS = [("grey", (1, 1, 1), 96, 64), ("red", (1, 0, 0), 160, 32),
+           ("green", (0, 1, 0), 192, 32), ("blue", (0, 0, 1), 224, 32)]
+Q_PIC = ("dark green background; 4 ramps across the whole width, dark on the left to "
+         "bright on the right: grey (tall), red, green, blue; below them one box: "
+         f"{QUADS_TEXT}")
+
+
+def cmd_lut(name, lut):
+    return Cmd(name, lut, ep=3)
+
+
+class Check:
+    """A sub-check run while buffer B is shown: send cmds, ask PASS/FAIL.
+    restores = the cmds put the table back (the step's restore is then done)."""
+
+    def __init__(self, sid, cmds, expect, restores=False):
+        self.sid, self.cmds, self.expect, self.restores = sid, cmds, expect, restores
+
+
+def step_q(opt):
+    cmds = [cmd_full("clear buffer B (dark green)", FB_B, BG_B)]
+    for name, chan, vy, h in Q_RAMPS:
+        cmds.append(cmd_rle(f"{name} ramp across the screen", FB_B, 0, vy, W, h, ramp(W, h, chan)))
+    cmds.append(cmd_rle("4-colour box (known-good 0x13)", FB_B, REF_VX, BOX_VY, BOX_W, BOX_H,
+                        quads(BOX_W, BOX_H)))
+    restore = [cmd_lut("restore the 0x0a table: 768 zeros, as the init sends (EP3)", LUT_ZERO)]
+    checks = [
+        Check("q1", [cmd_lut("q1: identity table, entry i = i,i,i (EP3)", LUT_IDENT)],
+              "PASS = the picture looks exactly unchanged (same colours, same ramps). "
+              "FAIL = anything changed; say what in the note (darker, inverted, black, "
+              "colour cast, stripes)"),
+        Check("q2", [cmd_lut("q2: red-only table, entry i = B 0, G 0, R i (EP3)", LUT_RED)],
+              "PASS = everything only in shades of red: red quadrant, yellow quadrant and "
+              "white border red, green and blue quadrants black, the grey and red ramps "
+              "black-to-red, the green and blue ramps black, background almost black. "
+              "FAIL = anything else. If it is all shades of BLUE instead, answer n and "
+              "write 'blue' in the note (then the entries are R,G,B, not B,G,R); if the "
+              "green or blue parts are red too, note that"),
+        Check("q3", [cmd_lut("q3: gamma 2.2 on all channels, entry i = 255*(i/255)^2.2 (EP3)",
+                             LUT_GAMMA)],
+              "PASS = the picture is visibly darker in the midtones (the middle of the grey "
+              "ramp much darker, the dark end crushed to black, the bright end still white), "
+              "the colours keep their hue, no colour cast. FAIL = no change, a colour cast, "
+              "or anything else"),
+        Check("q4", restore,
+              "PASS = the normal picture is back, exactly as at the start of the step "
+              "(before q1). FAIL = it still looks changed", restores=True),
+    ]
+    return cmds, f"PASS = the test picture with the table at zeros: {Q_PIC}", restore, checks
+
+
+# --- step r: does a register tell when the 0x13 2x stretch has finished?
+
+HALF_SRC = 0x560000         # mct_t2's T2_HALF_SRC: past a worst-case staged full frame
+R_HOT = [0xfe70, 0xfc59, 0xfc34, 0xfe57, 0xfe36, 0xfe71, 0xfe72, 0xfc01]   # fc01 = control
+R_COLD = ([a for a in range(0xfc50, 0xfc5e) if a != 0xfc59] + list(range(0xfe60, 0xfe68))
+          + list(range(0xfe78, 0xfe7c)) + list(range(0xfe80, 0xfe8a))
+          + list(range(0xfb60, 0xfb6f)))
+R_ALL = R_HOT + R_COLD
+R_COLD_PER_PASS = 4         # each pass: the hot set + the next 4 of the others
+R_AFTER_FIRST_MS = 20       # keep watching at least this long after the first reply
+R_BASE_ROUNDS = 3
+R_SRC_W, R_SRC_H = W // 2, H // 2
+
+
+class Watch:
+    """After the last payload transfer: read registers in a tight loop,
+    bounded by a time window and a read count."""
+
+    def __init__(self, label, window_ms, max_reads):
+        self.label, self.window_ms, self.max_reads = label, window_ms, max_reads
+
+
+class Sweep:
+    """Register reads only (no EP2 command): the at-rest baseline."""
+    ep = 3
+
+    def __init__(self, name, regs, rounds):
+        self.name, self.regs, self.rounds = name, regs, rounds
+
+
+def watch_schedule():
+    """Endless read order: every pass the hot set, then the next cold registers."""
+    k = 0
+    while True:
+        yield from R_HOT
+        for _ in range(R_COLD_PER_PASS):
+            yield R_COLD[k % len(R_COLD)]
+            k += 1
+
+
+def r_cmds(opt, label, scaled):
+    """Full screen into B: 512x300 at HALF_SRC scaled 2x, or the same picture at 1:1."""
+    src = quads(R_SRC_W, R_SRC_H)
+    w = Watch(label, opt.r_window_ms, opt.r_max_reads)
+    if scaled:
+        pay = rle_rect(rot180(src), R_SRC_W, R_SRC_H)
+        assert RLD_BUF + len(pay) <= HALF_SRC, "staged stream would overlap the source"
+        hdr = hdr13(HALF_SRC, FB_B, R_SRC_W, R_SRC_H, W, H, 0x00, R_SRC_W * R_SRC_H * 3, len(pay))
+        what = f"0x13 {R_SRC_W}x{R_SRC_H} at {HALF_SRC:#x} -> {W}x{H} in B, scale 0x2000"
+    else:
+        pay = rle_rect(rot180(upscale2(src, R_SRC_W, R_SRC_H)), W, H)
+        s = HALF_SRC if opt.r_plain_src == "scratch" else FB_B
+        assert RLD_BUF + len(pay) <= HALF_SRC
+        hdr = hdr13(s, FB_B, W, H, W, H, 0x00, W * H * 3, len(pay))
+        what = (f"0x13 {W}x{H} 1:1 in B, src "
+                f"{'scratch ' + hex(HALF_SRC) if s != FB_B else '= target (known-good path)'}")
+    c = Cmd(f"{label}: {what}, then watch the registers", hdr, pay)
+    c.watch = w
+    return c
+
+
+R_PASS = ("PASS = the whole screen shows 4 big quadrants: red top left, green top right, "
+          "blue bottom left, yellow bottom right, with a thin white border; no stripes, "
+          "garbage or small packed copy anywhere. FAIL = anything else")
+
+
+def step_r(opt):
+    # 1:1 between the 2x runs, so the picture in B at the end comes from a 2x run
+    return ([Sweep("r1: baseline, candidate registers at rest", R_ALL, R_BASE_ROUNDS),
+             r_cmds(opt, "2x #1", True), r_cmds(opt, "1:1", False),
+             r_cmds(opt, "2x #2", True), r_cmds(opt, "2x #3", True)], R_PASS)
+
+
+def seg_values(samples):
+    """{addr: [(value, t_first_us, t_last_us), ...]} from (t0, t1, addr, value, n) samples."""
+    out = {}
+    for t0, t1, a, v, n in samples:
+        segs = out.setdefault(a, [])
+        if segs and segs[-1][0] == v:
+            segs[-1][2] = t1
+        else:
+            segs.append([v, t1, t1])
+    return out
+
+
+def fmt_v(v):
+    return "--" if v is None else f"{v:02x}"
+
+
+def median(xs):
+    xs = sorted(xs)
+    return xs[len(xs) // 2] if xs else 0
+
+
+def watch_report(run, baseline, base_lat):
+    """Lines for one watched run: which registers/bits changed and when (ms after
+    the end of the payload transfer), and the read latencies."""
+    s = run["samples"]
+    lines = [f"{run['label']}: payload {run['paylen']} B sent in {run['xfer_us'] / 1000:.2f} ms; "
+             f"{len(s)} reads in {(s[-1][1] / 1000 if s else 0):.1f} ms"]
+    if not s:
+        return lines + ["  no reads"]
+    lat = [t1 - t0 for t0, t1, *_ in s]
+    slow = sorted(range(len(s)), key=lambda i: -lat[i])[:3]
+    lines.append(f"  first reply {s[0][1] / 1000:.2f} ms after the payload (that read took "
+                 f"{lat[0] / 1000:.2f} ms); read time median {median(lat) / 1000:.2f} ms"
+                 + (f", at rest {base_lat / 1000:.2f} ms" if base_lat else ""))
+    lines.append("  slowest reads: " + ", ".join(
+        f"{lat[i] / 1000:.2f} ms ({s[i][2]:04x}, sent at {s[i][0] / 1000:.2f} ms)" for i in slow))
+    if any(n != 1 for *_, n in s):
+        lines.append("  !! some replies were not 1 byte: " + ", ".join(
+            f"{a:04x}:{n} B" for _, _, a, _, n in s if n != 1))
+    same, regs = 0, []
+    segmap = seg_values(s)
+    for a in sorted(segmap, key=lambda x: R_ALL.index(x) if x in R_ALL else len(R_ALL)):
+        segs = segmap[a]
+        rest = {v for v in baseline.get(a, []) if v is not None}
+        vals = {v for v, *_ in segs if v is not None}
+        if len(segs) == 1 and rest == vals:
+            same += 1
+            continue
+        bits = 0
+        for v in vals | rest:
+            for w in vals | rest:
+                bits |= v ^ w
+        regs.append(f"    {a:04x}  " + " | ".join(
+            f"{fmt_v(v)} {t0 / 1000:.2f}-{t1 / 1000:.2f} ms" for v, t0, t1 in segs)
+            + f"   rest {','.join(fmt_v(v) for v in sorted(rest)) or '?'}"
+            + f"   bits {bits:02x}" + ("  (varies at rest)" if len(rest) > 1 else ""))
+    lines.append("  changed in the window or not as at rest:" if regs
+                 else "  every register read as at rest")
+    lines += regs
+    lines.append(f"  unchanged and as at rest: {same} registers")
+    st = run.get("settled")
+    if st is not None:
+        diff = [f"{a:04x}={fmt_v(v)}" for a, v in st.items() if v not in baseline.get(a, [v])]
+        lines.append("  after the health check: " + (("not as at rest: " + " ".join(diff))
+                                                     if diff else "all as at rest"))
+    return lines
+
+
+def last_change(run, a):
+    segs = seg_values(run["samples"]).get(a, [])
+    return f"{segs[-1][1] / 1000:.2f}" if len(segs) > 1 else "-"
+
+
+def watch_summary(runs, baseline, base_lat):
+    lines = []
+    for run in runs:
+        lines += watch_report(run, baseline, base_lat)
+    moved = [a for a in R_ALL if any(last_change(r, a) != "-" for r in runs)]
+    lines.append("last change per run (ms after the payload; "
+                 + ", ".join(r["label"] for r in runs) + "):")
+    for a in moved:
+        lines.append(f"    {a:04x}: " + " / ".join(last_change(r, a) for r in runs))
+    if not moved:
+        lines.append("    no register changed during any window")
+    lines.append("first reply per run (ms): " + " / ".join(
+        f"{r['samples'][0][1] / 1000:.2f}" if r["samples"] else "-" for r in runs))
+    return lines
+
+
 STEPS = [
     ("a", "control: 0x13 RGB24 RLE rect as Windows sends it", "low", step_a),
     ("b", "full frame, payload in 512 KiB transfers", "low", step_b),
@@ -677,6 +950,10 @@ STEPS = [
     ("n", "0x11 YUV 12-bit source (format 0x96)", "medium", step_n),
     ("p", "8-bit palette: 0x0a table + 0x11 at 1 byte per pixel; the table is set back to "
      "zeros afterwards", "medium", step_p),
+    ("q", "0x0a table as hardware gamma: identity, red only, gamma 2.2; zeros afterwards",
+     "medium", step_q),
+    ("r", "scaler completion signal: register reads right after a full-screen 2x 0x13",
+     "low-medium", step_r),
 ]
 
 
@@ -746,7 +1023,31 @@ def print_cmd(cmd, full, timeout_ms):
         else:
             print(f"         head {p[:32].hex()}")
             print(f"         tail {p[-16:].hex()}")
+    if cmd.watch:
+        w = cmd.watch
+        print(f"  EP3  right after the last payload transfer: register reads (05 lo hi, "
+              f"timeout {timeout_ms} ms each) in a tight loop for {w.window_ms} ms, at least "
+              f"{R_AFTER_FIRST_MS} ms after the first reply, at most {w.max_reads} reads; "
+              f"each pass {' '.join(f'{a:04x}' for a in R_HOT)} + the next "
+              f"{R_COLD_PER_PASS} of the other {len(R_COLD)}")
     print(f"  EP3  health check: {hexs(READ_FC01)} -> expect {FC01_OK:02x} within {timeout_ms} ms")
+    if cmd.watch:
+        print(f"  EP3  then one read of each of the {len(R_ALL)} registers (settled values)")
+
+
+def print_sweep(sw, timeout_ms):
+    print(f"  EP3  {sw.name}")
+    print(f"       {sw.rounds} rounds of {len(sw.regs)} register reads (05 lo hi, timeout "
+          f"{timeout_ms} ms each), no EP2 command:")
+    for k in range(0, len(sw.regs), 16):
+        print("         " + " ".join(f"{a:04x}" for a in sw.regs[k:k + 16]))
+
+
+def print_item(c, full, timeout_ms):
+    if isinstance(c, Sweep):
+        print_sweep(c, timeout_ms)
+    else:
+        print_cmd(c, full, timeout_ms)
 
 
 def ask(prompt, choices="yn"):
@@ -824,6 +1125,9 @@ class Probe:
         self.full_hex, self.timeout_ms = full_hex, timeout_ms
         self.in_recovery = False
         self.last_pad = None            # bytes of padding the last recovery needed
+        self.baseline = {}              # step r: addr -> values read at rest
+        self.base_lat = []              # step r: read times at rest (us)
+        self.watch_runs = []            # step r: one dict per watched command
 
     # --- low level
     def _out(self, ep, data, timeout):
@@ -875,15 +1179,138 @@ class Probe:
         self.log("CMD", f"{cmd.name}: {describe(cmd.header)}")
         with HoldCtrlC():
             try:
+                t_start = time.perf_counter_ns()
                 for i, tr in enumerate(cmd.transfers()):
+                    if i == 1:
+                        t_start = time.perf_counter_ns()    # payload start
                     self._out(cmd.ep, tr, 2000 if i == 0 else 30000)
+                t_end = time.perf_counter_ns()
             except usb.core.USBError as e:
                 if not is_timeout(e):
                     raise Fatal(f"USB error while sending {cmd.name}: {e}")
                 self.log(f"EP{cmd.ep} TIMEOUT", cmd.name)
                 print(f"!! EP{cmd.ep} write timed out during '{cmd.name}'")
                 return self.stuck(cmd.name, read_queued=False)
-            return self.health(cmd.name)
+            if cmd.watch and not self._watch(cmd, t_start, t_end):
+                return False
+            ok = self.health(cmd.name)
+            if ok and cmd.watch:
+                ok = self._settled(cmd)
+            return ok
+
+    # --- step r: register reads
+    def _watch(self, cmd, t_start, t_end):
+        """Tight loop of register reads right after the payload; no file logging
+        inside the loop (the log flushes every line), the samples go to the log
+        afterwards. Each sample: (request us, reply us, addr, value, reply bytes),
+        times relative to the end of the last payload transfer."""
+        w = cmd.watch
+        sched = watch_schedule()
+        samples = []
+        deadline = t_end + w.window_ms * 1_000_000
+        run = {"label": w.label, "samples": samples, "paylen": len(cmd.payload),
+               "xfer_us": (t_end - t_start) // 1000}
+        self.watch_runs.append(run)
+        try:
+            while len(samples) < w.max_reads and time.perf_counter_ns() < deadline:
+                a = next(sched)
+                t0 = time.perf_counter_ns()
+                r = self._reg_fast(a, "register watch")
+                if r is None:
+                    self.log("WATCH TIMEOUT", f"{w.label}: no reply to {a:04x} within "
+                                              f"{self.timeout_ms} ms")
+                    print(f"!! no reply to the {a:04x} read during '{w.label}': the parser "
+                          "waits for more bytes")
+                    return self.stuck(cmd.name, read_queued=True)
+                t1 = time.perf_counter_ns()
+                samples.append(((t0 - t_end) // 1000, (t1 - t_end) // 1000, a,
+                                r[0] if r else None, len(r)))
+                if len(samples) == 1:
+                    deadline = max(deadline, t1 + R_AFTER_FIRST_MS * 1_000_000)
+        finally:
+            self.log("WATCH", f"{w.label}: payload {len(cmd.payload)} B in "
+                              f"{run['xfer_us']} us, {len(samples)} reads "
+                              "(request us, reply us, addr=value, reply bytes)")
+            for k in range(0, len(samples), 16):
+                self.log("WATCH", " ".join(
+                    f"{t0},{t1},{a:04x}={fmt_v(v)}" + ("" if n == 1 else f",{n}B")
+                    for t0, t1, a, v, n in samples[k:k + 16]))
+        last = samples[-1][1] / 1000 if samples else 0
+        print(f"       watch: {len(samples)} reads up to {last:.1f} ms after the payload, "
+              f"first reply after {(samples[0][1] / 1000 if samples else 0):.2f} ms")
+        return True
+
+    def _read_regs(self, regs, what):
+        """One read of each register -> {addr: value}, or None if the parser was
+        stuck (then it has been recovered)."""
+        got = {}
+        for a in regs:
+            t0 = time.perf_counter_ns()
+            r = self._reg_fast(a, what)
+            if r is None:
+                self.log("SWEEP TIMEOUT", f"{what}: no reply to {a:04x}")
+                print(f"!! no reply to the {a:04x} read ({what})")
+                self.stuck(what, read_queued=True)
+                return None
+            if what == "baseline":
+                self.base_lat.append((time.perf_counter_ns() - t0) // 1000)
+            if len(r) != 1:
+                self.log("SWEEP", f"{what}: {a:04x} answered {r.hex()}")
+            got[a] = r[0] if r else None
+        return got
+
+    def _reg_fast(self, a, what):
+        """EP3 05 lo hi and its reply, without logging (timing); None on timeout."""
+        try:
+            self.t.out(3, bytes((0x05, a & 0xFF, a >> 8)), 2000)
+        except usb.core.USBError as e:
+            raise Fatal(f"EP3 write failed ({what}): {e}")
+        try:
+            return bytes(self.t.dev.read(0x81, 512, self.timeout_ms))
+        except usb.core.USBError as e:
+            if not is_timeout(e):
+                raise Fatal(f"EP81 read failed ({what}): {e}")
+            return None
+
+    def _settled(self, cmd):
+        """After the health check: one read of every register (settled values)."""
+        got = self._read_regs(R_ALL, f"settled after {cmd.watch.label}")
+        if got is None:
+            return False
+        self.watch_runs[-1]["settled"] = got
+        self.log("SETTLED", f"{cmd.watch.label}: "
+                            + " ".join(f"{a:04x}={fmt_v(v)}" for a, v in got.items()))
+        return True
+
+    def sweep(self, sw):
+        """Step r1: read the registers at rest, several rounds; print them."""
+        if self.dry:
+            print_sweep(sw, self.timeout_ms)
+            return True
+        self.log("SWEEP", sw.name)
+        with HoldCtrlC():
+            self.drain()
+            for k in range(sw.rounds):
+                got = self._read_regs(sw.regs, "baseline")
+                if got is None:
+                    return False
+                for a, v in got.items():
+                    self.baseline.setdefault(a, []).append(v)
+                self.log("BASELINE", f"round {k + 1}: "
+                                     + " ".join(f"{a:04x}={fmt_v(v)}" for a, v in got.items()))
+        items = []
+        for a in sw.regs:
+            vals = self.baseline[a]
+            items.append(f"{a:04x}={fmt_v(vals[0])}" if len(set(vals)) == 1
+                         else f"{a:04x}={'/'.join(fmt_v(v) for v in vals)}(!)")
+        print(f"       at rest ({sw.rounds} rounds, read time median "
+              f"{median(self.base_lat) / 1000:.2f} ms; (!) = varies at rest):")
+        for k in range(0, len(items), 8):
+            print("         " + "  ".join(items[k:k + 8]))
+        return True
+
+    def do(self, c):
+        return self.sweep(c) if isinstance(c, Sweep) else self.send(c)
 
     def health(self, after):
         """EP3 05 01 fc, expect 07 within the short timeout."""
@@ -1020,29 +1447,44 @@ def run_step(p, key, title, risk, fn, opt, results):
         p.log("STEP", f"{key} stub")
         results.append((key, "not implemented"))
         return
-    # a step returns (commands, expect) or (commands, expect, restore commands);
-    # the restore commands are sent after the step however it ends
+    # a step returns (commands, expect), (commands, expect, restore commands) or
+    # (commands, expect, restore commands, checks); the restore commands are sent
+    # after the step however it ends, unless a check with restores=True sent them
     cmds, expect, *rest = fn(opt)
     after = rest[0] if rest else []
+    checks = rest[1] if len(rest) > 1 else []
+    p.baseline, p.base_lat, p.watch_runs = {}, [], []
     print("sends:")
     if p.dry:
         for c in cmds:
-            p.send(c)
+            p.do(c)
         print("  then:")
         p.send(cmd_flip(FB_B))
         print(f"  expect on the panel: {expect}")
+        for ch in checks:
+            print(f"  --- {ch.sid}, while B is shown:")
+            for c in ch.cmds:
+                p.send(c)
+            print(f"  expect on the panel: {ch.expect}")
         p.send(cmd_flip(FB_A))
         print("  expect: plain dark blue again")
         if after:
-            print("  then, however the step ended:")
+            print(f"  then, if the step ended before {checks[-1].sid}:"
+                  if checks and checks[-1].restores else "  then, however the step ended:")
             for c in after:
                 p.send(c)
         results.append((key, "dry run"))
         return
     for c in cmds:
-        print_cmd(c, False, p.timeout_ms)
-    print(f"  then flip to B ({hexs(flip_bytes(FB_B))}), look, flip back to A, "
-          "fc01 check after each flip")
+        print_item(c, False, p.timeout_ms)
+    print(f"  then flip to B ({hexs(flip_bytes(FB_B))}), look"
+          + (", then the checks below while B is shown" if checks else "")
+          + ", flip back to A, fc01 check after each command")
+    for ch in checks:
+        print(f"  --- {ch.sid}:")
+        for c in ch.cmds:
+            print_cmd(c, False, p.timeout_ms)
+        print(f"      expect: {ch.expect}")
     if after:
         print("  afterwards, also on failure or quit:")
     for c in after:
@@ -1054,13 +1496,14 @@ def run_step(p, key, title, risk, fn, opt, results):
         return
     p.log("STEP", f"{key} start: {title}")
     restore = bool(after)
+    done = {"restored": False}
     try:
-        run_live(p, key, cmds, expect, results)
+        run_live(p, key, cmds, expect, results, checks, done)
     except Fatal:
         restore = False             # the chip does not answer, nothing to send
         raise
     finally:
-        if restore:
+        if restore and not done["restored"]:
             for c in after:
                 print(f"-> {c.name}")
                 if not p.send(c):
@@ -1068,23 +1511,56 @@ def run_step(p, key, title, risk, fn, opt, results):
                     p.log("RESTORE", f"{key}: parser stuck after '{c.name}', recovered")
 
 
-def run_live(p, key, cmds, expect, results):
-    for c in cmds + [cmd_flip(FB_B)]:
-        print(f"-> {c.name}")
-        if not p.send(c):
-            res = f"parser stuck after '{c.name}', recovered with {p.last_pad} B padding"
-            p.log("RESULT", f"{key}: {res}")
-            results.append((key, res))
-            if ask("continue with the next step?") == "n":
-                raise Quit()
-            return
+def ask_pass(expect):
     if expect.startswith("PASS"):
-        seen = ask(f"{expect}.\nPASS (y) or FAIL (n)?")
-    else:
-        seen = ask(f"do you see: {expect}?")
+        return ask(f"{expect}.\nPASS (y) or FAIL (n)?")
+    return ask(f"do you see: {expect}?")
+
+
+def stuck_result(p, key, c, results):
+    """A command needed the recovery (which re-ran the init and shows A again);
+    the step's restore commands are still sent afterwards."""
+    res = f"parser stuck after '{c.name}', recovered with {p.last_pad} B padding"
+    p.log("RESULT", f"{key}: {res}")
+    results.append((key, res))
+    if ask("continue with the next step?") == "n":
+        raise Quit()
+
+
+def run_live(p, key, cmds, expect, results, checks=(), done=None):
+    done = {} if done is None else done
+    for c in cmds:
+        print(f"-> {c.name}")
+        if not p.do(c):
+            return stuck_result(p, key, c, results)
+    if p.watch_runs:
+        lines = watch_summary(p.watch_runs, p.baseline, median(p.base_lat))
+        print("register watch (times in ms after the end of the payload transfer):")
+        for ln in lines:
+            print("  " + ln)
+            p.log("WATCH SUMMARY", ln)
+    c = cmd_flip(FB_B)
+    print(f"-> {c.name}")
+    if not p.send(c):
+        return stuck_result(p, key, c, results)
+    seen = ask_pass(expect)
     note = ask_note()
     p.log("ANSWER", f"{key} seen={seen} note={note!r}")
     res = f"{'as expected' if seen == 'y' else 'NOT as expected'}{': ' + note if note else ''}"
+    for ch in checks:
+        for c in ch.cmds:
+            print(f"-> {c.name}")
+            if not p.send(c):
+                results.append((key, res))
+                return stuck_result(p, ch.sid, c, results)
+        if ch.restores:
+            done["restored"] = True
+        seen = ask_pass(ch.expect)
+        note = ask_note()
+        p.log("ANSWER", f"{ch.sid} seen={seen} note={note!r}")
+        r = f"{'PASS' if seen == 'y' else 'FAIL'}{': ' + note if note else ''}"
+        results.append((ch.sid, r))
+        p.log("RESULT", f"{ch.sid}: {r}")
     print("-> flip back to A")
     if p.send(cmd_flip(FB_A)):
         back = ask("plain dark blue screen again?")
@@ -1171,16 +1647,73 @@ def self_test():
     assert lut[1 + 3 * 0xC0:4 + 3 * 0xC0] == b"\xff\0\0" and sum(lut[1:]) == 255 * 8
     assert lut_bytes({}) == b"\x0a" + bytes(768)                     # init.bin record 13
     assert set(to_index(quads(BOX_W, BOX_H), PALETTE)) == set(PALETTE)
-    # every step builds, headers parse, 0x11 length fields match the payload
+    # step q tables: 769 B, entry i = B,G,R; red only in byte 2 (the B,G,R order
+    # step p's lut_bytes uses: RED = 00 00 ff)
+    for t in (LUT_IDENT, LUT_RED, LUT_GAMMA, LUT_ZERO):
+        assert len(t) == 769 and t[0] == 0x0a
+    assert all(LUT_IDENT[1 + 3 * i:4 + 3 * i] == bytes((i, i, i)) for i in range(256))
+    assert all(LUT_RED[1 + 3 * i:4 + 3 * i] == bytes((0, 0, i)) for i in range(256))
+    assert LUT_RED == lut_bytes({i: (i, 0, 0) for i in range(256)})
+    assert lut_bytes(PALETTE)[1 + 3 * 0x40:4 + 3 * 0x40] == LUT_RED[1 + 3 * 0xff:4 + 3 * 0xff]
+    assert GAMMA22[0] == 0 and GAMMA22[255] == 255 and GAMMA22[128] == 56
+    assert all(a <= b for a, b in zip(GAMMA22, GAMMA22[1:]))
+    assert all(LUT_GAMMA[1 + 3 * i:4 + 3 * i] == bytes([GAMMA22[i]] * 3) for i in range(256))
+    assert LUT_ZERO == b"\x0a" + bytes(768)
+    assert describe(LUT_IDENT).endswith("byte 0 (B) identity, byte 1 (G) identity, "
+                                        "byte 2 (R) identity")
+    assert "byte 0 (B) zeros, byte 1 (G) zeros, byte 2 (R) identity" in describe(LUT_RED)
+    assert describe(LUT_ZERO).endswith("768 zeros, as the init sends")
+    r = ramp(W, 2, (1, 0, 0))
+    assert len(r) == W * 2 * 3 and r[:3] == b"\0\0\0" and r[3 * (W - 1):3 * W] == b"\xff\0\0"
+    # step r: register set, read order, the 2x header, the report
+    assert len(R_ALL) == len(set(R_ALL)) == 58 and 0xfc01 in R_ALL and 0xfc59 in R_HOT
+    sched = watch_schedule()
+    first = [next(sched) for _ in range((len(R_HOT) + R_COLD_PER_PASS)
+                                         * -(-len(R_COLD) // R_COLD_PER_PASS))]
+    assert first[:len(R_HOT)] == R_HOT and set(first) == set(R_ALL)
     class O:
         scratch, stretch_src, n_layout = SCRATCH, "target", "y411"
+        r_window_ms, r_max_reads, r_plain_src = 50, 400, "target"
+    rc = step_r(O)[0]
+    assert isinstance(rc[0], Sweep) and [c.watch.label for c in rc[1:]] == [
+        "2x #1", "1:1", "2x #2", "2x #3"]
+    h2 = rc[1].header
+    assert h2 == hdr13(HALF_SRC, FB_B, 512, 300, W, H, 0, 512 * 300 * 3, len(rc[1].payload))
+    assert h2[18:22] == bytes.fromhex("00200020") and RLD_BUF + len(rc[1].payload) <= HALF_SRC
+    assert rc[2].header[2:10] == struct.pack("<II", FB_B, FB_B) and rc[2].header[18:22] == \
+        bytes.fromhex("00400040")
+    assert t2rle.decode(rc[2].payload, W, H) == rot180(upscale2(quads(512, 300), 512, 300))
+    O.r_plain_src = "scratch"
+    assert step_r(O)[0][2].header[2:6] == struct.pack("<I", HALF_SRC)
+    O.r_plain_src = "target"
+    smp = [(10, 300, 0xfe70, 4, 1), (300, 600, 0xfc59, 0x90, 1), (600, 9800, 0xfe70, 4, 1),
+           (9800, 10100, 0xfe70, 0, 1), (10100, 10400, 0xfc01, 7, 1)]
+    run = {"label": "2x #1", "samples": smp, "paylen": 3000, "xfer_us": 400,
+           "settled": {0xfe70: 0, 0xfc59: 0x90}}
+    base = {0xfe70: [0, 0, 0], 0xfc59: [0, 0, 0], 0xfc01: [7, 7, 7]}
+    rep = "\n".join(watch_summary([run], base, 250))
+    assert "fe70  04 0.30-9.80 ms | 00 10.10-10.10 ms   rest 00   bits 04" in rep, rep
+    assert "fc59  90 0.60-0.60 ms   rest 00   bits 90" in rep and "fc59=90" in rep
+    assert "fe70: 10.10" in rep and "unchanged and as at rest: 1 registers" in rep
+    ret = step_q(O)
+    assert [ch.sid for ch in ret[3]] == ["q1", "q2", "q3", "q4"] and ret[3][-1].restores
+    assert [c.header for ch in ret[3] for c in ch.cmds] == [LUT_IDENT, LUT_RED, LUT_GAMMA,
+                                                             LUT_ZERO]
+    assert ret[2][0].header == LUT_ZERO and all(c.ep == 3 for ch in ret[3] for c in ch.cmds)
+    # every step builds, headers parse, 0x11 length fields match the payload
     sizes = {"l": BOX_W * BOX_H * 4, "m": BOX_W * BOX_H * 2, "n": BOX_W * BOX_H * 3 // 2,
              "p": BOX_W * BOX_H}
     fmts = {"l": 0x0e, "m": 0x8a, "n": 0x96, "p": 0x00}
     for key, _, _, fn in STEPS:
         if fn:
             ret = fn(O)
-            for c in ret[0] + (ret[2] if len(ret) > 2 else []):
+            items = ret[0] + (ret[2] if len(ret) > 2 else [])
+            items += [c for ch in (ret[3] if len(ret) > 3 else []) for c in ch.cmds]
+            for c in items:
+                if isinstance(c, Sweep):
+                    continue
+                if c.header[0] == 0x13:
+                    assert int.from_bytes(c.header[30:33], "little") == len(c.payload)
                 assert describe(c.header).startswith(f"0x{c.header[0]:02x}")
                 if c.header[0] == 0x11:
                     assert int.from_bytes(c.header[18:21], "little") == len(c.payload)
@@ -1202,7 +1735,7 @@ def self_test():
 def main():
     ap = argparse.ArgumentParser(description="Interactive probe for unverified T2 frame "
                                  "commands; read the docstring first.")
-    ap.add_argument("--steps", default="all", help="e.g. a,c-e (default all: a-p, no o)")
+    ap.add_argument("--steps", default="all", help="e.g. a,c-e (default all: a-r, no o)")
     ap.add_argument("--dry-run", action="store_true", help="print every packet, no USB access")
     ap.add_argument("--full-hex", action="store_true", help="dry run: print whole payloads")
     ap.add_argument("--self-test", action="store_true", help="check the packet builders and exit")
@@ -1213,6 +1746,15 @@ def main():
     ap.add_argument("--stretch-src", choices=("target", "scratch"), default="target",
                     help="0x13 source address for steps g/h: = target like the legacy "
                     "driver (default), or the scratch address (try after f worked)")
+    ap.add_argument("--r-window-ms", type=int, default=50,
+                    help="step r: watch window after each payload, ms (default 50; at least "
+                    f"{R_AFTER_FIRST_MS} ms after the first reply)")
+    ap.add_argument("--r-max-reads", type=int, default=400,
+                    help="step r: at most this many register reads per watch (default 400)")
+    ap.add_argument("--r-plain-src", choices=("target", "scratch"), default="target",
+                    help="step r's 1:1 comparison run: decode in place like every exact "
+                    f"update (default), or from {HALF_SRC:#x} like the 2x runs (needs "
+                    "1.8 MB of VRAM there, up to 0x722000, not used by anything so far)")
     ap.add_argument("--n-layout", choices=("y411", "i420", "nv12"), default="y411",
                     help="payload of step n (format 0x96): y411 = per row, per 4 px "
                     "Y0 U V Y1 Y2 Y3 as the legacy driver builds it (default); i420/nv12 = "
@@ -1254,7 +1796,8 @@ def main():
     log = Log(path)
     log("START", f"steps {''.join(keys)} intf {intf} pid {pid} timeout {opt.timeout_ms} ms "
                  f"scratch {opt.scratch:#x} stretch-src {opt.stretch_src} "
-                 f"n-layout {opt.n_layout}")
+                 f"n-layout {opt.n_layout} r-window {opt.r_window_ms} ms "
+                 f"r-max-reads {opt.r_max_reads} r-plain-src {opt.r_plain_src}")
     print(f"log: {path}")
 
     results = []
