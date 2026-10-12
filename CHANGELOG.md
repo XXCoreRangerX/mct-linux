@@ -4,7 +4,7 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
-## Unreleased
+## 0.5.2 (2026-10-12)
 
 - Both backends list the modes they offer in sysfs (`modes`); the T2 shows
   its pixel format (`pixel_format`: RGB24, sent as planar RLE). mct_t6
