@@ -33,7 +33,7 @@ of the vendor drivers for interoperability, and testing on real hardware.
 | **Display** | | |
 | Picture | ✅ any HDMI monitor | ✅ built-in 1024x600 panel |
 | Modes | ✅ from the monitor's EDID, up to 3440x1440@60 and 3840x2160@30 | ✅ 1024x600 (fixed panel) |
-| Refresh rates | ✅ up to 144 Hz at 1080p; higher at lower resolutions where the monitor allows | ✅ 60 Hz (fixed panel) |
+| Refresh rates | ✅ up to 144 Hz at 1080p, 240 Hz at 720p | ✅ 60 Hz (fixed panel) |
 | Pixel formats | ✅ RGB24, RGB32, YUV 4:4:4, NV12; automatic or fixed | ✅ RGB24, sent run-length encoded |
 | Picture quality | ✅ lossless at rest; NV12 during large motion (automatic) | ✅ lossless by default; optional lossy mode during heavy motion |
 | Tear-free updates, only changed areas sent | ✅ | ✅ |
