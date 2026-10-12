@@ -58,7 +58,7 @@ MODULE_PARM_DESC(all_modes, "Default for new devices: also offer modes larger th
 #define DRIVER_NAME	"mct_t6"
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
-#define DRIVER_MINOR	27
+#define DRIVER_MINOR	28
 #define DRIVER_PATCH	0
 
 #define T6_EP_OUT	0x02

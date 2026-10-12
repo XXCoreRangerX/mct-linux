@@ -176,6 +176,10 @@ pub const T6_A_FILES: &[(&str, &str)] = &[
     ("model", "T6 USB Station"),
     ("connector", "card2-HDMI-A-3"),
     ("mode", "3440x1440@60"),
+    (
+        "modes",
+        "3440x1440@59.97 312000 preferred\n2560x1440@59.95 241500\n1920x1080@60.00 148500",
+    ),
     ("pixel_format", "RGB24"),
     ("feature_level", "6"),
     ("vram_mb", "256"),

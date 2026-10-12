@@ -320,6 +320,7 @@ fn name<'a>(d: &'a Display, info: Option<&'a Info>) -> &'a str {
 /// Settings and counters, for "info -v" after the identity sections.
 const STATE_KEYS: &[(&str, &str)] = &[
     ("mode", "Mode"),
+    ("modes", "Modes offered"),
     ("pixel_format", "Pixel format"),
     ("format", "Format setting"),
     ("all_modes", "All modes"),

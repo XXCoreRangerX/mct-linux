@@ -623,12 +623,40 @@ static ssize_t mode_show(struct device *dev, struct device_attribute *attr, char
 }
 static DEVICE_ATTR_RO(mode);
 
+/*
+ * The modes the connector offers, as userspace sees them after the last
+ * probe, one per line: "WxH@Hz" (two decimals), the pixel clock in kHz,
+ * and "preferred" for the preferred mode.
+ */
+static ssize_t modes_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_device *mdev = mct_from_dev(dev);
+	struct drm_display_mode *mode;
+	int len = 0;
+
+	if (!mdev)
+		return -ENODEV;
+	mutex_lock(&mdev->dev.mode_config.mutex);
+	list_for_each_entry(mode, &mdev->conn.modes, head) {
+		u64 total = (u64)mode->htotal * mode->vtotal;
+		u32 centi = total ? div64_u64((u64)mode->clock * 100000, total) : 0;
+
+		len += sysfs_emit_at(buf, len, "%dx%d@%u.%02u %d%s\n", mode->hdisplay,
+				     mode->vdisplay, centi / 100, centi % 100, mode->clock,
+				     mode->type & DRM_MODE_TYPE_PREFERRED ? " preferred" : "");
+	}
+	mutex_unlock(&mdev->dev.mode_config.mutex);
+	return len;
+}
+static DEVICE_ATTR_RO(modes);
+
 static struct attribute *mct_common_attrs[] = {
 	&dev_attr_chip.attr,
 	&dev_attr_model.attr,
 	&dev_attr_driver_version.attr,
 	&dev_attr_connector.attr,
 	&dev_attr_mode.attr,
+	&dev_attr_modes.attr,
 };
 
 /* the common files and the chip's, as one group "mct" */

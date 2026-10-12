@@ -37,10 +37,11 @@ e.g. `2-2:1.0`. One value per file, newline terminated.
 | `driver_version` | all | ro | DRM driver and version, e.g. `mct_t6 0.26.0` (since mct_t6 0.26.0) |
 | `connector` | all | ro | DRM connector name, e.g. `card2-HDMI-A-3` (the compositor calls it `HDMI-A-3`) |
 | `mode` | all | ro | current mode `WxH@Hz`, or `off` |
+| `modes` | all | ro | the modes offered, one `WxH@Hz kHz [preferred]` per line (mct_t6 0.28.0, mct_t2 0.3.22) |
 | `updates` | all | ro | frames sent since probe |
 | `bytes` | all | ro | bytes sent since probe |
 | `errors` | all | ro | transfer errors since probe |
-| `pixel_format` | t6 | ro | format in use: `NV12`, `YUV444`, `RGB24`, `RGB32`, or `-` |
+| `pixel_format` | t6, t2 | ro | format in use: `NV12`, `YUV444`, `RGB24`, `RGB32`, or `-` |
 | `feature_level` | t6 | ro | number, `-1` if unknown |
 | `vram_mb` | t6 | ro | number |
 | `usb_speed` | t6 | ro | `usb2` or `usb3` |

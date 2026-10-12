@@ -62,7 +62,7 @@ MODULE_PARM_DESC(lossy, "Default for new devices: maximum lossy tolerance (1-8) 
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	21
+#define DRIVER_PATCH	22
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -1233,12 +1233,29 @@ static ssize_t lossy_store(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RW(lossy);
 
+/* the panel always gets RGB24, sent as planar RLE; "-" while off */
+static ssize_t pixel_format_show(struct device *dev, struct device_attribute *attr,
+				 char *buf)
+{
+	struct mct_t2 *t2 = t2_from_dev(dev);
+	int w;
+
+	if (!t2)
+		return -ENODEV;
+	mutex_lock(&t2->base.lock);
+	w = t2->base.width;
+	mutex_unlock(&t2->base.lock);
+	return sysfs_emit(buf, "%s\n", w ? "RGB24" : "-");
+}
+static DEVICE_ATTR_RO(pixel_format);
+
 static struct attribute *t2_attrs[] = {
 	&dev_attr_updates.attr,
 	&dev_attr_bytes.attr,
 	&dev_attr_errors.attr,
 	&dev_attr_backlight.attr,
 	&dev_attr_lossy.attr,
+	&dev_attr_pixel_format.attr,
 	NULL
 };
 

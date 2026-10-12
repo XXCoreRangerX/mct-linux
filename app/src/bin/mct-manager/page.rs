@@ -7,7 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use mct::device::{FORMATS, LOSSY_MAX, PERMISSION_HINT};
+use mct::device::{Mode, FORMATS, LOSSY_MAX, PERMISSION_HINT};
 use mct::ident::Section;
 use mct::{switch, text, Chip, Rates, Route, Snapshot};
 use relm4::adw::prelude::*;
@@ -44,6 +44,9 @@ pub struct Page {
     display_group: adw::PreferencesGroup,
     mode: adw::ActionRow,
     pixel_format: adw::ActionRow,
+    /// The modes the connector offers, one row each.
+    modes: adw::ExpanderRow,
+    mode_rows: RefCell<(Vec<Mode>, Vec<adw::ActionRow>)>,
     settings: adw::PreferencesGroup,
     format: adw::ComboRow,
     all_modes: adw::SwitchRow,
@@ -135,6 +138,8 @@ impl Page {
         let mode = property_row("Mode");
         let pixel_format = property_row("Pixel format");
         let display_group = group("Display", &[&mode, &pixel_format]);
+        let modes = adw::ExpanderRow::builder().title("Modes").build();
+        display_group.add(&modes);
 
         let format = adw::ComboRow::builder()
             .title("Format")
@@ -204,6 +209,8 @@ impl Page {
             display_group,
             mode,
             pixel_format,
+            modes,
+            mode_rows: RefCell::new((Vec::new(), Vec::new())),
             settings,
             format,
             all_modes,
@@ -299,6 +306,36 @@ impl Page {
         }
     }
 
+    /// The mode list; rows are rebuilt only when the list changes, so the
+    /// expander stays open.
+    fn show_modes(&self, modes: &[Mode]) {
+        self.modes.set_visible(!modes.is_empty());
+        let mut shown = self.mode_rows.borrow_mut();
+        if shown.0 == modes {
+            return;
+        }
+        for r in shown.1.drain(..) {
+            self.modes.remove(&r);
+        }
+        let preferred = modes.iter().find(|m| m.preferred).map(|m| m.name.as_str());
+        let mut subtitle = format!("{} offered", modes.len());
+        if let Some(p) = preferred {
+            subtitle.push_str(&format!(", preferred {p}"));
+        }
+        self.modes.set_subtitle(&subtitle);
+        for m in modes {
+            let row = property_row(&m.name);
+            let mut detail = format!("{:.2} MHz pixel clock", m.clock_khz as f64 / 1000.0);
+            if m.preferred {
+                detail.push_str(", the monitor's preferred mode");
+            }
+            row.set_subtitle(&detail);
+            self.modes.add_row(&row);
+            shown.1.push(row);
+        }
+        shown.0 = modes.to_vec();
+    }
+
     pub fn show(&self, s: &State) {
         let info = s.snap.info.as_ref();
 
@@ -326,8 +363,13 @@ impl Page {
         );
         set(
             &self.pixel_format,
-            info.pixel_format.as_deref().map(text::pixel_format),
+            info.pixel_format.as_deref().map(|p| match (info.chip, p) {
+                // the T2 always sends RGB24, run-length encoded per colour
+                (Chip::T2, "RGB24") => "RGB24, RLE compressed".to_string(),
+                _ => text::pixel_format(p),
+            }),
         );
+        self.show_modes(&info.modes);
 
         let (ups, mbs) = match s.rates {
             Some(r) => (

@@ -441,3 +441,21 @@ fn reapplier() {
     assert_eq!(a().device.unwrap().read("format").unwrap().as_deref(), Some("yuv444"));
     std::env::remove_var("MCT_SETTINGS");
 }
+
+#[test]
+fn modes() {
+    let t = tree();
+    let info = device(t.path(), T6_A).info().unwrap();
+    assert_eq!(info.modes.len(), 3);
+    assert_eq!(info.modes[0].name, "3440x1440@59.97");
+    assert_eq!(info.modes[0].clock_khz, 312000);
+    assert!(info.modes[0].preferred && !info.modes[1].preferred);
+    assert_eq!(
+        info.value("modes").as_deref(),
+        Some("3440x1440@59.97, 2560x1440@59.95, 1920x1080@60.00")
+    );
+    // the long list stays out of the plain listing
+    assert!(info.entries().iter().all(|(k, _)| *k != "modes"));
+    // older drivers have no modes file
+    assert!(device(t.path(), T6_B).info().unwrap().modes.is_empty());
+}

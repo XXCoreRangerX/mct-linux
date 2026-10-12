@@ -14,6 +14,9 @@ Description:
 				"mct_t6 0.26.0"
 		connector	DRM connector name, e.g. "card2-HDMI-A-3"
 		mode		current mode "WxH@Hz", or "off"
+		modes		the modes the connector offers, one per line:
+				"WxH@Hz" (two decimals), the pixel clock in
+				kHz, and "preferred" for the preferred mode
 		updates		frames sent since probe
 		bytes		bytes sent since probe
 		errors		transfer errors since probe
@@ -44,6 +47,8 @@ Description:
 		recoveries	device restarts after transfer errors
 
 		Read-only, Trigger II:
+
+		pixel_format	"RGB24" (sent as planar RLE), or "-" while off
 
 		backlight	name of the backlight device in
 				/sys/class/backlight/, or "-"

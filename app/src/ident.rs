@@ -550,17 +550,20 @@ fn details(display: &Display, info: Option<&Info>, dir: &Path, out: &mut Vec<Sec
     let class = |c: Option<String>, sub: Option<String>, proto: Option<String>| {
         let c = c?;
         let name = match c.as_str() {
-            "00" => " (per interface)",
-            "09" => " (hub)",
-            "ff" => " (vendor specific)",
-            "03" => " (HID)",
-            "01" => " (audio)",
-            _ => "",
+            "00" => "Defined per interface",
+            "01" => "Audio",
+            "03" => "HID",
+            "08" => "Mass storage",
+            "09" => "Hub",
+            "0e" => "Video",
+            "ef" => "Miscellaneous",
+            "ff" => "Vendor specific",
+            _ => "Class",
         };
         Some(format!(
-            "{c}{name}, subclass {}, protocol {}",
-            sub.unwrap_or_default(),
-            proto.unwrap_or_default()
+            "{name} (0x{c}), subclass 0x{}, protocol 0x{}",
+            sub.unwrap_or_else(|| "?".into()),
+            proto.unwrap_or_else(|| "?".into())
         ))
     };
     s.add(

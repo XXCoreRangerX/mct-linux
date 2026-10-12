@@ -27,6 +27,7 @@ pub const KEYS: &[&str] = &[
     "model",
     "connector",
     "mode",
+    "modes",
     "pixel_format",
     "feature_level",
     "vram_mb",
@@ -201,6 +202,9 @@ pub struct Info {
     pub connector: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// The modes the connector offers (driver 0.5.2 and later).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub modes: Vec<Mode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pixel_format: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -260,6 +264,9 @@ impl Info {
             "model" => s(&self.model),
             "connector" => s(&self.connector),
             "mode" => s(&self.mode),
+            "modes" => (!self.modes.is_empty()).then(|| {
+                self.modes.iter().map(|m| m.name.as_str()).collect::<Vec<_>>().join(", ")
+            }),
             "pixel_format" => s(&self.pixel_format),
             "feature_level" => s(&self.feature_level),
             "vram_mb" => s(&self.vram_mb),
@@ -284,9 +291,11 @@ impl Info {
         }
     }
 
-    /// All known keys with their values, in `KEYS` order.
+    /// All known keys with their values, in `KEYS` order; the mode list
+    /// only with `get modes` and `info -v`, it is long.
     pub fn entries(&self) -> Vec<(&'static str, String)> {
         KEYS.iter()
+            .filter(|k| **k != "modes")
             .filter_map(|k| self.value(k).map(|v| (*k, v)))
             .collect()
     }
@@ -309,6 +318,31 @@ impl Info {
             (None, None) => "-".into(),
         }
     }
+}
+
+/// One mode the connector offers: `1920x1080@119.88`, its pixel clock, and
+/// whether it is the monitor's preferred one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Mode {
+    pub name: String,
+    pub clock_khz: u32,
+    pub preferred: bool,
+}
+
+/// Parses the driver's `modes` file: one `WxH@Hz kHz [preferred]` per line.
+pub fn parse_modes(text: &str) -> Vec<Mode> {
+    text.lines()
+        .filter_map(|l| {
+            let mut it = l.split_whitespace();
+            let name = it.next()?.to_string();
+            let clock_khz = it.next()?.parse().ok()?;
+            Some(Mode {
+                name,
+                clock_khz,
+                preferred: it.next() == Some("preferred"),
+            })
+        })
+        .collect()
 }
 
 /// Something about a device the user should know.
@@ -508,6 +542,7 @@ impl Device {
             model: none_if_dash(r("model")?),
             connector: none_if_dash(r("connector")?),
             mode: r("mode")?,
+            modes: r("modes")?.map(|s| parse_modes(&s)).unwrap_or_default(),
             pixel_format: r("pixel_format")?,
             feature_level: parse(r("feature_level")?),
             vram_mb: parse(r("vram_mb")?),

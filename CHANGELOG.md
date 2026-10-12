@@ -4,6 +4,16 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
+## Unreleased
+
+- Both backends list the modes they offer in sysfs (`modes`); the T2 shows
+  its pixel format (`pixel_format`: RGB24, sent as planar RLE). mct_t6
+  0.28.0, mct_t2 0.3.22.
+- MCT Display Manager: a "Modes" list in the Display group; the T2's pixel
+  format; the "Technical details" sections stay open (rows update in place
+  instead of being rebuilt every second); USB classes written out
+  ("Vendor specific (0xff)"). mctctl: `get modes`, modes in `info -v`.
+
 ## 0.5.1 (2026-10-11)
 
 - MCT Display Manager and mctctl remember each display's settings
