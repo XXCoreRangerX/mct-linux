@@ -30,6 +30,8 @@ Ideas, roughly by expected payoff:
 3. **Per-channel lossy tolerance.** If lossy stays, let blue (and red) absorb
    more than green, where the eye is most sensitive. Same encoder, a
    tolerance per plane. Combine with the adaptive tolerance branch.
+   EDIT (2026-10-12): done in mct_t2 0.3.23 (green N, red 1.5 N, blue 2 N),
+   measured offline first; see t2-driver.md.
 
 4. **Hardware copy/scroll.** The DLL has transfer/stretch operations that
    aren't understood. A VRAM-to-VRAM copy would turn scrolling into a tiny

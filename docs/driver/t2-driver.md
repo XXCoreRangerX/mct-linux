@@ -125,6 +125,23 @@ stay lossless. A first version that went lossy whenever more than a third of the
 screen changed was lossy for 83% of updates and showed "settling" shadows.
 Artifacts: short horizontal streaks during heavy motion (the RLE is row-wise).
 
+Since 0.3.23 the tolerance is per colour channel: green keeps N, red gets
+1.5 N (rounded up) and blue 2 N, where the eye is less sensitive. Offline on
+six real 1024x600 images (`captures/t2-research/per_channel_tol_result.txt`
+in the lab): at the same payload size, luma PSNR is about 3.4 dB higher than
+one tolerance for all channels; at the same luma error, payloads are 4 to
+18% smaller. Red and blue can drift by up to 2 N, so smooth blue gradients
+may band sooner; watch skies when testing.
+
+## Software gamma (driver 0.3.23)
+
+The T2 offers a 256-entry gamma LUT on the CRTC, like the T6 (night light,
+gammastep, wlsunset). The chip has no gamma tables, so a non-identity LUT
+is applied to the update's snapshot before diffing: the device copies, the
+lossy write-back and the refinement all work on the corrected image, and a
+LUT change re-diffs the whole screen. With the identity LUT nothing extra
+runs. Not yet tested on the tablet.
+
 ## Performance research backlog
 
 Keep proposed work distinct from the measurements above. In priority order:

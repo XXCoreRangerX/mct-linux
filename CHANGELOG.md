@@ -13,6 +13,10 @@ drm_info and in the kernel log at probe).
   format; the "Technical details" sections stay open (rows update in place
   instead of being rebuilt every second); USB classes written out
   ("Vendor specific (0xff)"). mctctl: `get modes`, modes in `info -v`.
+- mct_t2 0.3.23: software gamma (night light) on the tablet; the lossy
+  mode's tolerance is per colour channel (green N, red 1.5 N, blue 2 N),
+  measured offline to give smaller updates at the same visible error.
+- README: one status table for both chips; 720p at 240 Hz tested.
 
 ## 0.5.1 (2026-10-11)
 

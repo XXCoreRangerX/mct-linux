@@ -40,6 +40,7 @@
 #include <linux/unaligned.h>
 #include <linux/vmalloc.h>
 
+#include <drm/drm_color_mgmt.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
@@ -56,13 +57,13 @@
 /* default for devices probed later; each device has its own in sysfs */
 static int lossy;
 module_param(lossy, int, 0644);
-MODULE_PARM_DESC(lossy, "Default for new devices: maximum lossy tolerance (1-8) for updates too big to send losslessly within a frame, refined to lossless once motion stops; 0 = always lossless (default). Per device: /sys/bus/usb/devices/<interface>/mct/lossy.");
+MODULE_PARM_DESC(lossy, "Default for new devices: maximum lossy tolerance (1-8; for green, red gets 1.5x and blue 2x) for updates too big to send losslessly within a frame, refined to lossless once motion stops; 0 = always lossless (default). Per device: /sys/bus/usb/devices/<interface>/mct/lossy.");
 
 #define DRIVER_NAME	"mct_t2"
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	22
+#define DRIVER_PATCH	23
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -120,6 +121,8 @@ struct mct_t2 {
 
 	int refine;			/* lossless updates still owed, under base.lock */
 	int lossy;			/* sysfs lossy: maximum tolerance, 0 = lossless */
+	u8 lut[3][256];			/* software gamma (R, G, B), under base.lock */
+	bool lut_on;			/* lut is not the identity */
 
 	struct {
 		u8 *buf;		/* DMA-able: position packets */
@@ -245,6 +248,11 @@ static int t2_encode(struct mct_t2 *t2, u8 *src, int dx, int dy, int w, int h, i
 {
 	u8 (*ch)[1024] = t2->enc_ch;	/* io_lock held */
 	u8 **pix = t2->enc_pix;
+	/*
+	 * Lossy tolerance per channel (R, G, B): the eye is least sensitive to
+	 * changes in blue and red, so they take more; green keeps tol.
+	 */
+	const int ctol[3] = { (3 * tol + 1) / 2, tol, 2 * tol };
 	int x, y, k = 0, len = 0, c, i;
 
 	for (y = dy; y < dy + h; y++) {
@@ -265,7 +273,7 @@ static int t2_encode(struct mct_t2 *t2, u8 *src, int dx, int dy, int w, int h, i
 			}
 			if (++k == 1024) {
 				for (c = 0; c < 3; c++)
-					len += t2_rle_line(ch[c], 1024, t2->enc + len, tol);
+					len += t2_rle_line(ch[c], 1024, t2->enc + len, ctol[c]);
 				/* lossy: keep src equal to what the device now holds */
 				for (i = 0; tol && i < 1024; i++) {
 					if (!pix[i])
@@ -870,6 +878,46 @@ static void t2_backlight_unregister(struct mct_t2 *t2)
 /* ------------------------------------------------------------------ */
 /* frame updates						      */
 
+/*
+ * Software gamma: the panel shows what the snapshot holds after the lookup,
+ * so the diff against the device copies and the lossy write-back all work
+ * on the corrected image. base.lock held.
+ */
+static void t2_apply_gamma(struct mct_t2 *t2)
+{
+	u8 *p = t2->snap, *end = p + T2_WIDTH * T2_HEIGHT * 4;
+
+	for (; p < end; p += 4) {
+		p[0] = t2->lut[2][p[0]];
+		p[1] = t2->lut[1][p[1]];
+		p[2] = t2->lut[0][p[2]];
+	}
+}
+
+static void t2_gamma(struct mct_device *mdev, const struct drm_color_lut *lut)
+{
+	struct mct_t2 *t2 = to_t2(mdev);
+	bool on = false, kick;
+	int i, c;
+
+	mutex_lock(&mdev->lock);
+	for (i = 0; i < 256; i++) {
+		t2->lut[0][i] = lut ? drm_color_lut_extract(lut[i].red, 8) : i;
+		t2->lut[1][i] = lut ? drm_color_lut_extract(lut[i].green, 8) : i;
+		t2->lut[2][i] = lut ? drm_color_lut_extract(lut[i].blue, 8) : i;
+		for (c = 0; c < 3; c++)
+			on |= t2->lut[c][i] != i;
+	}
+	t2->lut_on = on;
+	/* the whole picture changes: the diff finds it */
+	kick = mdev->width && mdev->shadow_valid;
+	if (kick)
+		mdev->dirty = true;
+	mutex_unlock(&mdev->lock);
+	if (kick)
+		mct_kick(mdev);
+}
+
 static void t2_update(struct mct_device *mdev)
 {
 	struct mct_t2 *t2 = to_t2(mdev);
@@ -892,6 +940,8 @@ static void t2_update(struct mct_device *mdev)
 	}
 	mutex_lock(&t2->io_lock);
 	memcpy(t2->snap, t2->base.shadow, T2_WIDTH * T2_HEIGHT * 4);
+	if (t2->lut_on)
+		t2_apply_gamma(t2);
 	mutex_unlock(&t2->base.lock);
 
 	if (drm_dev_enter(&t2->base.dev, &idx)) {
@@ -1267,6 +1317,7 @@ static const struct mct_funcs t2_funcs = {
 	.enable = t2_enable,
 	.disable = t2_disable,
 	.update = t2_update,
+	.gamma = t2_gamma,
 	.cursor_set = t2_cursor_set,
 	.cursor_hide = t2_cursor_hide_hook,
 	.stats = t2_stats,
@@ -1297,6 +1348,7 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 		.stats_name = "mct_t2_stats",
 		.chip = "t2",
 		.attrs = t2_attrs,
+		.gamma = true,
 	};
 	struct mct_t2 *t2;
 	struct drm_device *dev;

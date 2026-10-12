@@ -62,7 +62,8 @@ Description:
 				the monitor's native resolution. A change sends
 				a hotplug event so userspace probes again.
 		lossy		(Trigger II) 0 to 8: maximum lossy tolerance for
-				updates too big for one frame; 0 = lossless.
+				updates too big for one frame (for green; red
+				gets 1.5 times, blue 2 times); 0 = lossless.
 
 		The module parameters of the same names are the values new
 		devices start with.
