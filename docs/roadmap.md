@@ -42,13 +42,14 @@ Order agreed 2026-10-11:
    auto-adjust/phase command for the RTD2280 scaler, reachable through the pen
    HID side. Wacom's driver has none ([wacom-display-settings.md](research/wacom-display-settings.md));
    next is reading the unknown pen feature reports (read-only, needs an OK).
-5. **T2 hardware features found in the vendor drivers (2026-10-12)**, all
-   untested, tested one at a time with `tools/t2_probe.py` while the user
-   watches (a bad command can hang the chip until a replug):
-   - 512 KiB payload transfers like Windows (low risk);
-   - 2x hardware upscale during heavy motion: a quarter of the data, an
-     alternative to the lossy mode;
-   - RGB565 / YUV 4:2:2 sources (less data per pixel, some quality loss);
+5. **T2 hardware features found in the vendor drivers (2026-10-12)**; all
+   but the blit engine tested OK with `tools/t2_probe.py` the same day.
+   Next: use them in mct_t2:
+   - 512 KiB payload transfers like Windows;
+   - 2x hardware upscale during heavy motion: a quarter of the data, a
+     blur instead of the lossy mode's streaks, refined afterwards;
+   - YUV 4:2:2 RLE (a third less raw data; colour smears at edges) as
+     another motion mode; RGB565 only helps noisy content;
    - the blit engine for scrolling and window moves (highest gain for
      desktop use, highest risk; the older vendor driver itself would not use
      it on this tablet, so firmware support is unknown; tested last, after

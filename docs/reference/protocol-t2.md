@@ -140,7 +140,7 @@ Decoded linearly to `addr`. The cursor upload is the only use (captured):
 `12 00000000 004000 004000 00 01 25`, i.e. 16384 bytes stored uncompressed
 (escape `00`, mode `01`, flags `0x20 | 0x04 | 0x01`).
 
-### Source formats (code, untested on the tablet)
+### Source formats (code; RGB565 and YUV 4:2:2 verified 2026-10-12)
 
 The legacy driver maps the desktop depth to a format byte per command; the
 chip converts while writing, VRAM stays 24-bit:
@@ -157,7 +157,7 @@ chip converts while writing, VRAM stays 24-bit:
 Windows 11 only ever sends 24-bit. cyrozap's T2 notes show a `0x11` with
 format `04` and scale `0x1000` on the wire, which fits this table.
 
-### Scaling (code, untested on the tablet)
+### Scaling (code; 2x upscale verified 2026-10-12)
 
 `scale = source / target` in 2.14 fixed point: `0x4000` = 1.0, `0x2000` = a
 2x upscale, `0x1000` = 4x. With source smaller than target the chip
@@ -383,16 +383,28 @@ The T2 has a 64x64 ARGB cursor overlay, drawn by the chip on top of scanout.
 - To show a cursor hanging off the visible right/bottom edge (negative device
   coordinates), upload a copy shifted by the overhang, with transparent fill, and position it at 0.
 
-## Not yet tested on the tablet (2026-10-12)
+## Tested on the tablet 2026-10-12 (`tools/t2_probe.py`)
 
-From the code analysis; `tools/t2_probe.py` tests them one at a time in the
-hidden buffer, checking after each command that the chip still answers a
-register read:
+Each one drawn in the hidden buffer next to a reference box drawn the known
+way, then shown with a flip; the user saw the expected picture every time,
+and the chip answered a register read right after every command (log in
+the lab: `captures/t2_probe-20261012-142605.log`). Verified:
 
-- hardware upscale (`0x11`/`0x13` with a half-size source and scale `0x2000`)
-- RGB565 and YUV source formats
-- `0x13` decoding to a separate source address, then stretching
-- 512 KiB payload transfers like Windows
+- **512 KiB payload transfers** (a 1,082,400 B full frame as 524288 +
+  524288 + 33824 B), like Windows.
+- **`0x11` raw RGB24**, payload B, G, R.
+- **2x hardware upscale** with `0x11` (64x32 source, 128x64 target, scale
+  `0x2000`, payload = source size) and with `0x13` (same, source = target
+  address, raw length = source pixels x 3).
+- **RGB565 through `0x11`** (format `04`, 2 bytes per pixel, little-endian
+  5-6-5): colours as expected.
+- **`0x13` decoding to a separate address** (`0x3a0000`), stretched 1:1 into
+  the framebuffer.
+- **YUV 4:2:2 RLE through `0x13`** (format `8a`, mode 6, Y/U/V planes of
+  1536/768/768 per 3 KiB unit): flat colour bands as expected.
+
+Still untested:
+
 - the blit engine (`0x14`, or `0x15` register batches on `fc50-5d`, `fc34`,
   `fc59`, `fe60-89`, `fe70`), which could make scrolling a short command
   instead of resending the rows; the riskiest, since a wrong command may hang

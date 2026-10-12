@@ -345,6 +345,14 @@ the same installer, whose assert strings name the command fields. Results:
 All corrections went into protocol-t2.md; dated statements elsewhere carry
 an EDIT note.
 
+The same day the user ran `tools/t2_probe.py` steps a-h on the tablet:
+512 KiB transfers, raw `0x11`, 2x upscale through `0x11` and `0x13`,
+RGB565, decoding to a separate address and YUV 4:2:2 RLE all worked, and
+the chip answered a register read after every command (no stalls, no
+recovery). Software gamma worked; the per-channel lossy tolerance shows its
+row-wise streaks a little more at level 4 (less at 2-3), only during
+motion. The user's wish: compression without lines.
+
 ## Detailed source records
 
 - `docs/history/first-light.md`: early failures, resolved hypotheses and first image
