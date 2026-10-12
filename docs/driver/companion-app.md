@@ -57,6 +57,7 @@ e.g. `2-2:1.0`. One value per file, newline terminated.
 | `format` | t6 | rw | `auto`, `rgb24`, `rgb32`, `yuv444`, `nv12` |
 | `all_modes` | t6 | rw | `0` / `1`; a change makes userspace re-probe the monitor |
 | `lossy` | t2 | rw | `0` to `8` |
+| `motion` | t2 | rw | `lossy` or `half` (mct_t2 0.3.24) |
 | `backlight` | t2 | ro | name of its backlight device in `/sys/class/backlight/` (brightness is set there, 0 = off, 1 to `max_brightness`) |
 
 The module parameters (`format`, `all_modes`, `lossy`) are the values new

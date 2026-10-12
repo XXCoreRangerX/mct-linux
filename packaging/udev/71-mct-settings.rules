@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Per-device settings of the mct driver and the DTU-1031X's brightness:
 # writable for group video (mctctl and MCT Display Manager without root).
-ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="mct", RUN+="/bin/sh -c 'cd /sys%p/mct && for f in format all_modes lossy; do [ -e $f ] && chgrp video $f && chmod g+w $f; done; true'"
+ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="mct", RUN+="/bin/sh -c 'cd /sys%p/mct && for f in format all_modes lossy motion; do [ -e $f ] && chgrp video $f && chmod g+w $f; done; true'"
 ACTION=="add", SUBSYSTEM=="backlight", KERNEL=="mct_t2-*", RUN+="/bin/sh -c 'chgrp video /sys%p/brightness && chmod g+w /sys%p/brightness'"

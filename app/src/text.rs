@@ -33,6 +33,9 @@ pub const BRIGHTNESS_DESCRIPTION: &str = "0 turns the backlight off";
 pub const LOSSY_DESCRIPTION: &str =
     "Allow lossy updates during heavy motion. 0 keeps every update lossless.";
 
+pub const HALF_MOTION_DESCRIPTION: &str = "Send full-screen motion at half resolution, upscaled by \
+     the tablet: a little blur instead of streaks. The exact picture returns when motion stops.";
+
 pub const CREDITS: &str = "Protocol work builds on cyrozap's notes and the trigger6 driver";
 
 pub fn usb_link(speed: &str) -> String {

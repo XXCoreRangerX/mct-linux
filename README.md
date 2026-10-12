@@ -205,6 +205,7 @@ them ([all files](docs/driver/companion-app.md)):
 |---|---|---|
 | `format` | T6 | `auto` (default), `rgb24`, `rgb32`, `yuv444`, `nv12`. `auto` uses exact RGB or YUV 4:4:4 while the screen is still and NV12 during large changes. A fixed format stays fixed (no NV12 for motion) where the adapter can scan it out at the current mode, NV12 elsewhere. |
 | `all_modes` | T6 | `1` also offers modes larger than the monitor's native resolution (off by default; monitors often list 4K and scale it down). The compositor re-probes the monitor on a change. |
+| `motion` | T2 | `half`: full-screen motion too big for one frame is sent at half resolution and upscaled by the tablet (a little blur instead of streaks), refined once motion stops. `lossy` (default): the lossy level below decides. |
 | `lossy` | T2 | maximum lossy tolerance (`1`-`8`) for updates too big for one 60 Hz frame, refined to lossless once motion stops. Green keeps the tolerance, red gets 1.5 times and blue 2 times, where the eye notices less. `0` = off (default). |
 
 ```sh
@@ -217,7 +218,7 @@ settings without root, make the files writable for a group, as the NixOS
 module does for group `video`:
 
 ```udev
-ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="mct", RUN+="/bin/sh -c 'cd /sys%p/mct && for f in format all_modes lossy; do [ -e $f ] && chgrp video $f && chmod g+w $f; done'"
+ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="mct", RUN+="/bin/sh -c 'cd /sys%p/mct && for f in format all_modes lossy motion; do [ -e $f ] && chgrp video $f && chmod g+w $f; done'"
 ```
 
 Brightness of the DTU-1031X: `/sys/class/backlight/mct_t2-N` (0 = off,

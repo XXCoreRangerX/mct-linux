@@ -45,9 +45,10 @@ Order agreed 2026-10-11:
 5. **T2 hardware features found in the vendor drivers (2026-10-12)**; all
    but the blit engine tested OK with `tools/t2_probe.py` the same day.
    Next: use them in mct_t2:
-   - 512 KiB payload transfers like Windows;
-   - 2x hardware upscale during heavy motion: a quarter of the data, a
-     blur instead of the lossy mode's streaks, refined afterwards;
+   - 512 KiB payload transfers like Windows (verified; the measured gain is
+     ~3% and needs a 512 KiB DMA buffer, so not done yet);
+   - ~~2x hardware upscale during heavy motion~~: done as `motion=half`
+     (mct_t2 0.3.24), to be compared with the lossy mode on the tablet;
    - YUV 4:2:2 RLE (a third less raw data; colour smears at edges) as
      another motion mode; RGB565 only helps noisy content;
    - the blit engine for scrolling and window moves (highest gain for

@@ -16,6 +16,12 @@ drm_info and in the kernel log at probe).
 - mct_t2 0.3.23: software gamma (night light) on the tablet; the lossy
   mode's tolerance is per colour channel (green N, red 1.5 N, blue 2 N),
   measured offline to give smaller updates at the same visible error.
+- mct_t2 0.3.24: `motion=half` sends heavy full-screen updates at half
+  resolution, upscaled 2x by the chip (blur instead of streaks), refined
+  once motion stops; in the app as "Half resolution during heavy motion".
+- T2 protocol corrected and extended from the vendor drivers and captures;
+  hardware upscale, RGB565, YUV 4:2:2 and 512 KiB transfers verified on the
+  tablet with the new `tools/t2_probe.py`. Software gamma tested.
 - README: one status table for both chips; 720p at 240 Hz tested.
 
 ## 0.5.1 (2026-10-11)

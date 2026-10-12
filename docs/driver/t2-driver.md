@@ -133,6 +133,20 @@ one tolerance for all channels; at the same luma error, payloads are 4 to
 18% smaller. Red and blue can drift by up to 2 N, so smooth blue gradients
 may band sooner; watch skies when testing.
 
+## Half-resolution motion (driver 0.3.24)
+
+`motion=half` (sysfs, or the module parameter `half_motion`): when at least
+half the screen changed and the exact full frame would not fit one frame's
+budget, the update goes out as a 512x300 image (each 2x2 block averaged:
+150 RLE units, a quarter of the pixels) in a `0x13` with scale `0x2000`,
+which the chip upscales into the back buffer; then the usual flip. The
+upscaler's output isn't modelled, so that buffer's copy is marked unknown
+and the next update to it is a full frame; the refinement after motion
+(two lossless passes) restores the exact picture. Motion shows a slight
+blur instead of the lossy mode's horizontal streaks. Smaller heavy updates
+keep the lossy level. The header form was verified with `tools/t2_probe.py`
+on 2026-10-12; the mode itself is not yet tested on the tablet.
+
 ## Software gamma (driver 0.3.23)
 
 The T2 offers a 256-entry gamma LUT on the CRTC, like the T6 (night light,

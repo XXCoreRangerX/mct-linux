@@ -58,7 +58,7 @@ The NixOS module installs the rules; elsewhere add them, for example as
 /etc/udev/rules.d/71-mct-settings.rules:
 
 ```udev
-ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="mct", RUN+="/bin/sh -c 'cd /sys%p/mct && for f in format all_modes lossy; do [ -e $f ] && chgrp video $f && chmod g+w $f; done'"
+ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="mct", RUN+="/bin/sh -c 'cd /sys%p/mct && for f in format all_modes lossy motion; do [ -e $f ] && chgrp video $f && chmod g+w $f; done'"
 ACTION=="add", SUBSYSTEM=="backlight", KERNEL=="mct_t2-*", RUN+="/bin/sh -c 'chgrp video /sys%p/brightness && chmod g+w /sys%p/brightness'"
 ```
 

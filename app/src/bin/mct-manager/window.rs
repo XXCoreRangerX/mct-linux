@@ -26,6 +26,7 @@ pub enum AppMsg {
     SetAllModes(bool),
     SetBrightness(u32),
     SetLossy(u32),
+    SetHalfMotion(bool),
     SwitchDriver,
     SwitchDone(Result<(), String>),
     About,
@@ -167,6 +168,7 @@ impl App {
                         format: d.can_write("format"),
                         all_modes: d.can_write("all_modes"),
                         lossy: d.can_write("lossy"),
+                        motion: d.can_write("motion"),
                         brightness: d.can_write("brightness"),
                     },
                     None => Writable::default(),
@@ -450,6 +452,16 @@ impl SimpleComponent for App {
                     .and_then(|i| i.lossy);
                 if cur != Some(v) {
                     self.change(|d| d.set_lossy(v));
+                }
+            }
+            AppMsg::SetHalfMotion(on) => {
+                let want = if on { "half" } else { "lossy" };
+                let cur = self
+                    .current()
+                    .and_then(|s| s.info.as_ref())
+                    .and_then(|i| i.motion.clone());
+                if cur.as_deref() != Some(want) {
+                    self.change(|d| d.set_motion(want));
                 }
             }
             AppMsg::SwitchDriver => self.switch_driver(&sender),

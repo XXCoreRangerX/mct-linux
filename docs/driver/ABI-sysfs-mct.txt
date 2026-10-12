@@ -64,6 +64,10 @@ Description:
 		lossy		(Trigger II) 0 to 8: maximum lossy tolerance for
 				updates too big for one frame (for green; red
 				gets 1.5 times, blue 2 times); 0 = lossless.
+		motion		(Trigger II) "lossy" or "half": with "half",
+				full-screen updates too big for one frame
+				are sent at half resolution and upscaled 2x
+				by the chip, refined once motion stops.
 
 		The module parameters of the same names are the values new
 		devices start with.

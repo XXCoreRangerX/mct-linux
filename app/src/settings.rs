@@ -35,6 +35,8 @@ pub struct Saved {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lossy: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brightness: Option<u32>,
 }
 
@@ -46,6 +48,7 @@ impl Saved {
             format: info.format.clone(),
             all_modes: info.all_modes.map(|a| a != 0),
             lossy: info.lossy,
+            motion: info.motion.clone(),
             brightness: info.brightness,
         }
     }
@@ -61,6 +64,9 @@ impl Saved {
         }
         if let Some(l) = self.lossy {
             v.push(("lossy", l.to_string()));
+        }
+        if let Some(m) = &self.motion {
+            v.push(("motion", m.clone()));
         }
         if let Some(b) = self.brightness {
             v.push(("brightness", b.to_string()));

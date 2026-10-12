@@ -59,11 +59,15 @@ static int lossy;
 module_param(lossy, int, 0644);
 MODULE_PARM_DESC(lossy, "Default for new devices: maximum lossy tolerance (1-8; for green, red gets 1.5x and blue 2x) for updates too big to send losslessly within a frame, refined to lossless once motion stops; 0 = always lossless (default). Per device: /sys/bus/usb/devices/<interface>/mct/lossy.");
 
+static bool half_motion;
+module_param(half_motion, bool, 0644);
+MODULE_PARM_DESC(half_motion, "Default for new devices: send full-screen updates too big for a frame at half resolution, upscaled 2x by the chip (a blur instead of lossy streaks), refined once motion stops. Per device: /sys/bus/usb/devices/<interface>/mct/motion (lossy or half).");
+
 #define DRIVER_NAME	"mct_t2"
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	23
+#define DRIVER_PATCH	24
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -84,6 +88,7 @@ MODULE_PARM_DESC(lossy, "Default for new devices: maximum lossy tolerance (1-8; 
 #define T2_RLE_ESC	0x30
 #define T2_MODE_RGB	0x05			/* R, G, B planes per 1024-pixel unit */
 #define T2_FLAGS_INDIR	0x28			/* RldClock 0x20 | 0x13 command 0x08 */
+#define T2_SCALE_2X	0x2000			/* source half the target size */
 #define T2_BOUNCE	65536
 #define T2_ENC_MAX	(T2_WIDTH * (T2_HEIGHT + 16) * 3 + 4096)
 #define T2_TIMEOUT	2000
@@ -115,6 +120,7 @@ struct mct_t2 {
 	struct {			/* debugfs statistics */
 		u64 lossy_tol[9];	/* lossy updates by highest tolerance used */
 		u64 updates, lossy_updates, rects, px_sent, bytes, errors;
+		u64 half_updates;	/* sent at half resolution */
 		u64 over_budget, max_payload;	/* encoded bytes per update */
 		u64 latency[6];			/* damage to flip: <8 <16 <33 <50 <100 >=100 ms */
 		u64 ns_diff, ns_encode, ns_usb;	/* time spent per stage */
@@ -128,6 +134,7 @@ struct mct_t2 {
 
 	int refine;			/* lossless updates still owed, under base.lock */
 	int lossy;			/* sysfs lossy: maximum tolerance, 0 = lossless */
+	bool half;			/* sysfs motion: half-resolution heavy updates */
 	u8 lut[3][256];			/* software gamma (R, G, B), under base.lock */
 	bool lut_on;			/* lut is not the identity */
 
@@ -410,6 +417,86 @@ static int t2_send_visible_rect(struct mct_t2 *t2, u8 *src, u32 base,
 }
 
 /*
+ * The whole screen at half resolution, upscaled 2x by the chip: each 2x2
+ * block of the image becomes one pixel of a 512x300 source (150 RLE units
+ * of 1024 pixels), a quarter of the data. What the chip's upscaler makes of
+ * it isn't tracked, so the buffer's copy becomes unknown (see t2_present).
+ */
+static int t2_send_half(struct mct_t2 *t2, u8 *src, u32 base, long *sent)
+{
+	u8 (*ch)[1024] = t2->enc_ch;	/* io_lock held */
+	const int sw = T2_WIDTH / 2, sh = T2_HEIGHT / 2;
+	ktime_t t0 = ktime_get(), t1;
+	int sx, sy, c, k = 0, len = 0, ret;
+	u8 hdr[36];
+
+	for (sy = 0; sy < sh; sy++) {
+		for (sx = 0; sx < sw; sx++) {
+			/* device pixels 2sx..2sx+1, 2sy..2sy+1, rotated by 180 degrees */
+			const u8 *p0 = src + ((T2_HEIGHT - 2 - 2 * sy) * T2_WIDTH +
+					      (T2_WIDTH - 2 - 2 * sx)) * 4;
+			const u8 *p1 = p0 + T2_WIDTH * 4;
+
+			for (c = 0; c < 3; c++) {
+				int b = 2 - c;	/* R, G, B planes from XRGB bytes 2, 1, 0 */
+
+				ch[c][k] = (p0[b] + p0[b + 4] + p1[b] + p1[b + 4] + 2) / 4;
+			}
+			if (++k == 1024) {
+				for (c = 0; c < 3; c++)
+					len += t2_rle_line(ch[c], 1024, t2->enc + len, 0);
+				k = 0;
+			}
+		}
+	}
+	*sent += len;
+	t1 = ktime_get();
+
+	t2->stats.rects++;
+	t2->stats.px_sent += sw * sh;
+	t2->stats.bytes += sizeof(hdr) + len;
+
+	/* decoded at the target, then stretched in place (verified 2026-10-12) */
+	hdr[0] = 0x13;
+	hdr[1] = 0;
+	put_unaligned_le32(base, hdr + 2);
+	put_unaligned_le32(base, hdr + 6);
+	put_unaligned_le16(sw, hdr + 10);
+	put_unaligned_le16(sh, hdr + 12);
+	put_unaligned_le16(T2_WIDTH, hdr + 14);
+	put_unaligned_le16(T2_HEIGHT, hdr + 16);
+	put_unaligned_le16(T2_SCALE_2X, hdr + 18);
+	put_unaligned_le16(T2_SCALE_2X, hdr + 20);
+	hdr[22] = T2_FMT_RGB24;
+	put_unaligned_le32(T2_RLD_BUF, hdr + 23);
+	put_unaligned_le24(sw * sh * 3, hdr + 27);
+	put_unaligned_le24(len, hdr + 30);
+	hdr[33] = T2_RLE_ESC;
+	hdr[34] = T2_MODE_RGB;
+	hdr[35] = T2_FLAGS_INDIR;
+	ret = t2_cmd(t2, hdr, sizeof(hdr), t2->enc, len);
+	t2->stats.ns_encode += ktime_to_ns(ktime_sub(t1, t0));
+	t2->stats.ns_usb += ktime_to_ns(ktime_sub(ktime_get(), t1));
+	return ret;
+}
+
+/*
+ * Half mode only for heavy updates: at least half the screen changed and
+ * the exact full frame would not fit one frame's budget.
+ */
+static bool t2_want_half(struct mct_t2 *t2, const struct drm_rect *bands, int n)
+{
+	long area = 0;
+	int i;
+
+	for (i = 0; i < n; i++)
+		area += (long)drm_rect_width(&bands[i]) * drm_rect_height(&bands[i]);
+	if (area * 2 < (long)T2_WIDTH * T2_HEIGHT)
+		return false;
+	return t2_encode(t2, t2->snap, 0, 0, T2_WIDTH, T2_HEIGHT, 0) > T2_FRAME_BUDGET;
+}
+
+/*
  * Rows of cur that differ from old, grouped into bands (a gap of fewer than
  * T2_BAND_GAP unchanged rows keeps a band going). Returns the band count,
  * 0 if nothing changed.
@@ -456,6 +543,7 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 	u32 base = t2_buf_addr(back);
 	int i, n, tol = 0, used = 0, ret = 0;
 	long sent = 0;
+	bool half;
 	u8 *tmp;
 
 	ktime_t t0 = ktime_get();
@@ -471,9 +559,12 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 	/* updates too big for one frame may go lossy; refined once motion stops */
 	if (!lossless && READ_ONCE(t2->lossy) > 0)
 		tol = READ_ONCE(t2->lossy);
+	half = !lossless && READ_ONCE(t2->half) && t2_want_half(t2, bands, n);
 
 	t2->hw_valid[back] = false;
-	for (i = 0; i < n && !ret; i++)
+	if (half)
+		ret = t2_send_half(t2, t2->snap, base, &sent);
+	for (i = 0; i < n && !ret && !half; i++)
 		ret = t2_send_visible_rect(t2, t2->snap, base, &bands[i], tol, &sent, &used);
 	if (!ret)
 		ret = t2_flip(t2, base);
@@ -481,6 +572,13 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 		return ret;
 
 	t2->stats.updates++;
+	if (half) {
+		/* the buffer holds the chip's upscale: unknown, sent whole next time */
+		t2->stats.half_updates++;
+		*went_lossy = true;
+		t2->front = base;
+		return 0;
+	}
 	if (used) {
 		t2->stats.lossy_updates++;
 		t2->stats.lossy_tol[used]++;
@@ -1195,6 +1293,7 @@ static void t2_stats(struct mct_device *mdev, struct seq_file *m)
 	int i;
 
 	seq_printf(m, "updates          %llu\n", t2->stats.updates);
+	seq_printf(m, "half-res updates %llu\n", t2->stats.half_updates);
 	seq_printf(m, "lossy updates    %llu (by tolerance:", t2->stats.lossy_updates);
 	for (i = 1; i < ARRAY_SIZE(t2->stats.lossy_tol); i++)
 		if (t2->stats.lossy_tol[i])
@@ -1296,6 +1395,31 @@ static ssize_t lossy_store(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RW(lossy);
 
+/* how heavy updates are reduced: "lossy" (by the lossy level) or "half" */
+static ssize_t motion_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t2 *t2 = t2_from_dev(dev);
+
+	return t2 ? sysfs_emit(buf, "%s\n", READ_ONCE(t2->half) ? "half" : "lossy") : -ENODEV;
+}
+
+static ssize_t motion_store(struct device *dev, struct device_attribute *attr,
+			    const char *buf, size_t len)
+{
+	struct mct_t2 *t2 = t2_from_dev(dev);
+
+	if (!t2)
+		return -ENODEV;
+	if (sysfs_streq(buf, "half"))
+		WRITE_ONCE(t2->half, true);
+	else if (sysfs_streq(buf, "lossy"))
+		WRITE_ONCE(t2->half, false);
+	else
+		return -EINVAL;
+	return len;
+}
+static DEVICE_ATTR_RW(motion);
+
 /* the panel always gets RGB24, sent as planar RLE; "-" while off */
 static ssize_t pixel_format_show(struct device *dev, struct device_attribute *attr,
 				 char *buf)
@@ -1318,6 +1442,7 @@ static struct attribute *t2_attrs[] = {
 	&dev_attr_errors.attr,
 	&dev_attr_backlight.attr,
 	&dev_attr_lossy.attr,
+	&dev_attr_motion.attr,
 	&dev_attr_pixel_format.attr,
 	NULL
 };
@@ -1393,6 +1518,7 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 		return ret;
 	/* the module parameter is the default this device starts with */
 	t2->lossy = clamp(READ_ONCE(lossy), 0, 8);
+	t2->half = READ_ONCE(half_motion);
 	t2->front = T2_FB_A;
 
 	t2->bounce = drmm_kmalloc(dev, T2_BOUNCE, GFP_KERNEL);

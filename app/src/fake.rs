@@ -14,7 +14,7 @@ pub const T6_B: &str = "4-1:1.0";
 pub const T2: &str = "3-1:1.0";
 pub const T2_BACKLIGHT: &str = "mct_t2-1";
 
-const RW: &[&str] = &["format", "all_modes", "lossy"];
+const RW: &[&str] = &["format", "all_modes", "lossy", "motion"];
 
 fn put(dir: &Path, name: &str, value: &str) -> io::Result<()> {
     let path = dir.join(name);
@@ -224,6 +224,7 @@ pub const T2_FILES: &[(&str, &str)] = &[
     ("bytes", "120000000"),
     ("errors", "0"),
     ("lossy", "0"),
+    ("motion", "lossy"),
     ("backlight", T2_BACKLIGHT),
 ];
 

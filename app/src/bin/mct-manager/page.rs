@@ -22,6 +22,7 @@ pub struct Writable {
     pub format: bool,
     pub all_modes: bool,
     pub lossy: bool,
+    pub motion: bool,
     pub brightness: bool,
 }
 
@@ -53,6 +54,7 @@ pub struct Page {
     brightness_row: adw::ActionRow,
     brightness: gtk::Scale,
     lossy: adw::SpinRow,
+    half_motion: adw::SwitchRow,
     status_group: adw::PreferencesGroup,
     update_rate: adw::ActionRow,
     data_rate: adw::ActionRow,
@@ -172,11 +174,24 @@ impl Page {
         lossy.set_subtitle(text::LOSSY_DESCRIPTION);
         let f = send(|v| AppMsg::SetLossy(v.round() as u32));
         lossy.connect_value_notify(move |r| f(r.value()));
+        let half_motion = adw::SwitchRow::builder()
+            .title("Half resolution during heavy motion")
+            .subtitle(text::HALF_MOTION_DESCRIPTION)
+            .build();
+        {
+            let (s, q) = (sender.clone(), quiet.clone());
+            half_motion.connect_active_notify(move |r| {
+                if !q.get() {
+                    s.emit(AppMsg::SetHalfMotion(r.is_active()))
+                }
+            });
+        }
         let settings = adw::PreferencesGroup::builder().title("Settings").build();
         settings.add(&format);
         settings.add(&all_modes);
         settings.add(&brightness_row);
         settings.add(&lossy);
+        settings.add(&half_motion);
 
         let update_rate = property_row("Updates per second");
         let data_rate = property_row("Data rate");
@@ -217,6 +232,7 @@ impl Page {
             brightness_row,
             brightness,
             lossy,
+            half_motion,
             status_group,
             update_rate,
             data_rate,
@@ -475,11 +491,19 @@ impl Page {
         }
         self.lossy.set_sensitive(s.writable.lossy);
 
+        self.half_motion.set_visible(t2 && info.motion.is_some());
+        let half = info.motion.as_deref() == Some("half");
+        if self.half_motion.is_active() != half {
+            self.half_motion.set_active(half);
+        }
+        self.half_motion.set_sensitive(s.writable.motion);
+
         self.settings.set_visible(
             self.format.is_visible()
                 || self.all_modes.is_visible()
                 || self.brightness_row.is_visible()
-                || self.lossy.is_visible(),
+                || self.lossy.is_visible()
+                || self.half_motion.is_visible(),
         );
 
         // settings the user can't change: say how to fix it

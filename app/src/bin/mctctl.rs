@@ -70,7 +70,7 @@ enum Cmd {
     },
     /// Change a setting
     #[command(after_help = format!(
-        "KEY is one of: {}.\n  format      t6: auto, rgb24, rgb32, yuv444, nv12\n  all_modes   t6: 0 or 1 (probes the monitor again)\n  lossy       t2: 0 to 8 (0 = always lossless)\n  brightness  t2: 0 (off) to max_brightness\n\n{DEV_HELP}",
+        "KEY is one of: {}.\n  format      t6: auto, rgb24, rgb32, yuv444, nv12\n  all_modes   t6: 0 or 1 (probes the monitor again)\n  lossy       t2: 0 to 8 (0 = always lossless)\n  motion      t2: lossy or half (heavy motion at half resolution)\n  brightness  t2: 0 (off) to max_brightness\n\n{DEV_HELP}",
         SETTABLE.join(", ")
     ))]
     Set {
@@ -325,6 +325,7 @@ const STATE_KEYS: &[(&str, &str)] = &[
     ("format", "Format setting"),
     ("all_modes", "All modes"),
     ("lossy", "Lossy"),
+    ("motion", "Heavy motion"),
     ("brightness", "Brightness"),
     ("max_brightness", "Max brightness"),
     ("updates", "Updates"),

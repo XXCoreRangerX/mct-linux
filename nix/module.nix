@@ -163,7 +163,7 @@ in
         '')
         # per-device settings (and the tablet's brightness) writable for group video
         (pkgs.writeTextDir "etc/udev/rules.d/71-mct-settings.rules" ''
-          ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="mct", RUN+="${mctSettingsPerms} /sys%p/mct format all_modes lossy"
+          ACTION=="bind", SUBSYSTEM=="usb", DRIVER=="mct", RUN+="${mctSettingsPerms} /sys%p/mct format all_modes lossy motion"
           ACTION=="add", SUBSYSTEM=="backlight", KERNEL=="mct_t2-*", RUN+="${mctSettingsPerms} /sys%p brightness"
         '')
       ];

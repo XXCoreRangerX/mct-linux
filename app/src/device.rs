@@ -45,13 +45,18 @@ pub const KEYS: &[&str] = &[
     "format",
     "all_modes",
     "lossy",
+    "motion",
     "backlight",
     "brightness",
     "max_brightness",
 ];
 
 /// Keys `set` accepts.
-pub const SETTABLE: &[&str] = &["format", "all_modes", "lossy", "brightness"];
+pub const SETTABLE: &[&str] = &["format", "all_modes", "lossy", "motion", "brightness"];
+
+/// What the T2 does with updates too big for a frame: `lossy` (by the lossy
+/// level) or `half` (half resolution, upscaled by the chip).
+pub const MOTIONS: [&str; 2] = ["lossy", "half"];
 
 pub const PERMISSION_HINT: &str = "Add your user to group \"video\" (then log in again) \
      and make sure the mct udev rules are installed (see the README).";
@@ -244,6 +249,9 @@ pub struct Info {
     pub all_modes: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lossy: Option<u32>,
+    /// T2: `lossy` or `half` (mct_t2 0.3.24 and later).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub motion: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backlight: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -284,6 +292,7 @@ impl Info {
             "format" => s(&self.format),
             "all_modes" => s(&self.all_modes),
             "lossy" => s(&self.lossy),
+            "motion" => s(&self.motion),
             "backlight" => s(&self.backlight),
             "brightness" => s(&self.brightness),
             "max_brightness" => s(&self.max_brightness),
@@ -560,6 +569,7 @@ impl Device {
             format: r("format")?,
             all_modes: parse(r("all_modes")?),
             lossy: parse(r("lossy")?),
+            motion: none_if_dash(r("motion")?),
             backlight: none_if_dash(r("backlight")?),
             brightness: None,
             max_brightness: None,
@@ -623,6 +633,7 @@ impl Device {
                     "invalid value \"{value}\" for all_modes (use 0 or 1)"
                 ))),
             },
+            "motion" => self.set_motion(value.trim()),
             "lossy" => match value.trim().parse::<u32>() {
                 Ok(v) => self.set_lossy(v),
                 Err(_) => Err(Error::Invalid(format!(
@@ -670,6 +681,16 @@ impl Device {
     pub fn set_all_modes(&self, on: bool) -> Result<(), Error> {
         self.require("all_modes")?;
         self.write_key("all_modes", if on { "1" } else { "0" })
+    }
+
+    pub fn set_motion(&self, motion: &str) -> Result<(), Error> {
+        self.require("motion")?;
+        if !MOTIONS.contains(&motion) {
+            return Err(Error::Invalid(format!(
+                "invalid motion \"{motion}\" (use lossy or half)"
+            )));
+        }
+        self.write_key("motion", motion)
     }
 
     pub fn set_lossy(&self, level: u32) -> Result<(), Error> {
