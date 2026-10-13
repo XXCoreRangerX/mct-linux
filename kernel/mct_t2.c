@@ -67,7 +67,7 @@ MODULE_PARM_DESC(half_motion, "Experimental, off by default. Default for new dev
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	33
+#define DRIVER_PATCH	35
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -155,6 +155,7 @@ struct mct_t2 {
 		u64 ns_diff, ns_encode, ns_usb;	/* time spent per stage */
 	} stats;
 	const struct drm_edid *edid;	/* read from the device at init */
+	bool check_panel;		/* USB ID also used by other T2 devices */
 	struct backlight_device *bl;
 	char bl_name[32];		/* for sysfs; empty without a backlight */
 	struct mutex power_lock;		/* crtc_on + bl_off -> pixel clock */
@@ -844,6 +845,12 @@ static unsigned int t2_pace_us(u8 ep, const u8 *data)
 	return 20000;
 }
 
+/* manufacturer "WAC" in the panel EDID of the 0x1d reply (at +0x80) */
+static bool t2_wacom_panel(const u8 *reply, int len)
+{
+	return len >= 0x80 + EDID_LENGTH && reply[0x80 + 8] == 0x5c && reply[0x80 + 9] == 0x23;
+}
+
 static int t2_hw_init_once(struct mct_t2 *t2)
 {
 	const u8 *p = mct_t2_init_seq, *end = p + sizeof(mct_t2_init_seq);
@@ -898,6 +905,16 @@ static int t2_hw_init_once(struct mct_t2 *t2)
 			/* 0x1d device info: panel EDID at +0x80 */
 			if (data && data[0] == 0x1d && ret >= 0x80 + EDID_LENGTH && !t2->edid)
 				t2->edid = drm_edid_alloc(t2->bounce + 0x80, EDID_LENGTH);
+			/*
+			 * Before anything panel-specific: on IDs that plain T2
+			 * adapters share (j5create JUA230 and others use
+			 * 5200-520f too), only go on with the Wacom panel's EDID.
+			 */
+			if (data && data[0] == 0x1d && t2->check_panel &&
+			    !t2_wacom_panel(t2->bounce, ret)) {
+				ret = -ENODEV;
+				goto err;
+			}
 		}
 		us = t2_pace_us(ep, data);
 		if (us)
@@ -1310,11 +1327,18 @@ static void t2_update(struct mct_device *mdev)
 /* ------------------------------------------------------------------ */
 /* cursor plane (hardware cursor, see docs/reference/protocol-t2.md)	      */
 
-/* EP4 register list: position (device top-left of the 64x64 box) + show/hide */
-static int t2_cursor_regs(struct mct_t2 *t2, int x, int y, bool show)
+/*
+ * EP4 register list: position (device top-left of the 64x64 box) and show.
+ * A box hanging off the device's left/top edge (the visible right/bottom
+ * edge) is clipped by the chip: position 0, fe44/fe45 = the overhang, fe36
+ * 0x4f when x <= 0, else 0x47 when y <= 0 (the Mac driver's rule,
+ * FUN_1000207dc; verified with tools/t2_probe.py step u, 2026-10-13).
+ */
+static int t2_cursor_regs(struct mct_t2 *t2, int x, int y)
 {
 	u8 *b = t2->cur.buf;
-	int n = 0;
+	u8 mode = x <= 0 ? 0x4f : y <= 0 ? 0x47 : 0x07;
+	int cx = max(-x, 0), cy = max(-y, 0), n = 0;
 
 	b[n++] = 0x05;
 	b[n++] = 0;	/* payload length, filled in below */
@@ -1322,18 +1346,20 @@ static int t2_cursor_regs(struct mct_t2 *t2, int x, int y, bool show)
 		b[n++] = 0x34; b[n++] = T2_CUR;
 		b[n++] = 0x35; b[n++] = T2_CUR;
 	}
+	x = max(x, 0);
+	y = max(y, 0);
 	b[n++] = 0x38; b[n++] = x & 0xff;
 	b[n++] = 0x39; b[n++] = x >> 8;
 	b[n++] = 0x3a; b[n++] = y & 0xff;
 	b[n++] = 0x3b; b[n++] = y >> 8;
-	b[n++] = 0x44; b[n++] = 0;
-	b[n++] = 0x45; b[n++] = 0;
-	b[n++] = 0x36; b[n++] = show ? 0x07 : 0x04;
+	b[n++] = 0x44; b[n++] = cx;
+	b[n++] = 0x45; b[n++] = cy;
+	b[n++] = 0x36; b[n++] = mode;
 	b[1] = n - 2;
 	if (t2_xfer(t2, b, T2_EP_MCU, b, n))
 		return -EIO;
 	t2->cur.sized = true;
-	t2->cur.visible = show;
+	t2->cur.visible = true;
 	return 0;
 }
 
@@ -1376,38 +1402,28 @@ static void t2_cursor_hide_hook(struct mct_device *mdev)
 static void t2_cursor_set(struct mct_device *mdev, const u8 *bgra, int x, int y)
 {
 	struct mct_t2 *t2 = to_t2(mdev);
-	int dx, dy, sx, sy, i, j;
+	int dx, dy, i, j;
 	u8 *dst;
 
 	/*
 	 * The visible 64x64 box at (x, y) lands, rotated by 180 degrees, at
-	 * device (dx, dy). Coordinates must be >= 0: if the box hangs off the
-	 * visible right/bottom edge, shift the image instead.
+	 * device (dx, dy); past the visible right/bottom edge that is
+	 * negative, and the chip clips it (t2_cursor_regs).
 	 */
 	dx = T2_WIDTH - (x + T2_CUR);
 	dy = T2_HEIGHT - (y + T2_CUR);
-	sx = max(-dx, 0);
-	sy = max(-dy, 0);
-	dx = max(dx, 0);
-	dy = max(dy, 0);
-	if (sx >= T2_CUR || sy >= T2_CUR || dx >= T2_WIDTH || dy >= T2_HEIGHT) {
+	if (dx <= -T2_CUR || dy <= -T2_CUR || dx >= T2_WIDTH || dy >= T2_HEIGHT) {
 		t2_cursor_hide(t2);
 		return;
 	}
 
-	/* B, G, R, A (visible orientation) -> A, B, G, R bytes, rotated 180, shifted */
+	/* B, G, R, A (visible orientation) -> A, B, G, R bytes, rotated 180 */
 	dst = t2->cur.img;
 	for (j = 0; j < T2_CUR; j++) {
 		for (i = 0; i < T2_CUR; i++, dst += 4) {
-			/* device (i + sx, j + sy) is visible (63 - (i + sx), 63 - (j + sy)) */
-			int vx = T2_CUR - 1 - (i + sx), vy = T2_CUR - 1 - (j + sy);
-			const u8 *px;
+			/* device (i, j) is visible (63 - i, 63 - j) */
+			const u8 *px = bgra + (T2_CUR - 1 - j) * T2_CUR * 4 + (T2_CUR - 1 - i) * 4;
 
-			if (vx < 0 || vy < 0) {
-				memset(dst, 0, 4);
-				continue;
-			}
-			px = bgra + vy * T2_CUR * 4 + vx * 4;
 			dst[0] = min_t(u8, px[3], 0xfe);	/* vendor uses 0xfe for opaque */
 			dst[1] = px[0];
 			dst[2] = px[1];
@@ -1418,7 +1434,7 @@ static void t2_cursor_set(struct mct_device *mdev, const u8 *bgra, int x, int y)
 	if (!t2->cur.uploaded || memcmp(t2->cur.img, t2->cur.shown, T2_CUR_BYTES))
 		if (t2_cursor_upload(t2))
 			return;
-	t2_cursor_regs(t2, dx, dy, true);
+	t2_cursor_regs(t2, dx, dy);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1727,6 +1743,8 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	t2->lossy = clamp(READ_ONCE(lossy), 0, 8);
 	t2->half = READ_ONCE(half_motion);
 	t2->front = T2_FB_A;
+	/* 5209 and 520d are the tested DTU-1031X; others need its panel */
+	t2->check_panel = id->idProduct != 0x5209 && id->idProduct != 0x520d;
 
 	t2->bounce = drmm_kmalloc(dev, T2_BOUNCE, GFP_KERNEL);
 	t2->cur.buf = drmm_kmalloc(dev, 64, GFP_KERNEL);

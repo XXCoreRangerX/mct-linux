@@ -448,11 +448,15 @@ The T2 has a 64x64 ARGB cursor overlay, drawn by the chip on top of scanout.
   `0x07`; with its 180 degree compensation that is probably our far end
   (code, untested).
 - `fe30-fe33` = the cursor image's VRAM address >> 2 (macOS driver): other
-  shapes can be kept in VRAM and switched by address (untested).
+  shapes can be kept in VRAM and switched by address (a second shape at
+  `0x4000` showed garbage in 2026-10-13 tests; not understood).
 - `0x36`: `07` = cursor shown, `04` = hidden (verified by blinking). Windows
   writes `24` then `04` around some shape changes.
-- To show a cursor hanging off the visible right/bottom edge (negative device
-  coordinates), upload a copy shifted by the overhang, with transparent fill, and position it at 0.
+- A cursor hanging off the visible right/bottom edge (negative device
+  coordinates) is clipped by the chip: position 0, `fe44`/`fe45` = the
+  overhang in x/y, `fe36` = `4f` when x <= 0, else `47` when y <= 0, else
+  `07` (macOS driver, verified 2026-10-13; mct_t2 since 0.3.34). Before,
+  mct_t2 uploaded a copy shifted by the overhang.
 
 ## Tested on the tablet 2026-10-12 (`tools/t2_probe.py`)
 

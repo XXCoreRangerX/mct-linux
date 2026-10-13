@@ -10,7 +10,11 @@ How the T6 backend works. The protocol is in
 
 ## Probe
 
-Interface 0 of the device. Reads which output has a monitor (`0x87`), the
+Interface 0 of the device. Devices other than the tested `0711:5600` and
+`0711:5601` are refused with a log line unless the module parameter
+`untested_ids` is set (since 0.29.4; the IDs are in `mct_main.c`). The Wacom
+DTU-1031AX (`0711:5609`, or `056a:039f` on its vendor interface) gets only
+its EDID's own mode (`t6_keep_preferred`), as j5create's macOS driver does. Reads which output has a monitor (`0x87`), the
 capabilities (`t6_read_caps`: platform and PLL base clock, board name,
 firmware versions, chip serial, feature level, video memory, DISP flags;
 refuses JPEG-only devices and less than 48 MiB),
@@ -127,6 +131,13 @@ Windows' table) and "PCM Playback Switch". Both are read from the adapter
 at probe (`a2`, `a3`); the adapter keeps them until it loses power. A
 change sends `40 23`. Muting sends 0, since there is no mute node. The
 volume is sent again on resume.
+
+Since 0.29.5 the card also has the controls HDMI sound drivers offer:
+"ELD" (PCM, read-only bytes: the monitor's audio capabilities from its
+EDID, which DRM puts in `connector->eld`; PipeWire names the output after
+the monitor) and "HDMI/DP,pcm=0 Jack" (on while a monitor with audio in its
+EDID is connected). Both are updated on every EDID read and cleared when
+the monitor goes, with ALSA change notifications.
 
 ## Cursor
 

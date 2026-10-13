@@ -24,12 +24,61 @@ static const struct usb_device_id mct_id_table[] = {
 	/* Wacom DTU-1031X, which enumerates with either ID */
 	{ USB_DEVICE_INTERFACE_NUMBER(0x0711, 0x5209, 0), MCT_BACKEND(mct_t2_backend) },
 	{ USB_DEVICE_INTERFACE_NUMBER(0x0711, 0x520d, 0), MCT_BACKEND(mct_t2_backend) },
+	/*
+	 * Other DTU-1031X units (Linux Hardware Database; untested). Plain T2
+	 * adapters use these IDs too: mct_t2 checks for the Wacom panel first.
+	 */
+	{ USB_DEVICE_INTERFACE_NUMBER(0x0711, 0x5201, 0), MCT_BACKEND(mct_t2_backend) },
+	{ USB_DEVICE_INTERFACE_NUMBER(0x0711, 0x520f, 0), MCT_BACKEND(mct_t2_backend) },
 #endif
 #ifdef MCT_HAVE_T6
 	/* T6 USB Station and similar single-output T6 adapters */
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5600, 0xff, 0x00, 0x00),
 	  MCT_BACKEND(mct_t6_backend) },
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5601, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	/*
+	 * Untested T6 devices, driven only with mct.untested_ids=1: the
+	 * firmware image sets the PID (it changes with reflashing), so these
+	 * are IDs seen in MCT's firmware images, the Linux Hardware Database
+	 * and other drivers (docs/roadmap.md): j5create, StarTech, Mobile
+	 * Pixels (560b), Insignia/Platinum (19ff:560b-560e), HP Engage
+	 * (03f0:0182), the Wacom DTU-1031AX (0711:5609, and its own Wacom ID
+	 * on the vendor interface).
+	 */
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5602, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5603, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5604, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5605, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5606, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5607, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5608, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5609, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x560a, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x560b, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x561a, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x19ff, 0x560b, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x19ff, 0x560c, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x19ff, 0x560d, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x19ff, 0x560e, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x03f0, 0x0182, 0xff, 0x00, 0x00),
+	  MCT_BACKEND(mct_t6_backend) },
+	{ USB_DEVICE_AND_INTERFACE_INFO(0x056a, 0x039f, 0xff, 0x00, 0x00),
 	  MCT_BACKEND(mct_t6_backend) },
 #endif
 	{}

@@ -58,16 +58,17 @@ const BOARDS: &[(&str, Product)] = &[
     ),
 ];
 
+const DTU_1031X: Product = Product {
+    short: "Wacom DTU-1031X",
+    full: "Wacom DTU-1031X pen display",
+};
+
 /// Products known by their USB IDs and product string ("" matches any).
-const USB_PRODUCTS: &[(&str, &str, &str, Product)] = &[(
-    VENDOR,
-    "520d",
-    "DTU-1031X",
-    Product {
-        short: "Wacom DTU-1031X",
-        full: "Wacom DTU-1031X pen display",
-    },
-)];
+const USB_PRODUCTS: &[(&str, &str, &str, Product)] = &[
+    (VENDOR, "520d", "DTU-1031X", DTU_1031X),
+    (VENDOR, "5201", "DTU-1031X", DTU_1031X),
+    (VENDOR, "520f", "DTU-1031X", DTU_1031X),
+];
 
 /// A product's name, short for titles and full for the details.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

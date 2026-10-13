@@ -28,7 +28,14 @@ drm_info and in the kernel log at probe).
   can't grow during a drag; 0.3.30 decodes the half-resolution source in
   spare video memory, so a flip never shows it half-scaled; 0.3.31 fixes
   a band at the edge of moving areas flickering between blurred and sharp
-  (a half-resolution area grew by a tile row that wasn't redrawn).
+  (a half-resolution area grew by a tile row that wasn't redrawn). Half
+  mode stays experimental and off by default.
+- More USB IDs: other DTU-1031X units (`0711:5201`, `520f`; only with the
+  Wacom panel's EDID, since plain T2 adapters share them), and untested
+  Trigger 6 adapters, docks and the Wacom DTU-1031AX behind the new module
+  parameter `untested_ids` (mct_t6 0.29.4, mct_t2 0.3.35).
+- mct_t2 0.3.34: the chip clips a cursor at the right and bottom edges
+  instead of the driver re-uploading a shifted image on every move there.
 - T2 protocol corrected and extended from the vendor drivers and captures;
   hardware upscale, RGB565, YUV 4:2:2 and 512 KiB transfers verified on the
   tablet with the new `tools/t2_probe.py`. Software gamma tested.
@@ -41,7 +48,9 @@ drm_info and in the kernel log at probe).
   as much blanking as fits (1080p144 gets 120 px instead of 80), and the
   driver logs a warning in modes with less. `audio_lead_ms` (default 90) sets how far ahead
   the adapter is fed. The adapter's volume is the mixer control "PCM
-  Playback Volume" with a "PCM Playback Switch". Needs a kernel with ALSA PCM support; without it the
+  Playback Volume" with a "PCM Playback Switch". An "ELD" control and a
+  jack control tell PipeWire the monitor's name and audio capabilities and
+  whether it's connected (mct_t6 0.29.5). Needs a kernel with ALSA PCM support; without it the
   module builds without audio.
 - README: one status table for both chips; 720p at 240 Hz tested.
 

@@ -96,10 +96,18 @@ of the vendor drivers for interoperability, and testing on real hardware.
 | `0711:5601` | single-output Trigger 6 adapter | Trigger 6 | untested |
 | `0711:520d` | Wacom DTU-1031X, interface 0 | Trigger II | tested |
 | `0711:5209` | the same tablet, which enumerates with either ID | Trigger II | tested |
+| `0711:5201`, `0711:520f` | other DTU-1031X units ([Linux Hardware Database](https://linux-hardware.org/?id=usb:0711-520f)) | Trigger II | untested; driven only if the panel's EDID is Wacom's, since plain Trigger II adapters use these IDs too |
+| `0711:5602`-`560b`, `0711:561a`, `19ff:560b`-`560e`, `03f0:0182` | other Trigger 6 adapters and docks (j5create, StarTech, Mobile Pixels, Insignia/Platinum, HP Engage) | Trigger 6 | untested, opt-in: `mct.untested_ids=1` |
+| `0711:5609`, `056a:039f` | Wacom DTU-1031AX pen display | Trigger 6 | untested, opt-in; offers only the panel's own mode |
 
-Other Trigger 6 IDs (MCT uses `0711:5600`-`561f` and more) are not matched
-yet: they may have other outputs or features this driver doesn't handle.
-Other Trigger II products need their own init and modes (see above).
+The firmware sets a Trigger 6 device's product ID, and it can change when
+the firmware is updated, so the list above is what has been seen, not a
+promise. Untested Trigger 6 devices are left alone unless the module
+parameter `untested_ids` is set (`mct.untested_ids=1` on the kernel command
+line, or `options mct untested_ids=1` in `/etc/modprobe.d/`, then replug);
+the kernel log names any device it skipped. Dual-output adapters drive one
+output. Other Trigger II products need their own init and modes (see
+above).
 
 ## Repository
 
@@ -167,7 +175,7 @@ The scripts in `tools/` open the devices directly; give your user access
 with a udev rule such as (the NixOS module installs this one):
 
 ```udev
-SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d|5600|5601", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5201|5209|520d|520f|5600|5601", TAG+="uaccess"
 ```
 
 ### NixOS

@@ -310,10 +310,16 @@ tearing, and measured diff time is negligible compared with USB transfer time.
 
 - **Trimmed init**: 78 transfers, ~1 s from cold (see `docs/reference/init-sequence.md`), black
   frame into buffer A right before `0x14`.
+- **USB IDs**: `0711:5209` and `520d` (tested); `5201` and `520f` (other
+  DTU-1031X units, untested) only go past the `0x1d` ROM read, the 5th
+  init record after four GPIO writes, if the panel EDID's manufacturer is
+  `WAC` (`t2_wacom_panel`, since 0.3.35), since plain T2 adapters such as
+  the j5create JUA230 use `5200-520f` too.
 - **Hardware cursor plane** (`DRM_PLANE_TYPE_CURSOR`, ARGB8888, 64x64): converts
   to the T2's A,B,G,R format rotated 180 degrees and uploads with `0x12` only when the image
   changes. Moves send one 16-byte EP4 packet. Boxes hanging off the visible right/bottom
-  edge get a shifted image (the position registers can't go negative).
+  edge are clipped by the chip (`fe44`/`fe45`, `fe36` `4f`/`47`, since 0.3.34);
+  before, they got a shifted image, re-uploaded on every move there.
   Much smoother than composited cursors, and less USB traffic.
 - **Panel power / DPMS**: CRTC disable writes `fcf6=0` (backlight off), enable
   writes `fcf6=1`. niri's `power-off-monitors` turns the tablet off like the other

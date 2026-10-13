@@ -1,4 +1,4 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # MCT Trigger displays: the logged-in user may open the USB device (the
 # research and test scripts in tools/ need this; the driver doesn't).
-SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d|5600|5601", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5201|5209|520d|520f|5600|5601", TAG+="uaccess"

@@ -36,6 +36,7 @@
 #include <drm/drm_connector.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
+#include <drm/drm_eld.h>
 #include <drm/drm_fbdev_shmem.h>
 #include <drm/drm_file.h>
 #include <drm/drm_gem_shmem_helper.h>
@@ -64,6 +65,10 @@ static bool all_modes;
 module_param(all_modes, bool, 0644);
 MODULE_PARM_DESC(all_modes, "Default for new devices: also offer modes larger than the monitor's native resolution; off by default. Per device: .../mct/all_modes.");
 
+static bool untested_ids;
+module_param(untested_ids, bool, 0644);
+MODULE_PARM_DESC(untested_ids, "Also drive T6 devices with USB IDs this driver hasn't been tested with (other adapters, docks, the Wacom DTU-1031AX); off by default. Read when a device is plugged in.");
+
 static unsigned int audio_lead_ms = 90;
 module_param(audio_lead_ms, uint, 0644);
 MODULE_PARM_DESC(audio_lead_ms, "HDMI audio: how far ahead of playback the adapter is fed, 20-500 ms (default 90). Read when a stream starts.");
@@ -72,7 +77,7 @@ MODULE_PARM_DESC(audio_lead_ms, "HDMI audio: how far ahead of playback the adapt
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	29
-#define DRIVER_PATCH	3
+#define DRIVER_PATCH	5
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -303,6 +308,7 @@ struct mct_t6 {
 	const struct drm_edid *last_edid; /* last EDID read, for failed reads */
 	int fmt_req;			/* T6_FMT_AUTO or the fixed kind (sysfs format) */
 	bool all_modes;			/* sysfs all_modes */
+	bool panel_only;		/* a built-in panel: only its EDID's own mode */
 	int frag;			/* largest bulk write: smaller on USB 2 */
 	bool usb2;
 
@@ -391,6 +397,10 @@ struct mct_t6 {
 		u8 *pkt;			/* one packet of PCM */
 		u64 packets, fills, starts;	/* statistics */
 		u32 warned_hb;			/* mode blanking last warned about */
+		/* the monitor's audio, from its EDID; under lock */
+		u8 eld[MAX_ELD_BYTES];
+		int eld_size;			/* 0: no monitor or no audio */
+		struct snd_kcontrol *eld_kctl, *jack_kctl;
 		/* volume node 0; under io_lock */
 		bool has_vol;
 		bool unmuted;			/* the switch: off sends the minimum */
@@ -1881,6 +1891,30 @@ static void t6_ensure_preferred(struct mct_t6 *t6, struct drm_connector *connect
 		t6_ensure_preferred(t6, connector, 0, 0);	/* any aspect ratio */
 }
 
+static void t6_audio_eld(struct mct_t6 *t6, const struct drm_connector *connector,
+			 bool connected);
+
+/*
+ * A pen display's built-in panel (Wacom DTU-1031AX): only the EDID's own
+ * mode, as j5create's macOS driver does for it (no established modes, no
+ * extra rates). Returns the modes left.
+ */
+static int t6_keep_preferred(struct drm_connector *connector)
+{
+	struct drm_display_mode *mode, *t;
+	int count = 0;
+
+	list_for_each_entry_safe(mode, t, &connector->probed_modes, head) {
+		if (mode->type & DRM_MODE_TYPE_PREFERRED) {
+			count++;
+			continue;
+		}
+		list_del(&mode->head);
+		drm_mode_destroy(connector->dev, mode);
+	}
+	return count;
+}
+
 static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector)
 {
 	struct mct_t6 *t6 = to_t6(mdev);
@@ -1913,11 +1947,14 @@ static int t6_get_modes(struct mct_device *mdev, struct drm_connector *connector
 		drm_warn(connector->dev, "could not read the monitor's EDID, offering the adapter's modes\n");
 	}
 	drm_edid_connector_update(connector, edid);
+	t6_audio_eld(t6, connector, edid);
 	count = drm_edid_connector_add_modes(connector);
 	t6_monitor_limits(t6, connector, edid);
 	drm_edid_free(edid);
 	if (!count)
 		return t6_add_table_modes(t6, connector);
+	if (t6->panel_only)
+		return t6_keep_preferred(connector);
 
 	list_for_each_entry(mode, &connector->probed_modes, head) {
 		if (mode->type & DRM_MODE_TYPE_PREFERRED && !w) {
@@ -1957,6 +1994,8 @@ static int t6_detect(struct mct_device *mdev)
 		return connector_status_unknown;
 	if (t6->hpd_events)
 		t6->hpd_state = ret;
+	if (ret != 1)
+		t6_audio_eld(t6, &mdev->conn, false);
 	return ret == 1 ? connector_status_connected : connector_status_disconnected;
 }
 
@@ -2898,6 +2937,88 @@ static const struct snd_pcm_ops t6_audio_ops = {
 };
 
 /*
+ * The monitor's audio capabilities for userspace: an "ELD" control (what
+ * HDMI sound drivers offer; PipeWire names the output after the monitor)
+ * and a jack control, plugged while a monitor whose EDID has audio is
+ * connected. Kept from the last EDID read (t6_get_modes) and cleared on
+ * disconnect (t6_detect).
+ */
+static void t6_audio_eld(struct mct_t6 *t6, const struct drm_connector *connector,
+			 bool connected)
+{
+	struct snd_card *card = t6->aud.card;
+	unsigned long flags;
+	int size = connected ? drm_eld_size(connector->eld) : 0;
+	bool changed;
+
+	if (!card)
+		return;
+	if (size > MAX_ELD_BYTES || size <= DRM_ELD_HEADER_BLOCK_SIZE)
+		size = 0;
+	spin_lock_irqsave(&t6->aud.lock, flags);
+	changed = size != t6->aud.eld_size ||
+		  (size && memcmp(t6->aud.eld, connector->eld, size));
+	if (size)
+		memcpy(t6->aud.eld, connector->eld, size);
+	t6->aud.eld_size = size;
+	spin_unlock_irqrestore(&t6->aud.lock, flags);
+	if (!changed)
+		return;
+	snd_ctl_notify(card, SNDRV_CTL_EVENT_MASK_VALUE | SNDRV_CTL_EVENT_MASK_INFO,
+		       &t6->aud.eld_kctl->id);
+	snd_ctl_notify(card, SNDRV_CTL_EVENT_MASK_VALUE, &t6->aud.jack_kctl->id);
+}
+
+static int t6_eld_info(struct snd_kcontrol *kc, struct snd_ctl_elem_info *info)
+{
+	struct mct_t6 *t6 = snd_kcontrol_chip(kc);
+	unsigned long flags;
+
+	info->type = SNDRV_CTL_ELEM_TYPE_BYTES;
+	spin_lock_irqsave(&t6->aud.lock, flags);
+	info->count = t6->aud.eld_size;
+	spin_unlock_irqrestore(&t6->aud.lock, flags);
+	return 0;
+}
+
+static int t6_eld_get(struct snd_kcontrol *kc, struct snd_ctl_elem_value *v)
+{
+	struct mct_t6 *t6 = snd_kcontrol_chip(kc);
+	unsigned long flags;
+
+	memset(v->value.bytes.data, 0, sizeof(v->value.bytes.data));
+	spin_lock_irqsave(&t6->aud.lock, flags);
+	memcpy(v->value.bytes.data, t6->aud.eld,
+	       min_t(int, t6->aud.eld_size, sizeof(v->value.bytes.data)));
+	spin_unlock_irqrestore(&t6->aud.lock, flags);
+	return 0;
+}
+
+static int t6_jack_get(struct snd_kcontrol *kc, struct snd_ctl_elem_value *v)
+{
+	struct mct_t6 *t6 = snd_kcontrol_chip(kc);
+
+	v->value.integer.value[0] = READ_ONCE(t6->aud.eld_size) > 0;
+	return 0;
+}
+
+static const struct snd_kcontrol_new t6_eld_ctl = {
+	.iface = SNDRV_CTL_ELEM_IFACE_PCM,
+	.name = "ELD",
+	.access = SNDRV_CTL_ELEM_ACCESS_READ | SNDRV_CTL_ELEM_ACCESS_VOLATILE,
+	.info = t6_eld_info,
+	.get = t6_eld_get,
+};
+
+static const struct snd_kcontrol_new t6_jack_ctl = {
+	.iface = SNDRV_CTL_ELEM_IFACE_CARD,
+	.name = "HDMI/DP,pcm=0 Jack",
+	.access = SNDRV_CTL_ELEM_ACCESS_READ | SNDRV_CTL_ELEM_ACCESS_VOLATILE,
+	.info = snd_ctl_boolean_mono_info,
+	.get = t6_jack_get,
+};
+
+/*
  * The volume node (node 0 of engine 0): `40 23` with a channel mask, 7 zero
  * bytes and 8 s32 values, left and right first. Windows' dB table makes the
  * scale linear in amplitude (value / max); 0 is silence. The adapter has no
@@ -3099,6 +3220,11 @@ static void t6_audio_init(struct mct_t6 *t6, struct usb_interface *intf)
 	strscpy(pcm->name, "HDMI", sizeof(pcm->name));
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &t6_audio_ops);
 	snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_VMALLOC, NULL, 0, 0);
+	t6->aud.eld_kctl = snd_ctl_new1(&t6_eld_ctl, t6);
+	t6->aud.jack_kctl = snd_ctl_new1(&t6_jack_ctl, t6);
+	ret = snd_ctl_add(card, t6->aud.eld_kctl) ?: snd_ctl_add(card, t6->aud.jack_kctl);
+	if (ret)
+		goto err_card;
 	t6_audio_read_volume(t6);
 	if (t6->aud.has_vol) {
 		ret = snd_ctl_add(card, snd_ctl_new1(&t6_vol_ctl, t6)) ?:
@@ -3111,6 +3237,11 @@ static void t6_audio_init(struct mct_t6 *t6, struct usb_interface *intf)
 		goto err_card;
 	t6->aud.card = card;
 	drm_info(dev, "HDMI audio: 48 kHz, 16 bit, stereo (sound card %d)\n", card->number);
+	/* the monitor was probed before the card existed */
+	mutex_lock(&dev->mode_config.mutex);
+	t6_audio_eld(t6, &t6->base.conn,
+		     t6->base.conn.status == connector_status_connected);
+	mutex_unlock(&dev->mode_config.mutex);
 	return;
 
 err_card:
@@ -3158,11 +3289,19 @@ static void t6_audio_resume(struct mct_t6 *t6)
 	snd_power_change_state(t6->aud.card, SNDRV_CTL_POWER_D0);
 }
 #else
+static void t6_audio_eld(struct mct_t6 *t6, const struct drm_connector *connector,
+			 bool connected) {}
 static void t6_audio_init(struct mct_t6 *t6, struct usb_interface *intf) {}
 static void t6_audio_fini(struct mct_t6 *t6) {}
 static void t6_audio_suspend(struct mct_t6 *t6) {}
 static void t6_audio_resume(struct mct_t6 *t6) {}
 #endif
+
+/* the USB IDs this driver has been tested with (mct_main.c has all) */
+static bool t6_tested_id(const struct usb_device_id *id)
+{
+	return id->idVendor == 0x0711 && (id->idProduct == 0x5600 || id->idProduct == 0x5601);
+}
 
 static int t6_usb_probe(struct usb_interface *interface, const struct usb_device_id *id)
 {
@@ -3193,10 +3332,18 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	/* refuse look-alikes without the expected endpoints */
 	if (!usb_check_bulk_endpoints(interface, bulk_eps))
 		return -ENODEV;
+	if (!t6_tested_id(id) && !READ_ONCE(untested_ids)) {
+		dev_info(&interface->dev,
+			 "T6 device %04x:%04x hasn't been tested with this driver; to try it, set mct.untested_ids=1 and replug (and please report how it went)\n",
+			 id->idVendor, id->idProduct);
+		return -ENODEV;
+	}
 
 	t6 = devm_drm_dev_alloc(&interface->dev, &t6_drm_driver, struct mct_t6, base.dev);
 	if (IS_ERR(t6))
 		return PTR_ERR(t6);
+	/* the Wacom DTU-1031AX pen display (its own ID or the adapter's) */
+	t6->panel_only = id->idVendor == 0x056a || id->idProduct == 0x5609;
 	dev = &t6->base.dev;
 
 	/* the module parameters are the defaults this device starts with */

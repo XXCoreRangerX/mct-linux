@@ -159,7 +159,7 @@ in
       # uaccess must be tagged before 73-seat-late.rules, so not via extraRules (99-local).
       services.udev.packages = [
         (pkgs.writeTextDir "etc/udev/rules.d/70-mct.rules" ''
-          SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5209|520d|5600|5601", TAG+="uaccess"
+          SUBSYSTEM=="usb", ATTR{idVendor}=="0711", ATTR{idProduct}=="5201|5209|520d|520f|5600|5601", TAG+="uaccess"
         '')
         # per-device settings (and the tablet's brightness) writable for group video
         (pkgs.writeTextDir "etc/udev/rules.d/71-mct-settings.rules" ''

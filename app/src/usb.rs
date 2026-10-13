@@ -17,8 +17,10 @@ pub const VENDOR: &str = "0711";
 
 /// Product IDs the driver handles, and their chip.
 pub const PRODUCTS: &[(&str, Chip)] = &[
+    ("5201", Chip::T2),
     ("5209", Chip::T2),
     ("520d", Chip::T2),
+    ("520f", Chip::T2),
     ("5600", Chip::T6),
     ("5601", Chip::T6),
 ];
