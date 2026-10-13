@@ -1121,5 +1121,5 @@ showed a garbage band ~50 px high at the bottom. After a mode change to
 purple/green and the whole picture looked blocky and rainbow-coloured.
 The adapter's state from the JPEG frames (decoder or colour conversion)
 outlives the driver rebind, so the script now ends by telling the user to
-replug the T6. If the driver ever uses JPEG, it has to know how to bring
+replug the T6 (confirmed: only the replug brought the clean picture back). If the driver ever uses JPEG, it has to know how to bring
 the adapter back to its raw state (untested: `0x86` "reset JPEG engine").
