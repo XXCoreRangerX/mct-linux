@@ -57,11 +57,11 @@ def a16(v):
 
 # ------------------------------------------------------------------ images
 
-def card(w, h, n):
-    """Test card: dark blue, white border, colour bars, grey ramp and n + 1
-    white blocks at the left (which buffer is shown)."""
+def card(w, h, n, bg=(30, 40, 110)):
+    """Test card: dark blue (or bg), white border, colour bars, grey ramp and
+    n + 1 white blocks at the left (which buffer is shown)."""
     img = np.zeros((h, w, 3), np.uint8)
-    img[...] = (30, 40, 110)
+    img[...] = bg
     img[:6], img[-6:], img[:, :6], img[:, -6:] = 255, 255, 255, 255
     bars = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255)]
     bw = (w - 400) // len(bars)
@@ -100,6 +100,7 @@ class Jpeg:
         self.fence = 0
         self.first = True
         self.events = 0
+        self.read_errors = 0
 
     def _payload(self, hdr, data):
         return hdr + data + bytes(1024)                 # Ubuntu daemon: JPEG + 1024 zero bytes
@@ -113,7 +114,8 @@ class Jpeg:
         self.ring = (dest + len(payload) + 0xFFF) & ~0xFFF
         payload = bytearray(payload)
         payload[0x2F] = flags
-        self.t.send(bytes(payload), dest=dest)
+        # every fragment but the last marked "more follows", as for raw frames
+        self.t.send(bytes(payload), dest=dest, more_flag=True)
 
     def flip(self, data, fb, w=W, h=H):
         """Command 3: decode into frame buffer fb and show it."""
@@ -145,8 +147,15 @@ class Jpeg:
             except usb.core.USBTimeoutError:
                 continue
             except usb.core.USBError as e:
+                # pyusb's interrupt reads fail now and then (also in t6_probe
+                # step E): clear the endpoint and go on
+                self.read_errors += 1
                 log(f"  event read error: {e}", console=False)
-                return None
+                try:
+                    self.t.dev.clear_halt(t6dev.EP_ACK)
+                except usb.core.USBError:
+                    pass
+                continue
             self.events += 1
             if len(ev) < 0x14:
                 continue
@@ -180,7 +189,9 @@ def j1(j):
 
 def j2(j):
     log("\n=== J2: decode time at 1080p, one frame at a time, then back to back")
-    contents = (("flat", flat(W, H)), ("test card", card(W, H, 2)), ("noise", noise(W, H)))
+    contents = (("flat grey", flat(W, H)),
+                ("test card on GREEN with 5 white blocks", card(W, H, 4, bg=(20, 110, 40))),
+                ("noise (coloured static)", noise(W, H)))
     results = []
     for name, img in contents:
         for q in (75, 95):
@@ -209,9 +220,8 @@ def j2(j):
             dt = time.perf_counter() - t0
             log(f"  {'':9s}      back to back: {n / dt:6.1f} fps "
                 f"({n * len(data) / dt / 1e6:.1f} MB/s over USB)")
-    ok = ask("Did the LG show the frames (flat grey, the test card, noise) without "
-             "garbage or a black screen at the end?")
-    log(f"RESULT J2: {'pictures OK' if ok else 'pictures NOT OK'}")
+        ok = ask(f"Does the LG show {name} now, without garbage?")
+        log(f"RESULT J2 {name}: {'shown' if ok else 'NOT shown'}")
     return results
 
 
@@ -265,7 +275,7 @@ def main():
         return
     j2(j)
     j3(j)
-    log(f"\n{j.events} interrupt events in total; log: {log_path}")
+    log(f"\n{j.events} interrupt events, {j.read_errors} read errors; log: {log_path}")
 
 
 if __name__ == "__main__":
