@@ -4,64 +4,70 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
-## 0.5.2 (unreleased)
+## 0.6.0 (2026-10-13)
 
-- Both backends list the modes they offer in sysfs (`modes`); the T2 shows
-  its pixel format (`pixel_format`: RGB24, sent as planar RLE). mct_t6
-  0.28.0, mct_t2 0.3.22.
-- MCT Display Manager: a "Modes" list in the Display group; the T2's pixel
-  format; the "Technical details" sections stay open (rows update in place
-  instead of being rebuilt every second); USB classes written out
-  ("Vendor specific (0xff)"). mctctl: `get modes`, modes in `info -v`.
-- mct_t2 0.3.23: software gamma (night light) on the tablet; the lossy
-  mode's tolerance is per colour channel (green N, red 1.5 N, blue 2 N),
-  measured offline to give smaller updates at the same visible error.
-- mct_t2 0.3.24: `motion=half` sends heavy full-screen updates at half
-  resolution, upscaled 2x by the chip (blur instead of streaks), refined
-  once motion stops; in the app as "Half resolution during heavy motion".
-  0.3.25 fixes it staying pixelated (the motion check now compares with the
-  last presented picture); 0.3.26 uses it only when at least 80% of the
-  screen changes, so moving a window doesn't blur the still wallpaper;
-  0.3.27 measures the real size of what changed instead of the full frame;
-  0.3.29 blurs only moving content, per 128x16 tile, and sharpens tiles as
-  soon as they stop moving, so still parts stay sharp and the blurred area
-  can't grow during a drag; 0.3.30 decodes the half-resolution source in
-  spare video memory, so a flip never shows it half-scaled; 0.3.31 fixes
-  a band at the edge of moving areas flickering between blurred and sharp
-  (a half-resolution area grew by a tile row that wasn't redrawn). Half
-  mode stays experimental and off by default.
-- More USB IDs: other DTU-1031X units (`0711:5201`, `520f`; only with the
-  Wacom panel's EDID, since plain T2 adapters share them), and untested
-  Trigger 6 adapters, docks and the Wacom DTU-1031AX behind the new module
-  parameter `untested_ids` (mct_t6 0.29.4, mct_t2 0.3.35).
-- Core: no USB I/O and no allocations in atomic commits any more. The
-  cursor goes out from its own worker (a commit never waits for USB), and
-  the per-mode buffers are allocated in atomic_check, so a lack of memory
-  rejects the mode instead of leaving the display dark (mct_t6 0.29.6).
-- MCT Display Manager and mctctl show the T6's HDMI audio: sound card and
-  ALSA device, format, volume, what the monitor takes, and whether it is
-  playing (sysfs `audio`, `audio_volume`, `audio_sink`, mct_t6 0.29.7).
-- mct_t2 0.3.36 reads the tablet's ID ROM: checksum, version, video
-  memory and orientation in the kernel log, sysfs (`vram_mb`, `id_rom`) and
-  the app.
-- mct_t2 0.3.34: the chip clips a cursor at the right and bottom edges
-  instead of the driver re-uploading a shifted image on every move there.
+Driver versions: mct_t6 0.29.7, mct_t2 0.3.36.
+
+**HDMI audio on the Trigger 6** (mct_t6 0.29)
+- The adapter is an ALSA sound card ("HDMI", 48 kHz, 16-bit stereo
+  playback), tested with `speaker-test` and Spotify through PipeWire, with
+  no drift over long playback. Heard while the display is on. Needs a
+  kernel with ALSA PCM support; without it the module builds without audio.
+- HDMI audio needs at least 112 px of horizontal blanking. The tight
+  timings the driver makes for high refresh rates keep as much as fits
+  (1080p144: 120 px instead of 80, which buzzed), and the driver warns in
+  modes with less.
+- The adapter's volume is the mixer control "PCM Playback Volume" with a
+  "PCM Playback Switch". "ELD" and jack controls give PipeWire the
+  monitor's name and audio formats and whether it is connected.
+- `audio_lead_ms` (default 90) sets how far ahead the adapter is fed.
+- MCT Display Manager and mctctl show it: sound card and ALSA device,
+  state, format, volume and what the monitor takes (sysfs `audio`,
+  `audio_volume`, `audio_sink`).
+
+**Trigger 6**
+- More USB IDs, untested ones (other adapters, docks, the Wacom
+  DTU-1031AX) only with the new module parameter `untested_ids`.
+- JPEG: works from userspace (full frames and partial updates) but is
+  slower than raw frames on USB 3; not in the driver, work in progress
+  ([docs/research/t6-jpeg.md](docs/research/t6-jpeg.md),
+  `tools/t6_jpeg_test.py`).
+
+**Trigger II (the tablet)**
+- Software gamma (night light).
+- The lossy mode's tolerance is per colour channel (green N, red 1.5 N,
+  blue 2 N): smaller updates at the same visible error.
+- The chip clips the cursor at the right and bottom edges (no re-upload
+  of a shifted image on every move there).
+- The ID ROM is read: checksum, version, video memory and orientation in
+  the kernel log, sysfs (`vram_mb`, `id_rom`) and the app.
+- Two more DTU-1031X USB IDs (`0711:5201`, `520f`), driven only after the
+  panel's EDID shows it's the Wacom panel, since plain T2 adapters share
+  them.
+- Experimental, off by default: `motion=half` sends heavy motion at half
+  resolution, upscaled by the chip, per 128x16 tile, sharpened when the
+  motion stops. Several fixes on the way (stuck blur, still parts
+  blurring, a flickering edge band, a photo wallpaper keeping it in half
+  mode); it can still glitch at the edges of translucent windows.
+
+**Core**
+- No USB I/O and no allocations in atomic commits: the cursor goes out from
+  its own worker, and the per-mode buffers are allocated in atomic_check,
+  so a lack of memory rejects the mode instead of leaving the display dark.
+- Both backends list their modes in sysfs (`modes`); the T2 shows its pixel
+  format.
+
+**MCT Display Manager and mctctl**
+- A "Modes" list; the T2's pixel format; the "Technical details" sections
+  stay open (rows update in place); USB classes written out. mctctl:
+  `get modes`, modes in `info -v`.
+
+**Research and tools**
 - T2 protocol corrected and extended from the vendor drivers and captures;
-  hardware upscale, RGB565, YUV 4:2:2 and 512 KiB transfers verified on the
-  tablet with the new `tools/t2_probe.py`. Software gamma tested.
-- T6 HDMI audio verified with `tools/t6_probe.py` (48 kHz stereo), and
-  mct_t6 0.29 adds it as an ALSA sound card ("HDMI", 48 kHz, 16-bit
-  stereo playback), tested with `speaker-test` and Spotify through
-  PipeWire. It is heard only while the display is on, and only cleanly in
-  modes with at least 112 px of horizontal blanking, where HDMI carries
-  audio. The tight timings the driver makes for high refresh rates now keep
-  as much blanking as fits (1080p144 gets 120 px instead of 80), and the
-  driver logs a warning in modes with less. `audio_lead_ms` (default 90) sets how far ahead
-  the adapter is fed. The adapter's volume is the mixer control "PCM
-  Playback Volume" with a "PCM Playback Switch". An "ELD" control and a
-  jack control tell PipeWire the monitor's name and audio capabilities and
-  whether it's connected (mct_t6 0.29.5). Needs a kernel with ALSA PCM support; without it the
-  module builds without audio.
+  `tools/t2_probe.py` checked upscaling, RGB565, YUV, 512 KiB transfers,
+  16 MiB of video memory, cursor clipping and in-band flips on the tablet.
+- `tools/t6_probe.py` (audio, info requests), `tools/t6_audio_clock.sh`
+  (found the blanking limit), `tools/t6_jpeg_test.py`.
 - README: one status table for both chips; 720p at 240 Hz tested.
 
 ## 0.5.1 (2026-10-11)
