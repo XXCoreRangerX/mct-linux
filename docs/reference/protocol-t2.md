@@ -521,6 +521,14 @@ Also on 2026-10-12 (steps l, m, n, p; log
   `fb60` stays `00` (the skipped check t1c would have restored it to `01`).
   A re-init fixes it. `fcf6 = 00/01` (below) already gives a clean
   off/on, so this adds nothing for now.
+- **Mac "monitor on" with `fb60=01` restored too (z1b, log
+  `captures/t2_probe-20261013-150137.log`): backlight on, no picture**, and
+  the video engine stalled: each 16 KiB `0x12` cursor upload afterwards
+  took ~30 s instead of milliseconds, and `fc6f` read back `00` after `30`
+  was written. Only the init recovered it. **Don't use the Mac power
+  sets on this tablet**; `fcf6 = 00/01` is the clean screen off/on. The
+  second cursor slot's address unit (z2) couldn't be judged without a
+  picture; not worth more probing.
 - **Cursor (u): edge clipping in hardware works** (u3-u5: negative x, y
   and both via `fe44/fe45` and `fe36 = 4f/47`), so the driver's shifted
   re-upload for cursors past the top/left edge could go. A **second shape
