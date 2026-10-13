@@ -77,7 +77,7 @@ MODULE_PARM_DESC(audio_lead_ms, "HDMI audio: how far ahead of playback the adapt
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	29
-#define DRIVER_PATCH	6
+#define DRIVER_PATCH	7
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -2400,6 +2400,93 @@ static ssize_t all_modes_store(struct device *dev, struct device_attribute *attr
 }
 static DEVICE_ATTR_RW(all_modes);
 
+/* HDMI audio: the format the adapter plays, "-" without a sound card */
+static ssize_t audio_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t6 *t6 = t6_from_dev(dev);
+
+	if (!t6)
+		return -ENODEV;
+#ifdef MCT_T6_AUDIO
+	if (t6->aud.card)
+		return sysfs_emit(buf, "48000 Hz, 16 bit, 2 channels, card %d\n",
+				  t6->aud.card->number);
+#endif
+	return sysfs_emit(buf, "-\n");
+}
+static DEVICE_ATTR_RO(audio);
+
+/* left, right of the adapter's volume (0 to max) and "muted"; "-" if none */
+static ssize_t audio_volume_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t6 *t6 = t6_from_dev(dev);
+
+	if (!t6)
+		return -ENODEV;
+#ifdef MCT_T6_AUDIO
+	if (t6->aud.card && t6->aud.has_vol)
+		return sysfs_emit(buf, "%d %d of %d%s\n", READ_ONCE(t6->aud.vol[0]),
+				  READ_ONCE(t6->aud.vol[1]), t6->aud.vol_max,
+				  READ_ONCE(t6->aud.unmuted) ? "" : ", muted");
+#endif
+	return sysfs_emit(buf, "-\n");
+}
+static DEVICE_ATTR_RO(audio_volume);
+
+/*
+ * The monitor's audio from its ELD: name, then the formats it takes, e.g.
+ * "27GN7: LPCM 2 ch 32/44.1/48 kHz 16/20/24 bit"; "-" without one.
+ */
+static ssize_t audio_sink_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	static const char * const rates[] = { "32", "44.1", "48", "88.2", "96", "176.4", "192" };
+	static const char * const bits[] = { "16", "20", "24" };
+	struct mct_t6 *t6 = t6_from_dev(dev);
+	u8 eld[MAX_ELD_BYTES];
+	int size = 0, len, n, i, j, mnl;
+	const u8 *sad;
+
+	if (!t6)
+		return -ENODEV;
+#ifdef MCT_T6_AUDIO
+	if (t6->aud.card) {
+		unsigned long flags;
+
+		spin_lock_irqsave(&t6->aud.lock, flags);
+		size = t6->aud.eld_size;
+		memcpy(eld, t6->aud.eld, size);
+		spin_unlock_irqrestore(&t6->aud.lock, flags);
+	}
+#endif
+	if (!size)
+		return sysfs_emit(buf, "-\n");
+	mnl = drm_eld_mnl(eld);
+	len = sysfs_emit(buf, "%.*s:", mnl, eld + DRM_ELD_MONITOR_NAME_STRING);
+	n = drm_eld_sad_count(eld);
+	sad = drm_eld_sad(eld);
+	for (i = 0; sad && i < n; i++, sad += 3) {
+		int fmt = (sad[0] >> 3) & 0xf;
+
+		len += sysfs_emit_at(buf, len, "%s %s %d ch", i ? "," : "",
+				     fmt == 1 ? "LPCM" : "coded", (sad[0] & 7) + 1);
+		for (j = 0; j < ARRAY_SIZE(rates); j++)
+			if (sad[1] & BIT(j))
+				len += sysfs_emit_at(buf, len, "%s%s", j && (sad[1] & (BIT(j) - 1)) ?
+						     "/" : " ", rates[j]);
+		len += sysfs_emit_at(buf, len, " kHz");
+		if (fmt == 1)
+			for (j = 0; j < ARRAY_SIZE(bits); j++)
+				if (sad[2] & BIT(j))
+					len += sysfs_emit_at(buf, len, "%s%s",
+							     sad[2] & (BIT(j) - 1) ? "/" : " ",
+							     bits[j]);
+		if (fmt == 1)
+			len += sysfs_emit_at(buf, len, " bit");
+	}
+	return len + sysfs_emit_at(buf, len, "\n");
+}
+static DEVICE_ATTR_RO(audio_sink);
+
 static struct attribute *t6_attrs[] = {
 	&dev_attr_updates.attr,
 	&dev_attr_bytes.attr,
@@ -2419,6 +2506,9 @@ static struct attribute *t6_attrs[] = {
 	&dev_attr_pixel_format.attr,
 	&dev_attr_format.attr,
 	&dev_attr_all_modes.attr,
+	&dev_attr_audio.attr,
+	&dev_attr_audio_volume.attr,
+	&dev_attr_audio_sink.attr,
 	NULL
 };
 

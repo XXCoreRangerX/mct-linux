@@ -367,6 +367,51 @@ fn pen(root: &Path, interface: &str, out: &mut Vec<Section>) {
     }
 }
 
+/// The T6's HDMI audio: its ALSA card, format, volume and what the monitor
+/// takes (mct_t6 0.29.7 and later), and whether it is playing.
+fn audio(display: &Display, root: &Path, out: &mut Vec<Section>) {
+    let Some(mct) = display.device.as_ref().map(|d| d.dir().to_path_buf()) else {
+        return;
+    };
+    let Some(format) = read(&mct.join("audio")) else {
+        return;
+    };
+    let (format, card) = match format.rsplit_once(", card ") {
+        Some((f, c)) => (f.to_string(), c.parse::<u32>().ok()),
+        None => (format, None),
+    };
+    let mut s = Builder::new();
+    if let Some(n) = card {
+        let id = read(&root.join(format!("sys/class/sound/card{n}/id")));
+        s.add(
+            "audio_card",
+            "Sound card",
+            Some(match &id {
+                Some(id) => format!("{id} (card {n}, ALSA device hw:{id},0)"),
+                None => format!("card {n}"),
+            }),
+        );
+        let status = read(&root.join(format!("proc/asound/card{n}/pcm0p/sub0/status")));
+        s.add(
+            "audio_state",
+            "State",
+            status.map(|st| {
+                if st.contains("RUNNING") {
+                    "playing".to_string()
+                } else if st == "closed" {
+                    "idle".to_string()
+                } else {
+                    "open".to_string()
+                }
+            }),
+        );
+    }
+    s.add("audio_format", "Format", Some(format));
+    s.add("audio_volume", "Volume", read(&mct.join("audio_volume")));
+    s.add("audio_sink", "Monitor audio", read(&mct.join("audio_sink")));
+    s.done("audio", "HDMI audio", out);
+}
+
 fn platform_text(p: &str) -> String {
     match p {
         "lite" => "Lite (48 MHz clock)".into(),
@@ -486,6 +531,9 @@ pub fn identify(display: &Display, info: Option<&Info>) -> Vec<Section> {
     }
     if display.chip == Chip::T2 {
         pen(root, &display.interface, &mut out);
+    }
+    if display.chip == Chip::T6 {
+        audio(display, root, &mut out);
     }
     details(display, info, &dir, &mut out);
     out

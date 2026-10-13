@@ -94,7 +94,10 @@ Besides the driver's files the app reads the USB device (`idVendor`,
 `idProduct`, `manufacturer`, `product`, `serial`, `bcdDevice`, `version`,
 `speed`, `busnum`/`devnum`, `bMaxPower`), the monitor's EDID from
 `/sys/class/drm/<connector>/edid` (maker, name, product code, serial, date,
-size), and for the tablet the Wacom pen digitizer on the same hub. The
+size), for the tablet the Wacom pen digitizer on the same hub, and for the
+T6 its HDMI audio (the driver's `audio`, `audio_volume` and `audio_sink`,
+the card's id from `/sys/class/sound/cardN/id` and whether it plays from
+`/proc/asound/cardN/pcm0p/sub0/status`). The
 product name comes from the board name (table `BOARDS` in `app/src/ident.rs`)
 or the USB IDs. All of it shows in the window's lower groups, in
 `mctctl info -v` / `list -v`, and in the About dialog's Troubleshooting

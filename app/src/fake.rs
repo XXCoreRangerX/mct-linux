@@ -196,6 +196,9 @@ pub const T6_A_FILES: &[(&str, &str)] = &[
     ("recoveries", "0"),
     ("format", "auto"),
     ("all_modes", "0"),
+    ("audio", "48000 Hz, 16 bit, 2 channels, card 4"),
+    ("audio_volume", "31 31 of 31"),
+    ("audio_sink", "27GN7: LPCM 2 ch 32/44.1/48 kHz 16/20/24 bit"),
 ];
 
 pub const T6_B_FILES: &[(&str, &str)] = &[

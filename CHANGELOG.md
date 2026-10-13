@@ -38,6 +38,9 @@ drm_info and in the kernel log at probe).
   cursor goes out from its own worker (a commit never waits for USB), and
   the per-mode buffers are allocated in atomic_check, so a lack of memory
   rejects the mode instead of leaving the display dark (mct_t6 0.29.6).
+- MCT Display Manager and mctctl show the T6's HDMI audio: sound card and
+  ALSA device, format, volume, what the monitor takes, and whether it is
+  playing (sysfs `audio`, `audio_volume`, `audio_sink`, mct_t6 0.29.7).
 - mct_t2 0.3.36 reads the tablet's ID ROM: checksum, version, video
   memory and orientation in the kernel log, sysfs (`vram_mb`, `id_rom`) and
   the app.
