@@ -1153,3 +1153,21 @@ after a replug).** Event reads in a background thread with 2 s timeouts:
   exactly like mct_t6 (session 7 rectangle writes, empty flip) looked
   right, so this run left no bad state. The tint after the first run
   probably came from the wrapping ring, not from JPEG itself.
+
+**JPEG, third round (2026-10-13, `t6_jpeg-20261013-190616.log`).**
+- J3 into the buffer that is really hidden left the screen unchanged, and
+  the timings repeated exactly (29 / 71 / 120 / 329 ms).
+- Request `40 86` ("reset JPEG engine" in MCT's t6.h) **stalls on firmware
+  17091401**: it doesn't exist here, as in the newer image's dispatcher.
+  The decoder worked normally right afterwards, and the driver-style clean
+  check was clean.
+- With fixed bitstream slots and event reads in a thread (5 read errors
+  in the whole run), the JPEG path behaves.
+
+What's known for a driver now:
+- full frames (command 3) and partial updates (command 7 + empty flip),
+  3 fixed slots, no "more" flag;
+- the decode costs: ~12 ms (simple) to ~30 ms (detailed) at 1080p, and
+  much more at large sizes or for very detailed content;
+- no reset request: recovery has to avoid wedging (no ring wrap with the
+  reset flag), or the device has to be power-cycled.
