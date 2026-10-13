@@ -67,7 +67,7 @@ MODULE_PARM_DESC(half_motion, "Default for new devices: send full-screen updates
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	30
+#define DRIVER_PATCH	31
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -693,9 +693,14 @@ static int t2_present_tiles(struct mct_t2 *t2, bool lossless, int back, int *use
 			ret = t2_send_half_rect(t2, t2->snap, base, &rects[i], sent, &area);
 			t2_mask_add(blur, &area);
 		}
-		/* everything else exact, also what a half rect grew over */
+		/*
+		 * Everything else exact, also what a half rect grew over: an odd
+		 * number of tiles wide and of tile rows high grows by a row (the
+		 * decode needs whole 1024-pixel lines), and that row was left
+		 * blurred in this buffer only, so it flickered with each flip.
+		 */
 		for (ty = 0; ty < T2_TILE_ROWS_ALL; ty++)
-			need[ty] &= ~half[ty];
+			need[ty] = (need[ty] | blur[ty]) & ~half[ty];
 	} else if (!lossless && READ_ONCE(t2->lossy) > 0) {
 		tol = READ_ONCE(t2->lossy);
 	}

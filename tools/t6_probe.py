@@ -65,7 +65,10 @@ REQ_AUD_ENGINE_CAPS, REQ_AUD_NODE_CAPS, REQ_AUD_NODE_VALUE, REQ_AUD_GET_STATE, R
     0xA1, 0xA2, 0xA3, 0xA4, 0xA5
 REQ_VERSION, REQ_FUNC_ID, REQ_SECTION = 0xB0, 0xB1, 0xB3
 
-FORBIDDEN = {0x01: "SPI ROM write", 0x13: "write ROM data", 0x30: "hardware reset"}
+FORBIDDEN = {0x01: "SPI ROM write", 0x13: "write ROM data", 0x30: "hardware reset",
+             # firmware dispatcher (lab captures/t6-research/feature-gaps.md)
+             0x15: "test mode, rewrites a flash sector", 0x33: "serial number write",
+             0x40: "internal firmware message"}
 ALLOWED_IN = {REQ_EDID, REQ_I2C_READ, REQ_STATUS, REQ_MODES, REQ_AUD_ENGINE_CAPS,
               REQ_AUD_NODE_CAPS, REQ_AUD_NODE_VALUE, REQ_AUD_GET_STATE, REQ_AUD_FORMATS,
               REQ_VERSION, REQ_FUNC_ID, REQ_SECTION}

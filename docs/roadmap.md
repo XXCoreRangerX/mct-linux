@@ -1,9 +1,43 @@
-# Roadmap and status (2026-10-12, mct_t6 0.28.0, mct_t2 0.3.23)
+# Roadmap and status (2026-10-13, mct_t6 0.29.3, mct_t2 0.3.31)
 
 > **Status**: updated as work goes on.
 
 Where the driver stands against the vendor drivers and the chips, and what is
 left to do. Percentages are estimates, not a checklist score.
+
+## Next up (2026-10-13)
+
+In order. First the test queue (needs the user and the devices), then the
+work from the research of 2026-10-12/13. Sources are lab reports in
+`captures/`; details in the numbered items further down.
+
+### 1. Test queue (built, not yet tested)
+
+| # | Device | Test | Expect |
+|---|---|---|---|
+| 1 | both | rebuild, load with `insmod` from `/run/current-system` | mct_t6 0.29.3, mct_t2 0.3.31. **Done** |
+| 2 | T6 + LG | 1080p144 (now 120 px blanking): picture, then `speaker-test` | stable picture, clean tone. **Done 2026-10-13: pass** |
+| 3 | T6 + LG | volume: `amixer -c JUA254H set PCM 31 / 15 / 0`, mute/unmute | 15 clearly quieter, 0 silent (first `40 23` on the 5600). **Done 2026-10-13: pass** |
+| 4 | T6 | long playback (an hour of music) | no crackle or growing delay (drift) |
+| 5 | tablet | half-resolution motion: drag windows | no flickering band at the edges (0.3.31 fix) |
+| 6 | tablet | `tools/t2_probe.py --steps q,r,s,t,u,v,x`, then `--steps w` alone | q hardware gamma, r scaler-done signal, s 16 MiB VRAM, t power states, u cursor shapes/clipping, v `0x16` flip, x backlight GPIO, w EP2 timeout |
+
+### 2. Then, by value
+
+| # | Work | From | Size |
+|---|---|---|---|
+| 1 | Act on the probe results: hardware gamma (q), real backlight off (x), 16 MiB layout (s), cursor shapes / hardware clipping (u), in-band flips (v), timeout recovery (w); if the half-mode edges still glitch, the scaler-race probes P1-P5 | `captures/t2-research/scaler-sync.md`, `wacom-and-t2-devices.md` | M |
+| 2 | More USB IDs: T2 `0711:5200-520f` (DTU-1031X seen as `5201`, `520f`), identify by ID ROM/EDID; T6 PID range + interface class (`0711:5600-560b`, `19ff:560b-560e`, `03f0:0182`), untested ones opt-in; DTU-1031AX (`0711:5609`, maybe `056a:039f` interface 0) with its quirk (no rotation, EDID's own mode only) | `captures/scout/web-research-2026-10-13.md`, `captures/t2-research/wacom-and-t2-devices.md` | S |
+| 3 | HDMI audio extras: ELD and jack controls from the connector's EDID; optional short prefill on start | `captures/t6-research/audio-analysis.md` | S |
+| 4 | T2: read the ID ROM properly (checksum bytes 4/5, version 0x16-0x18, GPIO map 0x1a-0x1f, 180° flag, EDID) | `wacom-and-t2-devices.md` | S-M |
+| 5 | T6 software rotation in the conversion step (no hardware rotation in this firmware) | `captures/t6-research/feature-gaps.md` | M |
+| 6 | T6 probes: read-only info `c0 b2` (serial, MAC), `c0 8a`, `c0 83`, `c0 41`; windowed flip (bytes 0x24-0x2b, letterbox without a mode set); YUV444 surface formats 0x11/0x12/0x15; timing flag bit 0 "custom" | `feature-gaps.md`, web research | S each |
+| 7 | Upstream readiness against what reviewers asked of drm/trigger5 and appletbdrm (no sleeping USB I/O in atomic paths, no allocations in the update path, damage clips in framebuffer coordinates, the damage-helper rework) | web research | M |
+| 8 | T6 JPEG path, phase 0: measure the JUA254's decode speed from userspace; then decide (USB 2 / hubs only, unless it beats raw). Recipe: lvalen91/JUA254H---Fedora, Tetra (FB_DIRECT partials, not CLIP_PRIMARY); our NV12 UV plane must start at pitch x align16(h) for the decoder | `captures/t6-research/jpeg-path.md`, `third_party/t6-sources/web-2026-10-13/` | S, then L |
+| 9 | Upstream submissions outside the kernel: libwacom DTU-1031X size 223 x 125 mm and a DTU-1031AX entry; usb.ids entries | `wacom-and-t2-devices.md` | S |
+
+Never send: T2 `0x1a`, `0x1c`; T6 `0x01`, `0x13`, `0x30`, `0x15`, `0x33`,
+`0x40`, bulk signature 5; no USB resets (see "Rules that stay").
 
 ## Status
 
@@ -80,26 +114,66 @@ writeback, a T5 backend now). Its top 10, not yet ordered with the user:
 1. **T6 HDMI audio.** ~~The JUA254 most likely has it~~: it works
    (2026-10-12, `tools/t6_probe.py`, 48 kHz stereo heard on the LG's
    jack). ~~Next: ALSA playback in the module (L), sharing the bulk endpoint
-   with the frames.~~ EDIT (2026-10-12): in mct_t6 0.29, working (clean up
+   with the frames.~~ EDIT (2026-10-12): in mct_t6 0.29, working (~~clean up
    to 297 MHz pixel clock; above, it buzzes, which looks like a firmware
-   limit).
-   Left: the volume control (node 0, `40 23`), drift correction if the
-   adapter sends audio events, and starting audio when the display is off.
-2. **DDC/CI through the T6** (firmware I2C requests `0x81`/`0x02`): monitor
-   brightness and input from ddcutil. Reads first, on the LG only (S to M).
+   limit~~ EDIT (2026-10-12): it needs 112 px of horizontal blanking; the
+   driver's modes now keep that where they can).
+   Left: ~~the volume control (node 0, `40 23`)~~ (EDIT 2026-10-12: in
+   0.29.3, to test), ~~drift correction if the adapter sends audio events~~
+   (EDIT 2026-10-12: it doesn't report progress, and no vendor corrects
+   drift), and starting audio when the display is off. Possible: ELD and
+   jack controls from the connector's EDID.
+2. ~~**DDC/CI through the T6** (firmware I2C requests `0x81`/`0x02`): monitor
+   brightness and input from ddcutil. Reads first, on the LG only (S to M).~~
+   EDIT (2026-10-13): closed. The JUA254H firmware has no case for these
+   requests (lab `captures/t6-research/feature-gaps.md`).
+   Instead: **software rotation** in mct_t6's conversion step (the T6
+   firmware has no hardware rotation, and the vendors rotate in software
+   or leave it to the OS), useful for portrait monitors (M).
 3. **Cursor independent of `io_lock`:** no cursor stutter during large
    updates (S to M; already in the edge-case list below).
 4. **T2 resync as a work item** (M; below).
 5. **T6 buffers allocated in `atomic_check`** (M; below; also what upstream
    review asked of drm/trigger5).
 6. **Upstream readiness:** checkpatch, sparse, KUnit tests for the PLL,
-   colour conversion and RLE, a CI build against drm-next (M).
+   colour conversion and RLE, a CI build against drm-next (M). EDIT
+   (2026-10-13): review points raised on drm/trigger5 and appletbdrm: no
+   sleeping USB I/O in atomic_update, atomic_enable or commit_tail; no
+   allocations in the update path; damage clips in framebuffer
+   coordinates. Thomas Zimmermann's damage-helper rework may change how
+   mct_damage_rows() must read clips (lab
+   `captures/scout/web-research-2026-10-13.md`).
 7. **Distribution packages:** AUR, Fedora COPR, a .deb (S to M).
 8. **More T6 USB IDs behind feature checks** (untested ones opt-in), and
-   the Wacom DTU-1031AX, a T6 device with an unknown USB ID (S).
+   the Wacom DTU-1031AX, a T6 device with ~~an unknown USB ID~~ EDIT
+   (2026-10-13): USB ID `0711:5609` (MCT's firmware image and `t6sta.inf`;
+   T6-688SL in the FCC photos; pen `056a:039f`). j5create's macOS driver
+   turns off rotation and the EDID's extra modes for it (lab
+   `captures/t2-research/wacom-and-t2-devices.md`) (S).
+   EDIT (2026-10-13), more IDs (lab `captures/scout/web-research-2026-10-13.md`,
+   checked against the sources):
+   - T2: the DTU-1031X is also `0711:5201` and `0711:520f` (Linux Hardware
+     Database); mct_t2 matches only `5209`/`520d`. The PID comes from the
+     ID ROM, so match `0x5200-0x520f` and identify the device by ROM/EDID.
+   - T6: the firmware sets the PID and it changes with reflashing (the
+     U3-A8613 is `5606` with 2019 firmware, `5601` with 2024). Seen:
+     `0711:5600-5609`, `0711:560b` (Mobile Pixels Trio Max, Tetra),
+     `19ff:560b-560e` (Insignia, Platinum), `03f0:0182` (probably the
+     HP Engage 6.6" display). The DTU-1031AX's display driver binds
+     `056a:039f` interface 0 (TrgIdd64.inf), so the retail tablet may be
+     a single Wacom-ID device. Match a PID range plus interface class.
+   - Experiment: timing entry flag bit 0 = "custom timing" (Tetra driver,
+     MIT); mct sends 0. Possibly relevant for modes not in the chip's
+     table.
 9. **Upstream the two niri patches** (S, review time).
 10. **The userspace JPEG path** (L): measure decode speed first; it helps
-    full-screen motion at large sizes and USB 2 links.
+    ~~full-screen motion at large sizes and~~ USB 2 links (and shared hubs).
+    EDIT (2026-10-12): research (lab `captures/t6-research/jpeg-path.md`):
+    larger modes are blocked by the ~340 MHz pixel clock, not USB; the
+    decoder looks like ~100-135 Mpx/s (Windows capture of a 5601), slower
+    than raw NV12 over USB 3 at large sizes. Plan: off-by-default helper
+    interface, kernel keeps policy and falls back to raw; phase 0 is a decode
+    speed measurement on the JUA254.
 
 Also new: the T6 second output can be worked out offline from cyrozap's
 JUA365/JCD543 captures (plan an idle keepalive, as two other projects needed
@@ -133,9 +207,12 @@ Later:
     decodes; the host has to encode, which can't live in the kernel driver
     (no in-kernel JPEG encoder, CPU heavy, wouldn't be accepted upstream).
     MCT's Ubuntu driver does it in userspace: EVDI virtual display +
-    libjpeg-turbo. Where it would help on USB 3: full-screen video/games at
+    libjpeg-turbo. ~~Where it would help on USB 3: full-screen video/games at
     large sizes (3440x1440 NV12 full frames top out around 48 fps; JPEG
-    could reach 60). Options: an EVDI-based mode like wacom-t2d, or a path where
+    could reach 60).~~ EDIT (2026-10-12): probably not on USB 3: the
+    decoder (~100-135 Mpx/s estimated) is slower than raw NV12 there at
+    large sizes, and modes above ~340 MHz are out of reach anyway; see
+    item 10. Options: an EVDI-based mode like wacom-t2d, or a path where
     the kernel driver hands frames to a userspace encoder; a GPU JPEG
     encoder through VA-API where available.
   - On USB 2 links, JPEG is what keeps the vendor drivers usable.
@@ -208,3 +285,6 @@ tried 5 times, 200 ms apart, and a failure is logged.
 - Quality, the colour modes and the auto mode are not to get worse for speed.
 - Mainline-friendly: no codecs in the kernel driver.
 - One thing talks to a T6 at a time; never USB-reset a stuck chip.
+- Never send requests that write flash or EEPROM or reset the chip: T2
+  `0x1a`, `0x1c`; T6 `0x01`, `0x13`, `0x30`, `0x15` (test mode), `0x33`
+  (serial write), `0x40` (internal message), bulk signature 5.

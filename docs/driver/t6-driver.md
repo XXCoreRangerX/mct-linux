@@ -24,8 +24,10 @@ links get smaller writes and modes up to 2048 wide.
 a monitor is connected, the last EDID read is used again) and adds:
 
 - extra refresh rates for the preferred size (up to 1080p), within the
-  monitor's range, pixel clock and line rate: CVT reduced blanking where it
-  fits, a tighter reduced blanking otherwise;
+  monitor's range, pixel clock and line rate: CVT reduced blanking (160 px
+  horizontal blanking) where it fits, otherwise a tighter reduced blanking
+  with as much horizontal blanking as fits, 152 down to 80 px (HDMI audio
+  needs 112 px; 1080p144 gets 120 px);
 - when the monitor's preferred mode is out of reach: the same size with
   reduced blanking at the highest rate that works, the highest rate where
   YUV 4:4:4 fits the scanout (a nearby standard rate becomes the default),
@@ -109,14 +111,22 @@ that fails, the display still works.
   pace playback itself.
 
 Audio is heard only while the display is on (HDMI carries it in the video
-signal). With the display off, playback runs but nothing is heard. In
-modes above 297 MHz pixel clock it buzzes (tested: clean at 1080p 60, 75
-and 120 Hz, buzzing at 1080p144, 333 MHz). The adapter's firmware sets up
-the HDMI audio clock, so the driver can't fix it; it logs once per mode
-when a stream starts in such a mode, or with the display off. The lead
+signal). With the display off, playback runs but nothing is heard. It
+needs at least 112 px of horizontal blanking, where HDMI carries audio
+(tested at 1080p120: 104 px buzzes, 112 px is clean; the pixel clock
+doesn't matter, 333 MHz with 280 px is clean). The driver's modes keep
+that much where it fits under the adapter's 340 MHz; when a stream
+starts in a mode with less, or with the display off, it logs it once per
+mode. The lead
 is the module parameter `audio_lead_ms` (default 90, 20-500, read at
-stream start). The volume node
-is not exposed yet; use the system's software volume.
+stream start).
+
+Since 0.29.3 the adapter's volume node is the mixer controls "PCM Playback
+Volume" (stereo, 0-31, a linear scale from silence to 0 dB, as in
+Windows' table) and "PCM Playback Switch". Both are read from the adapter
+at probe (`a2`, `a3`); the adapter keeps them until it loses power. A
+change sends `40 23`. Muting sends 0, since there is no mute node. The
+volume is sent again on resume.
 
 ## Cursor
 

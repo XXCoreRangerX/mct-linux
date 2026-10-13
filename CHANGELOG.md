@@ -26,7 +26,9 @@ drm_info and in the kernel log at probe).
   0.3.29 blurs only moving content, per 128x16 tile, and sharpens tiles as
   soon as they stop moving, so still parts stay sharp and the blurred area
   can't grow during a drag; 0.3.30 decodes the half-resolution source in
-  spare video memory, so a flip never shows it half-scaled.
+  spare video memory, so a flip never shows it half-scaled; 0.3.31 fixes
+  a band at the edge of moving areas flickering between blurred and sharp
+  (a half-resolution area grew by a tile row that wasn't redrawn).
 - T2 protocol corrected and extended from the vendor drivers and captures;
   hardware upscale, RGB565, YUV 4:2:2 and 512 KiB transfers verified on the
   tablet with the new `tools/t2_probe.py`. Software gamma tested.
@@ -34,9 +36,12 @@ drm_info and in the kernel log at probe).
   mct_t6 0.29 adds it as an ALSA sound card ("HDMI", 48 kHz, 16-bit
   stereo playback), tested with `speaker-test` and Spotify through
   PipeWire. It is heard only while the display is on, and only cleanly in
-  modes up to 297 MHz pixel clock (1080p120 yes, 1080p144 buzzes; the
-  driver logs a warning). `audio_lead_ms` (default 90) sets how far ahead
-  the adapter is fed. Needs a kernel with ALSA PCM support; without it the
+  modes with at least 112 px of horizontal blanking, where HDMI carries
+  audio. The tight timings the driver makes for high refresh rates now keep
+  as much blanking as fits (1080p144 gets 120 px instead of 80), and the
+  driver logs a warning in modes with less. `audio_lead_ms` (default 90) sets how far ahead
+  the adapter is fed. The adapter's volume is the mixer control "PCM
+  Playback Volume" with a "PCM Playback Switch". Needs a kernel with ALSA PCM support; without it the
   module builds without audio.
 - README: one status table for both chips; 720p at 240 Hz tested.
 

@@ -1123,6 +1123,26 @@ class RegRestore:
                 + ("; re-run the init if they still differ" if self.reinit else "")]
 
 
+class RegBits:
+    """Read one register, write it back with only some bits changed
+    ((value & ~clear) | set, one EP3 02 write), read back. For lines that
+    share a register with others (step x: feb1 bit 6, not bits 0-1)."""
+    ep = 3
+
+    def __init__(self, name, reg, clear=0, set_=0):
+        self.name, self.reg, self.clear, self.set = name, reg, clear, set_
+
+    def write(self, cur):
+        v = (cur & ~self.clear & 0xFF) | self.set
+        return cmd_wreg(f"{self.name}: {self.reg:04x} {cur:02x} -> {v:02x}", self.reg, v)
+
+    def preview(self, timeout_ms):
+        return [f"  EP3  {self.name}",
+                f"       read {self.reg:04x}, write it back with bits {self.clear:#04x} cleared "
+                f"and {self.set:#04x} set (02 00 01 {self.reg >> 8:02x} {self.reg & 0xFF:02x} "
+                "<value>), health check, read back"]
+
+
 class FwRead:
     """EP3 0x91 <reg> <len16>: read an MC8032 ("firmware") register, the Mac
     driver's T2_readFirmware (FUN_10004280d; it reads register 0, 2 bytes, as
@@ -1334,6 +1354,39 @@ def step_t(opt):
     return cmds, f"PASS = {T_PIC} (the picture for the power tests)", restore, checks
 
 
+# --- step x: the ID ROM's "light" GPIO (lab captures/t2-research/
+# wacom-and-t2-devices.md): ROM byte 0x1f = 01 gives bank 2 bit 6 (feb0
+# direction, feb1 data) function 1, "light" in both vendor drivers (macOS
+# T2_lightOn, Windows DelayLight). Windows' init holds it low (feb1=b7) and
+# ends with it high (feb1=f7).
+
+X_REGS = [0xfeb0, 0xfeb1]
+X_LIGHT = 0x40
+
+
+def step_x(opt):
+    img = quads(BOX_W, BOX_H)
+    cmds = prep(img) + [cmd_rle("test box (known-good 0x13)", FB_B, TEST_VX, BOX_VY, BOX_W,
+                                BOX_H, img),
+                        RegRead("x: GPIO bank 2 at the start (kept for the restore)", X_REGS,
+                                save=True)]
+    restore = [RegRestore("restore feb1 and feb0 to the values read at the start",
+                          [0xfeb1, 0xfeb0], reinit=True), ReinitIfFailed()]
+    checks = [
+        Check("x1", [RegBits("x1: light line low (feb0 bit 6 = output)", 0xfeb0, set_=X_LIGHT),
+                     RegBits("x1: light line low (feb1 bit 6 = 0)", 0xfeb1, clear=X_LIGHT),
+                     RegRead("x1: after", X_REGS)],
+              "PASS = the panel goes dark: backlight off (look at an angle: is the picture "
+              "faintly there?) or black. Write in the note exactly what you see. FAIL = no "
+              "change at all (then the line is wired to something else on this board)"),
+        Check("x2", [RegBits("x2: light line high (feb1 bit 6 = 1)", 0xfeb1, set_=X_LIGHT),
+                     RegRead("x2: after", X_REGS)],
+              f"PASS = the same picture back at once: {T_PIC}. FAIL = still dark, or "
+              "anything else (the init then runs again)", stop_on_fail=True),
+    ]
+    return cmds, f"PASS = {T_PIC} (the picture for the light test)", restore, checks
+
+
 # --- step u: cursor shape by address, edge clipping
 
 CURSOR_ADDR_REGS = [0xfe30, 0xfe31, 0xfe32, 0xfe33]
@@ -1491,6 +1544,8 @@ STEPS = [
     ("v", "flip with EP2 0x16 register lists (rhgndf/trigger2) instead of 0x15", "low", step_v),
     ("w", "EP2 timeout 0x1000 (0x90 register 4): does the chip recover from a truncated 0x13 "
      "by itself? init value restored afterwards", "medium-low", step_w),
+    ("x", "the ID ROM's 'light' GPIO (feb1 bit 6, backlight enable?): low, then high; only "
+     "that bit changes; registers restored afterwards", "low", step_x),
 ]
 
 
@@ -1508,6 +1563,12 @@ STEP_NOTES = {
          "The values read at the start are written back afterwards, also on failure or quit "
          "(fcb0 through 04 as the Mac on sequence), and if they do not read back or a check "
          "fails the normal init runs again. No mode, PLL or timing register is touched.",
+    "x": "Changes only bit 6 of feb1 (and makes it an output in feb0, as the init does): the "
+         "line the ID ROM (byte 0x1f = 01) names 'light', which Windows' own init holds low "
+         "and then high (feb1 b7 -> f7). Bits 0-1 (pulsed as a reset in the init) and the "
+         "other banks are not touched. Expected if it is the backlight enable: the panel goes "
+         "dark while the picture keeps running, and comes back at once. Both registers get "
+         "their start values back afterwards, also on failure or quit.",
     "u": "Cursor registers only (EP4 bank fe list) and two 16 KiB 0x12 uploads below "
          "framebuffer A (VRAM 0 and 0x4000; A starts at 0xc000). Afterwards the cursor "
          "registers get the values read at the start and both slots are zeroed "
@@ -1912,16 +1973,18 @@ class Probe:
             return self.sweep(c)
         if isinstance(c, Truncated):
             return self.truncated(c)
-        if isinstance(c, (RegRead, RegRestore, FwRead, ReinitIfFailed)):
+        if isinstance(c, (RegRead, RegRestore, RegBits, FwRead, ReinitIfFailed)):
             if isinstance(c, FwRead):
                 check_safe(c)
             if self.dry:
                 if isinstance(c, RegRestore):       # the writes it can make pass check_safe
                     for w in c.writes({a: 0 for a in c.regs}, {a: 1 for a in c.regs}):
                         check_safe(w)
+                if isinstance(c, RegBits):
+                    check_safe(c.write(0))
                 print_item(c, self.full_hex, self.timeout_ms)
                 return True
-            return {RegRead: self.reg_read, RegRestore: self.reg_restore,
+            return {RegRead: self.reg_read, RegRestore: self.reg_restore, RegBits: self.reg_bits,
                     FwRead: self.fw_read, ReinitIfFailed: self.reinit_if_failed}[type(c)](c)
         return self.send(c)
 
@@ -1970,6 +2033,22 @@ class Probe:
         if bad and rr.reinit:
             print("   re-running the init to get back to a known state")
             self.setup()
+        return True
+
+    def reg_bits(self, rb):
+        cur = self._regs([rb.reg], rb.name + " (current value)")
+        if cur is None or cur.get(rb.reg) is None:
+            return False
+        c = rb.write(cur[rb.reg])
+        print(f"-> {c.name}")
+        if not self.send(c):
+            return False
+        got = self._regs([rb.reg], rb.name + " (read back)")
+        if got is None:
+            return False
+        print(f"       {rb.name}: read back {rb.reg:04x}={fmt_v(got[rb.reg])}")
+        self.log("REGS", f"{rb.name}: {rb.reg:04x} {cur[rb.reg]:02x} -> read back "
+                 f"{fmt_v(got[rb.reg])}")
         return True
 
     def fw_read(self, fr):
@@ -2353,6 +2432,8 @@ def check_items(items):
         elif isinstance(c, RegRestore):
             for w in c.writes({a: 0 for a in c.regs}, {a: 1 for a in c.regs}):
                 check_safe(w)
+        elif isinstance(c, RegBits):
+            check_safe(c.write(0))
 
 
 def refused(cmd):

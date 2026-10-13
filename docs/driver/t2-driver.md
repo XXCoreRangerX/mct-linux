@@ -192,11 +192,21 @@ the target area, then scales over it, and a flip before the scaler
 finishes shows the packed data. 0.3.30 decodes at `0x560000` (past the
 staging area of a worst-case full frame) and scales from there, as in
 probe step k. Test of 0.3.30: the edges still glitch, also on small
-moves. Remaining suspect: the scaler still running when the `0x15` flip
+moves. ~~Remaining suspect: the scaler still running when the `0x15` flip
 is executed (the vendor's blit path never waits either, but it only wrote
 the front buffer). Next: a probe experiment for a "scaler done" signal
 (register `fe70`/`fc59` reads after a large scaled rect), then wait for it
-before flipping. Until then half mode has this artifact.
+before flipping. Until then half mode has this artifact.~~ EDIT
+(2026-10-12): a code review (lab `captures/t2-research/scaler-sync.md`)
+found a definite cause. A half rect an odd number of tiles wide needs an
+even number of half-resolution rows (the decode works in whole 1024-pixel
+lines), so one an odd number of tile rows high grew by a tile row
+(about a quarter of half rects in a model of window drags). That row was
+drawn blurred in this buffer only and marked stale, so it alternated
+blurred and sharp with each flip. 0.3.31 redraws every tile a half rect
+grew over exactly, in the same frame. No vendor waits between a scaled
+`0x13` and the flip; the scaler-race probes (step r and the report's
+P1-P4) stay as follow-ups if the edges still glitch.
 
 ## Software gamma (driver 0.3.23)
 

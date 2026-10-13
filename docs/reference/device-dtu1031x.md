@@ -21,10 +21,19 @@ page https://www.ifixit.com/Device/Wacom_DTU-1031X, data sheet
 https://documents.cdn.ifixit.com/cYPLspRSspiWE5YP.pdf). The guide's author
 found the controller damaged in all three of their units.
 
-- MCT Trigger II **T2-285A** (USB->VGA) + EtronTech 128 MB DDR1
+- MCT Trigger II **T2-285A** (USB->VGA) + EtronTech EM6A9320BIB-5H, 128 Mbit
+  DDR (4 banks x 1M x 32 = 16 MiB of video memory; matches ID ROM byte
+  0x09 and the legacy Windows driver's 0x1000000)
 - Realtek **RTD2280DLW** VGA->LVDS (panel path; shows Wacom logo with no signal)
 - Wacom W8008 pen controller, SMSC USB2413 hub, MK60D X256ZV10
 - T2-285A chips run hot / fail often; keep sessions short-ish if flaky.
+  (iFixit's notes: "Author's all three tablet units have this controller
+  chip damaged", right after the sentence about the USB 2.0 to VGA chip.)
+- Panel (data sheet): TN, 6-bit (262,144 colours), 200 cd/m², 5 W max,
+  1 W in sleep. Active area 222.7 x 125.3 mm.
+- GPIO: ID ROM byte 0x1f = 01 assigns `feb0`/`feb1` bit 6 to function 1,
+  which both vendor drivers call "light" (macOS `T2_lightOn`, Windows
+  `DelayLight`): probably the panel backlight enable. Untested.
 
 ## Panel / EDID (recovered live via `0x1d`, offset `0x80`)
 

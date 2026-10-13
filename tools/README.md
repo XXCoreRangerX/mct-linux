@@ -33,6 +33,7 @@ docstring first; the interactive ones wait for a y/n answer per step.**
 | `t6_pacing_test.py` | are frame-done events tied to the refresh (no) |
 | `t6_cancel_test.sh` | what the cancel request (0x14) and a cut transfer do |
 | `t6_robust_test.sh` | interactive: injected transfer errors, monitor off/on |
+| `t6_audio_clock.sh` | interactive: bisects where T6 HDMI audio breaks, by pixel clock (`clock`, CTA 1080p timing) or by horizontal blanking (`hblank`, 1080p 120 Hz), setting each mode through niri and asking about a test tone; restores the mode |
 | `t6_probe.py` | interactive, untried features: function descriptors and audio caps, EDID through the I2C requests, DDC/CI brightness read (LG only), a quiet HDMI audio test tone; `--dry-run` prints every request without USB, `--self-test` checks the builders |
 | `t6_modes.sh` | switch a niri output through modes, y/n per mode |
 | `mct_edge_test.sh` | interactive edge cases on real hardware: cursor at edges, settings under motion, consoles and VT switches, unplug with sysfs readers, DPMS, monitor power, suspend |
@@ -54,7 +55,7 @@ docstring first; the interactive ones wait for a y/n answer per step.**
 | `t2i2c.py` | the T2's I2C masters |
 | `bench.py` | throughput for different transfer sizes |
 | `t2_recovery_test.py` | the stuck parser after an interrupted frame, and the driver's recovery |
-| `t2_probe.py` | interactive: untested frame commands from the vendor binaries (raw `0x11`, hardware upscale, RGB565, 32-bit, YUV 4:2:2 and 12-bit sources, YUV RLE, 8-bit palette via `0x0a`, 512 KiB transfers, the `0x0a` table as hardware gamma, register reads after a full-screen 2x `0x13` to find a "scaler done" signal) in the hidden buffer, and findings from other vendors' T2 drivers (16 MiB VRAM, Mac power-off and sleep registers, cursor shapes by address and edge clipping, the `0x16` flip, the EP2 timeout), with a parser check and recovery after each command and the changed registers restored afterwards |
+| `t2_probe.py` | interactive: untested frame commands from the vendor binaries (raw `0x11`, hardware upscale, RGB565, 32-bit, YUV 4:2:2 and 12-bit sources, YUV RLE, 8-bit palette via `0x0a`, 512 KiB transfers, the `0x0a` table as hardware gamma, register reads after a full-screen 2x `0x13` to find a "scaler done" signal) in the hidden buffer, and findings from other vendors' T2 drivers (16 MiB VRAM, Mac power-off and sleep registers, cursor shapes by address and edge clipping, the `0x16` flip, the EP2 timeout, the ID ROM's "light" GPIO as a backlight switch), with a parser check and recovery after each command and the changed registers restored afterwards |
 | `probes/` | the first live probes, before any capture (own README) |
 
 ## Captures and the vendor driver

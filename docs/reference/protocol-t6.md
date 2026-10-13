@@ -42,7 +42,7 @@ Nothing here shares code or framing with the T2.
 | `c0 80` | block x 128 | output | 128 B in | EDID block (V) |
 | `c0 89` | output | byte offset (0, 512) | 512 + 448 B in | mode table, 30 x 32 B (V) |
 | `40 12` | output | 0 | 32 B out | set mode, one timing entry (V, also custom entries) |
-| `40 31` | 0 | 0 | none | "software ready", after every mode set (V) |
+| `40 31` | 0 | 0 | none | "software ready", after every mode set (V). The firmware ignores wValue/wIndex (the Mac's wIndex 3 makes no difference); on some boards it ends a standalone screen (C) |
 | `40 03` | output | 1 on / 0 off | none | output on/off (V) |
 | `40 10` / `40 11` | cursor slot | byte offset | up to 4096 B out (V) | cursor image, output 0 / 1 (V for 0x10) |
 | `40 05` / `40 07` | cursor slot | 1 show / 0 hide | none | select and show / hide the cursor (V for 0x05) |
@@ -50,10 +50,16 @@ Nothing here shares code or framing with the T2.
 | `c0 88` | 0 | 0 | 1 B in | VRAM size in MiB (5600: `3a` = 58) |
 | `c0 b0` | 0 | 0..5 | 4-8 B in | 0 platform (0 "Lite", 48 MHz PLL base; 1 "Super Lite", 40 MHz), 1 boot code, 2 image code, 3 project code (5600: "JUA254H", 5601: "A8613HV"), 4 feature level, 5 serial |
 | `c0 b1`, `c0 b3` | 0 | | 132 / 112 B in | function descriptors, "DISP" section (flags, quality, bandwidth cap) (C) |
-| `40 1c`, `40 1d` | output << 8 (\| 2 enable) | 0x100 / 0x200 / 0x400 | 256 B out | gamma enable and one table per channel (C) |
+| `40 1c`, `40 1d` | output << 8 (\| 2 enable) | 0x100 / 0x200 / 0x400 | 256 B out | gamma enable (modes 0-3) and one table per channel, channel mask in wIndex's high byte (C); needs feature level 8 |
 | `40 14` | 0 | 0 | none | cancel after a failed bulk write (C); on the 5600 it restarts the device: it leaves the bus and re-enumerates ~3 s later (V) |
-| `40 30` | | level | none | hardware reset (C) |
-| `40 1f` | | 0..3 | none | hardware rotation (C); stalls on the 5600, also with 0 (V) |
+| `40 30` | | level | none | hardware reset (C). **Never sent** |
+| `40 01`, `40 13` | | | | SPI ROM / ROM data writes (C). **Never sent** |
+| `40 15` | | | | "test mode": rewrites the flash sector at 0x20000 (C, firmware image IC24030502). **Never sent** |
+| `40 33` | | | | writes the serial number into that sector (C). **Never sent** |
+| `40 40` | | | | posts an undocumented firmware-internal message (C). **Never sent** |
+| `40 34`, then EP 0x81 | | | | ROM read-back: bulk IN with signature 0x85 (C); EP 0x81 also carries audio capture (signature 0x83) |
+| `c0 b2`, `c0 8a`, `c0 83`, `c0 41` | | | | read-only: boot data (serial, MAC), running image header, image DISP section, others (C, firmware dispatcher; untried) |
+| `40 1f` | | 0..3 | none | hardware rotation (C); stalls on the 5600, also with 0 (V). Not in the JUA254H firmware at all, old or new; only in an HP monitor's (C) |
 | `40 23`, `40 24`, `c0 a1..a5` | | | | audio: `a1` engine caps, `a2`/`a3` node caps/values, `a4` engine state, `a5` formats, `24` set engine state, `23` node value (volume). **V** 2026-10-12: playback works on the 5600, see "Audio" below |
 
 Outputs: the 5600 drives its HDMI port as output 0, the 5601 in the capture
@@ -195,7 +201,18 @@ wValue x, wIndex y; negative values as v - 1 (V).
 
 - Descriptors: one playback engine (`a1` index 0; index 1, capture, returns
   nothing), one format (`a5`: 48 kHz, 16-bit, 2 channels), one volume node
-  (`a2`/`a3`: 0-31, 15 at start), cyclic buffer 128 KiB (`a4`).
+  (`a2`/`a3`: 0-31), cyclic buffer 128 KiB (`a4`).
+- Volume: `40 23` wValue = node (0), wIndex = engine (0), 40 bytes:
+  channel mask u8 (0x03 = left and right), 7 zero bytes, 8 s32 values.
+  Read back with `c0 a3`. Windows' dB table for it is 20·log10(v/31): linear
+  amplitude, 0 = silence. There's no mute node; Windows mutes with 0. Windows
+  and the Mac set 31 when the device appears (lab
+  `captures/t6-research/audio-analysis.md`). (C; the 5600 hasn't been sent
+  `40 23` before mct_t6 0.29.3.)
+- No vendor paces by the device: all use the host clock, and none reads
+  the audio DMA pointer (Windows keeps a ~40 ms prefill and stays ~72 ms
+  ahead, the Mac 11-27 ms). The firmware sets up the HDMI side (InfoFrame,
+  N/CTS) itself from the monitor's EDID.
 - Start: `40 24` with 16 bytes `{Activity 1, 0, FormatIndex u16, 0 u32,
   ReturnSize u32 = 9600, CyclicBufferSize u32}` (MCT; for playback the
   Activity byte is ignored, the bulk stream drives the engine).
@@ -211,9 +228,11 @@ wValue x, wIndex y; negative values as v - 1 (V).
 - `a4` reported "stopped, position 0" during playback too: not usable as a
   progress counter on this firmware.
 - Audio plays only while the output is on with a mode set (HDMI carries
-  audio inside the video signal), and only cleanly up to 297 MHz pixel
-  clock: 1080p 60/75/120 clean, 1080p144 (333 MHz) buzzes on the LG
-  27GN7, with the same stream (2026-10-12, mct_t6 0.29).
+  audio inside the video signal), and only cleanly with at least 112 px of
+  horizontal blanking, where HDMI sends audio packets: at 1080p120 on the
+  LG 27GN7, 80 and 104 px buzz, 112, 128 and 176 px are clean. The pixel
+  clock doesn't matter: 333 MHz with the CTA timing (280 px) is clean
+  (2026-10-12, mct_t6 0.29, `tools/t6_audio_clock.sh`).
 - Interrupt events (MCT's `T6INTERRUPTDATA`, `t6bulkdef.h`): byte 0 is a
   function mask (0x04 video, 0x20 audio); at 0x20 a u32 with the audio
   render DMA pointer (bits 0-23) and jack bits (24 jack 0, 25 DVO HDMI, 26
@@ -223,3 +242,22 @@ wValue x, wIndex y; negative values as v - 1 (V).
   Activity 1 when the stream starts, 10 ms packets paced by the host clock
   about 90 ms ahead of playback, Activity 0 when it stops.
 
+
+## Firmware request dispatcher (from the JUA254H image, 2026-10-13)
+
+The firmware image in the Windows package (`JUA254H-IC24030502.t6img`,
+feature level 8) decompiled with Ghidra's NDS32 module, including its
+vendor-request dispatcher: 43 requests (lab
+`captures/t6-research/feature-gaps.md`). The 5600 runs the older
+IC17091401 (feature level 6), which can only have fewer. Findings:
+
+- No case for `0x02`/`0x81` (I2C): DDC/CI through this board can't work,
+  matching the stall seen in `tools/t6_probe.py` step B.
+- Video commands: only 1, 2, 3, 4 and 7. No blit, overlay or scaler.
+- The flip's window fields (bytes 0x24-0x2b: x, y, w, h) place a smaller
+  surface inside the mode without scaling (C, untried).
+- Cursor slots: 10 shared, not 5 per output (C).
+- Windows updates the firmware automatically on device start when the
+  project code matches and the image is newer (`RomAutoUpdateFlags`
+  default 7), through bulk signature 5 sessions. mct never sends
+  signature 5.

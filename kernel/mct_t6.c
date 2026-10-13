@@ -46,8 +46,10 @@
 #if IS_REACHABLE(CONFIG_SND_PCM)
 #define MCT_T6_AUDIO
 #include <linux/hrtimer.h>
+#include <sound/control.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
+#include <sound/tlv.h>
 #endif
 
 #include "mct.h"
@@ -70,7 +72,7 @@ MODULE_PARM_DESC(audio_lead_ms, "HDMI audio: how far ahead of playback the adapt
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	29
-#define DRIVER_PATCH	1
+#define DRIVER_PATCH	3
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -157,6 +159,12 @@ struct t6_mode {
  * starts to show artifacts around 350 MHz. Limits are in docs/reference/t6-limits.md.
  */
 #define T6_MAX_CLOCK_KHZ	340000
+/*
+ * HDMI audio needs this much horizontal blanking, where HDMI carries it
+ * (2026-10-12, JUA254 and an LG 27GN7 at 1080p120: 104 px buzzes, 112 px
+ * is clean; the pixel clock doesn't matter, 333 MHz with 280 px is clean).
+ */
+#define T6_AUD_MIN_HBLANK	112
 /* frame buffers are 0xfffec0 apart; a frame is a 0x30 byte header + planes */
 #define T6_BUF_SIZE		0xfffec0
 /*
@@ -382,7 +390,11 @@ struct mct_t6 {
 		u32 cyclic;			/* the device's buffer size */
 		u8 *pkt;			/* one packet of PCM */
 		u64 packets, fills, starts;	/* statistics */
-		u32 warned_khz;			/* mode clock last warned about */
+		u32 warned_hb;			/* mode blanking last warned about */
+		/* volume node 0; under io_lock */
+		bool has_vol;
+		bool unmuted;			/* the switch: off sends the minimum */
+		int vol_min, vol_max, vol[2];
 	} aud;
 #endif
 };
@@ -1508,10 +1520,11 @@ static int t6_read_edid_block(void *data, u8 *buf, unsigned int block, size_t le
 }
 
 /*
- * Reduced blanking (80 pixels horizontal, at least 460 us vertical): low
+ * Reduced blanking (hb pixels horizontal, at least 460 us vertical): low
  * pixel clocks for high refresh rates.
  */
-static struct drm_display_mode *t6_rb_mode(struct drm_device *dev, int w, int h, int hz)
+static struct drm_display_mode *t6_rb_mode(struct drm_device *dev, int w, int h, int hz,
+					   int hb)
 {
 	struct drm_display_mode *mode;
 	int vtotal = h + 20;
@@ -1524,7 +1537,7 @@ static struct drm_display_mode *t6_rb_mode(struct drm_device *dev, int w, int h,
 	mode->hdisplay = w;
 	mode->hsync_start = w + 8;
 	mode->hsync_end = w + 40;
-	mode->htotal = w + 80;
+	mode->htotal = w + hb;
 	mode->vdisplay = h;
 	mode->vsync_start = vtotal - 14;
 	mode->vsync_end = vtotal - 6;
@@ -1539,18 +1552,20 @@ static struct drm_display_mode *t6_rb_mode(struct drm_device *dev, int w, int h,
 /*
  * A mode of this size and rate the T6 and the monitor can take: standard
  * reduced blanking (CVT-RB, 160 px horizontal blanking) if it fits, else
- * the tighter one above. NULL if neither does.
+ * the tighter one above with as much horizontal blanking as fits, from
+ * 152 down to 80 px. HDMI audio needs T6_AUD_MIN_HBLANK of it. NULL if
+ * none fits.
  */
 static struct drm_display_mode *t6_timing(struct mct_t6 *t6, struct drm_device *dev,
 					  int w, int h, int hz)
 {
 	struct drm_display_mode *mode;
 	struct t6_mode m;
-	int i;
+	int hb;
 
-	for (i = 0; i < 2; i++) {
-		mode = i ? t6_rb_mode(dev, w, h, hz) :
-			   drm_cvt_mode(dev, w, h, hz, true, false, false);
+	for (hb = 160; hb >= 80; hb -= 8) {
+		mode = hb == 160 ? drm_cvt_mode(dev, w, h, hz, true, false, false) :
+				   t6_rb_mode(dev, w, h, hz, hb);
 		if (!mode)
 			continue;
 		/* CVT rounds the clock to 0.25 MHz; the T6's PLL doesn't need that */
@@ -2566,6 +2581,9 @@ static void t6_pick_output(struct mct_t6 *t6)
 #define T6_REQ_AUD_STATE	0xa4	/* in: engine state, 16 bytes */
 #define T6_REQ_AUD_FORMATS	0xa5	/* in: format list, 32 bytes each */
 #define T6_REQ_AUD_SET		0x24	/* out: set engine state, 16 bytes */
+#define T6_REQ_AUD_NODE_CAPS	0xa2	/* in: node type and range, 16 bytes */
+#define T6_REQ_AUD_NODE_VALUE	0xa3	/* in: node values, 40 bytes */
+#define T6_REQ_AUD_NODE_SET	0x23	/* out: node values, 40 bytes */
 #define T6_SIG_AUDIO		3	/* bulk session signature */
 #define T6_AUD_RATE		48000
 #define T6_AUD_BPS		(T6_AUD_RATE * 4)	/* 16-bit stereo */
@@ -2577,13 +2595,7 @@ static void t6_pick_output(struct mct_t6 *t6)
  */
 #define T6_AUD_PKT_F		(T6_AUD_PKT / 4)
 #define T6_AUD_TICK_MS		5
-/*
- * HDMI audio buzzes above this pixel clock (2026-10-12, JUA254 and an LG
- * 27GN7: clean at 1080p 60/75/120 up to 297 MHz, the highest HDMI 1.4
- * clock; buzzing at 1080p144, 333 MHz). The firmware sets up the audio
- * clock; nothing the driver sends changes it.
- */
-#define T6_AUD_MAX_CLOCK_KHZ	297000
+
 
 /*
  * Enable or disable the playback engine: activity, format index, the
@@ -2669,17 +2681,18 @@ static u64 t6_audio_hwptr(struct mct_t6 *t6)
 /* say once per mode why nothing or noise may be heard; io_lock held */
 static void t6_audio_check_mode(struct mct_t6 *t6)
 {
-	u32 khz = t6->enabled ? le32_to_cpu(t6->mode_entry.clock_khz) : 0;
+	const struct t6_mode *m = &t6->mode_entry;
+	u32 hb = t6->enabled ? le16_to_cpu(m->htotal) - le16_to_cpu(m->hdisplay) : 0;
 
-	if (khz == t6->aud.warned_khz)
+	if (hb == t6->aud.warned_hb)
 		return;
-	t6->aud.warned_khz = khz;
-	if (!khz)
+	t6->aud.warned_hb = hb;
+	if (!hb)
 		drm_info(&t6->base.dev, "HDMI audio: the display is off, nothing is heard until it is on\n");
-	else if (khz > T6_AUD_MAX_CLOCK_KHZ)
+	else if (hb < T6_AUD_MIN_HBLANK)
 		drm_warn(&t6->base.dev,
-			 "HDMI audio is distorted at pixel clocks above %u MHz (this mode: %u MHz); choose a lower refresh rate for clean audio\n",
-			 T6_AUD_MAX_CLOCK_KHZ / 1000, khz / 1000);
+			 "HDMI audio is distorted with less than %u px horizontal blanking (this mode %ux%u: %u px); choose a lower refresh rate for clean audio\n",
+			 T6_AUD_MIN_HBLANK, le16_to_cpu(m->hdisplay), le16_to_cpu(m->vdisplay), hb);
 }
 
 /*
@@ -2885,6 +2898,147 @@ static const struct snd_pcm_ops t6_audio_ops = {
 };
 
 /*
+ * The volume node (node 0 of engine 0): `40 23` with a channel mask, 7 zero
+ * bytes and 8 s32 values, left and right first. Windows' dB table makes the
+ * scale linear in amplitude (value / max); 0 is silence. The adapter has no
+ * mute node: muting sends the minimum, as Windows does. io_lock held.
+ */
+static int t6_audio_send_volume(struct mct_t6 *t6)
+{
+	u8 *b = t6->ctrl;
+	int i, ret;
+
+	memset(b, 0, 40);
+	b[0] = 0x03;
+	for (i = 0; i < 2; i++)
+		put_unaligned_le32(t6->aud.unmuted ? t6->aud.vol[i] : t6->aud.vol_min, b + 8 + 4 * i);
+	ret = t6_ctrl_out(t6, T6_REQ_AUD_NODE_SET, 0, 0, 40);
+	return ret < 0 ? ret : 0;
+}
+
+/* store and send under io_lock; 1 if changed */
+static int t6_audio_set_volume(struct mct_t6 *t6, const int *vol, int unmuted)
+{
+	int idx, ret = 0;
+
+	mutex_lock(&t6->io_lock);
+	if (vol[0] == t6->aud.vol[0] && vol[1] == t6->aud.vol[1] &&
+	    unmuted == t6->aud.unmuted) {
+		mutex_unlock(&t6->io_lock);
+		return 0;
+	}
+	t6->aud.vol[0] = vol[0];
+	t6->aud.vol[1] = vol[1];
+	t6->aud.unmuted = unmuted;
+	if (drm_dev_enter(&t6->base.dev, &idx)) {
+		ret = t6_audio_send_volume(t6);
+		drm_dev_exit(idx);
+	}
+	mutex_unlock(&t6->io_lock);
+	return ret ?: 1;
+}
+
+static int t6_vol_info(struct snd_kcontrol *kc, struct snd_ctl_elem_info *info)
+{
+	struct mct_t6 *t6 = snd_kcontrol_chip(kc);
+
+	info->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	info->count = 2;
+	info->value.integer.min = t6->aud.vol_min;
+	info->value.integer.max = t6->aud.vol_max;
+	return 0;
+}
+
+static int t6_vol_get(struct snd_kcontrol *kc, struct snd_ctl_elem_value *v)
+{
+	struct mct_t6 *t6 = snd_kcontrol_chip(kc);
+
+	mutex_lock(&t6->io_lock);
+	v->value.integer.value[0] = t6->aud.vol[0];
+	v->value.integer.value[1] = t6->aud.vol[1];
+	mutex_unlock(&t6->io_lock);
+	return 0;
+}
+
+static int t6_vol_put(struct snd_kcontrol *kc, struct snd_ctl_elem_value *v)
+{
+	struct mct_t6 *t6 = snd_kcontrol_chip(kc);
+	int vol[2], i;
+
+	for (i = 0; i < 2; i++) {
+		if (v->value.integer.value[i] < t6->aud.vol_min ||
+		    v->value.integer.value[i] > t6->aud.vol_max)
+			return -EINVAL;
+		vol[i] = v->value.integer.value[i];
+	}
+	return t6_audio_set_volume(t6, vol, READ_ONCE(t6->aud.unmuted));
+}
+
+static int t6_switch_get(struct snd_kcontrol *kc, struct snd_ctl_elem_value *v)
+{
+	struct mct_t6 *t6 = snd_kcontrol_chip(kc);
+
+	v->value.integer.value[0] = READ_ONCE(t6->aud.unmuted);
+	return 0;
+}
+
+static int t6_switch_put(struct snd_kcontrol *kc, struct snd_ctl_elem_value *v)
+{
+	struct mct_t6 *t6 = snd_kcontrol_chip(kc);
+	int vol[2] = { t6->aud.vol[0], t6->aud.vol[1] };
+
+	return t6_audio_set_volume(t6, vol, !!v->value.integer.value[0]);
+}
+
+/* gain = value / max: what ALSA's linear dB scale from mute to 0 dB means */
+static const DECLARE_TLV_DB_LINEAR(t6_vol_tlv, TLV_DB_GAIN_MUTE, 0);
+
+static const struct snd_kcontrol_new t6_vol_ctl = {
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	.name = "PCM Playback Volume",
+	.access = SNDRV_CTL_ELEM_ACCESS_READWRITE | SNDRV_CTL_ELEM_ACCESS_TLV_READ,
+	.info = t6_vol_info,
+	.get = t6_vol_get,
+	.put = t6_vol_put,
+	.tlv.p = t6_vol_tlv,
+};
+
+static const struct snd_kcontrol_new t6_switch_ctl = {
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	.name = "PCM Playback Switch",
+	.info = snd_ctl_boolean_mono_info,
+	.get = t6_switch_get,
+	.put = t6_switch_put,
+};
+
+/*
+ * The volume node's range and current values, at probe: the adapter keeps
+ * them until it loses power. Only a plain volume node (type 0) from 0 is
+ * used, so the dB scale is right.
+ */
+static void t6_audio_read_volume(struct mct_t6 *t6)
+{
+	int lo, hi;
+
+	mutex_lock(&t6->io_lock);
+	if (t6_ctrl_in(t6, T6_REQ_AUD_NODE_CAPS, 0, 0, 16) != 16 || t6->ctrl[0] != 0)
+		goto out;
+	lo = get_unaligned_le32(t6->ctrl + 8);
+	hi = get_unaligned_le32(t6->ctrl + 12);
+	if (lo != 0 || hi <= lo || hi > 255 ||
+	    t6_ctrl_in(t6, T6_REQ_AUD_NODE_VALUE, 0, 0, 40) != 40)
+		goto out;
+	t6->aud.vol_min = lo;
+	t6->aud.vol_max = hi;
+	t6->aud.vol[0] = clamp_t(int, get_unaligned_le32(t6->ctrl + 8), lo, hi);
+	t6->aud.vol[1] = clamp_t(int, get_unaligned_le32(t6->ctrl + 12), lo, hi);
+	t6->aud.unmuted = true;
+	t6->aud.has_vol = true;
+out:
+	mutex_unlock(&t6->io_lock);
+}
+
+/*
  * A sound card for the adapter's HDMI audio when it reports the format this
  * driver sends (48 kHz, 16-bit, stereo: the only one on the JUA254). Audio
  * is heard only while the output runs. Without it the display still works.
@@ -2920,7 +3074,7 @@ static void t6_audio_init(struct mct_t6 *t6, struct usb_interface *intf)
 	if (!t6->aud.pkt)
 		return;
 	spin_lock_init(&t6->aud.lock);
-	t6->aud.warned_khz = U32_MAX;
+	t6->aud.warned_hb = U32_MAX;
 	INIT_WORK(&t6->aud.work, t6_audio_work);
 #ifdef MCT_COMPAT_NO_HRTIMER_SETUP
 	hrtimer_init(&t6->aud.timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
@@ -2945,6 +3099,13 @@ static void t6_audio_init(struct mct_t6 *t6, struct usb_interface *intf)
 	strscpy(pcm->name, "HDMI", sizeof(pcm->name));
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &t6_audio_ops);
 	snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_VMALLOC, NULL, 0, 0);
+	t6_audio_read_volume(t6);
+	if (t6->aud.has_vol) {
+		ret = snd_ctl_add(card, snd_ctl_new1(&t6_vol_ctl, t6)) ?:
+		      snd_ctl_add(card, snd_ctl_new1(&t6_switch_ctl, t6));
+		if (ret)
+			goto err_card;
+	}
 	ret = snd_card_register(card);
 	if (ret)
 		goto err_card;
@@ -2981,10 +3142,20 @@ static void t6_audio_suspend(struct mct_t6 *t6)
 	t6->aud.engine = false;		/* enabled again by the next start */
 }
 
+/* the adapter may have lost power: send the volume again */
 static void t6_audio_resume(struct mct_t6 *t6)
 {
-	if (t6->aud.card)
-		snd_power_change_state(t6->aud.card, SNDRV_CTL_POWER_D0);
+	int idx;
+
+	if (!t6->aud.card)
+		return;
+	if (t6->aud.has_vol && drm_dev_enter(&t6->base.dev, &idx)) {
+		mutex_lock(&t6->io_lock);
+		t6_audio_send_volume(t6);
+		mutex_unlock(&t6->io_lock);
+		drm_dev_exit(idx);
+	}
+	snd_power_change_state(t6->aud.card, SNDRV_CTL_POWER_D0);
 }
 #else
 static void t6_audio_init(struct mct_t6 *t6, struct usb_interface *intf) {}

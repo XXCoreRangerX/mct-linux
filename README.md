@@ -43,7 +43,7 @@ of the vendor drivers for interoperability, and testing on real hardware.
 | Hardware rotation | ❌ the compositor rotates | ❌ the compositor rotates |
 | JPEG mode | ❌ would need an encoder in the kernel ([roadmap](docs/roadmap.md)) | ➖ the chip has none |
 | Second output | ❌ dual-head adapters and docks | ➖ |
-| Audio | ✅ HDMI audio as an ALSA sound card (48 kHz stereo) while the display is on; distorted in modes above 297 MHz pixel clock (e.g. 1080p144; 1080p120 is fine) | ➖ |
+| Audio | ✅ HDMI audio as an ALSA sound card (48 kHz stereo) while the display is on; needs 112 px of horizontal blanking, which the driver's modes keep where they can | ➖ |
 | **Devices and connection** | | |
 | Hotplug | ✅ monitor and adapter | ✅ the tablet |
 | DPMS, suspend/resume | ✅ | ✅ |

@@ -937,11 +937,110 @@ noted that audio worked "on 60hz mode"). Same driver and stream, by mode:
 | 1080p120 | 297.0 MHz | clean |
 | 1080p144 | 333.2 MHz | buzzing |
 
-297 MHz is the top HDMI 1.4 clock (4K30). The firmware sets up the HDMI
+~~297 MHz is the top HDMI 1.4 clock (4K30). The firmware sets up the HDMI
 audio clock (N/CTS); it apparently doesn't handle clocks above that,
-although video runs to 340 MHz. Not between 297 and 333 MHz yet (e.g.
+although video runs to 340 MHz.~~ EDIT (2026-10-12): wrong, the 144 Hz mode had only 80 px of horizontal blanking; see "Not the clock but the horizontal blanking" below. Not between 297 and 333 MHz yet (e.g.
 1080p121.99 at 293.7 doesn't narrow it). The lead isn't the cause (20-90 ms
 all buzzed at 144 Hz); the default goes to 90 ms, the value of the clean
 Spotify run. The driver logs a warning once per mode when a stream starts
 above 297 MHz or with the display off. Both 0.29.1 and the lead
 parameter are in one commit (0.29.1).
+
+**Not the clock but the horizontal blanking (2026-10-12).**
+`tools/t6_audio_clock.sh` (niri modelines, a tone, y/n per step):
+- `clock`: 333.216 MHz with the CTA 1080p timing (2200 x 1125, 280 px
+  horizontal blanking, 134.6 Hz) played clean, twice. The clock isn't the
+  limit.
+- The driver's 1080p144 was its tight fallback: 80 px horizontal blanking
+  (2000 x 1157), because CVT-RB (160 px) at 144 Hz needs more than the
+  T6's 340 MHz.
+- `hblank` at 1080p 120 Hz, vtotal 1125, sync 8 px after the active area
+  and 32 px wide: 80 px buzzing, 176 clean, 128 clean, 104 buzzing, 112
+  clean.
+
+HDMI sends audio in data islands inside the blanking. Below ~112 px the
+adapter evidently can't fit them and audio breaks up.
+
+The fix (mct_t6 0.29.2): the tight timing now tries 152 down to 80 px and
+keeps the widest that fits. 1080p144 becomes 2040 x 1157 = 339.88 MHz,
+120 px, with the same line rate and vertical timing as before. The audio
+warning checks the blanking (< 112 px) instead of the clock.
+
+~~"Distorted above 297 MHz"~~ EDIT (2026-10-12): the 297 MHz claim
+earlier today was wrong. The real cause is the blanking, as above.
+
+**Vendor audio analysis (2026-10-12, lab
+`captures/t6-research/audio-analysis.md`, static analysis by a research
+agent).**
+- Windows' audio is in `t6sta.sys`; the Mac has a HAL plugin
+  (`MCTT6Audio.driver`) and the dext.
+- Volume `40 23`: 40 bytes `{mask, 7 x 0, 8 x s32}`, 0-31, linear
+  (Windows' table is exactly 256·20·log10(i/31)).
+- No mute node. Both vendors set 31 at start.
+- No vendor uses the DMA pointer or drift correction. The 1.8 s Windows
+  capture has no audio events either, so the plan to pace by events is
+  dropped.
+- The firmware does the HDMI audio setup itself (InfoFrame, N/CTS) from
+  the EDID. The vendors' table modes all have wide blanking, which is why
+  they never hit the 112 px limit.
+- Unknown: whether `40 31` wIndex 3 ("software ready (audio)", sent by the
+  Mac at start) matters on the 5600.
+
+mct_t6 0.29.3 adds "PCM Playback Volume" and "PCM Playback Switch". It
+reads the current value at probe and does not force 31. Not yet sent to
+the 5600: test with `amixer -c JUA254H`, comparing 31, 15 and 0 against
+a tone.
+
+**Research round 2 (2026-10-13), Wacom and T2 devices** (lab
+`captures/t2-research/wacom-and-t2-devices.md`).
+- The DTU-1031AX is a T6 device, `0711:5609`: a T6-688SL with a Realtek
+  RTD2281L in the FCC photos, firmware image `DTU-1031AX-IC21062801.t6img`
+  with that device descriptor and a 1024x600 Wacom EDID.
+- The DTU-1031X has 16 MiB of video memory (EtronTech EM6A9320BIB-5H).
+- A probable backlight GPIO, `feb1` bit 6, is untested.
+- libwacom: the DTU-1031X size should be 223 x 125 mm (it says 229 x 127),
+  and there's no DTU-1031AX entry.
+- usb.ids lacks `0711:5209/520d/5600/5601/5609`.
+
+**Research round 2 (2026-10-13), T6 feature gaps** (lab
+`captures/t6-research/feature-gaps.md`, decompiled firmware image
+JUA254H-IC24030502 with its request dispatcher).
+- Little device-side functionality is left that mct_t6 lacks.
+- No hardware rotation in this board's firmware, and no I2C, so DDC/CI is
+  closed.
+- Three more requests are never to be sent (`0x15` test mode rewrites
+  flash, `0x33` serial write, `0x40` internal message); they are added to
+  `tools/t6_probe.py`'s forbidden list.
+- Windows auto-updates the firmware on start.
+- Untried read-only info requests: `b2`, `8a`, `83`, `41`.
+- Windowed flips (bytes 0x24-0x2b) could letterbox without a mode set.
+
+**Research round 2 (2026-10-13), the web** (lab
+`captures/scout/web-research-2026-10-13.md`; downloads in
+`third_party/t6-sources/web-2026-10-13/`). Checked against the sources:
+- **USB IDs:** more T2 and T6 USB IDs (see roadmap item 8). The T6 PID
+  comes from the firmware image (a table of board name and IDs for 39
+  images, `t6img_ids.txt`).
+- **JPEG:** a public-domain userspace JPEG driver for the same JUA254H
+  board exists ([lvalen91/JUA254H---Fedora](https://github.com/lvalen91/JUA254H---Fedora)).
+  Its findings:
+  - full JFIF needed;
+  - 4:2:0 works;
+  - two bulk writes plus at least 1 KiB of zero padding;
+  - flag 0x80 on early frames and on ring wrap;
+  - ~30 fps at 1080p.
+- **Tetra driver** ([Gadgetoid](https://github.com/Gadgetoid), MIT):
+  - partial updates through FB_DIRECT;
+  - CLIP_PRIMARY ignores its x/y;
+  - a "custom timing" flag (bit 0) in the timing entry.
+
+**Tests of mct_t6 0.29.3 (2026-10-13).**
+- 1080p144 with the new 120 px blanking (339.88 MHz): stable picture,
+  clean tone, no blanking warning in the log.
+- Volume: 31, 15 (quieter) and 0 (silent), mute and unmute all behave as
+  expected; the first `40 23` writes to the 5600 work. The adapter was at
+  31/31 at load (`a3`).
+- One run "at 31" was silent: setting 31 when it is already 31 sends
+  nothing, and the repeat played. Most likely that `speaker-test` didn't
+  get the device (PipeWire holds it while its sink is active; use
+  `pactl suspend-sink … 1` for `hw:` tests).
