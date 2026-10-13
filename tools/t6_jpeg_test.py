@@ -268,8 +268,7 @@ def main():
     t.output(True)
     input("  1920x1080@60 set. Press Enter once the LG shows a picture (or a black screen)... ")
     j = Jpeg(t)
-    for f in t.acks(50):
-        log(f"  old event {f[:0x14].hex()}", console=False)
+    j.wait(-1, timeout=0.3)         # drain old events (and clear a failed endpoint)
     if not j1(j):
         log("J1 failed: J2 and J3 skipped")
         return
