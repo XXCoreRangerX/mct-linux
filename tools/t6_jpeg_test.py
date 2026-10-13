@@ -197,11 +197,21 @@ def j2(j):
     for name, img in contents:
         for q in (75, 95):
             data = jpeg(img, q)
-            lat = []
+            lat, misses = [], 0
             for k in range(30):
                 r = j.wait(j.flip(data, FB[k % 3]))
                 if r and not r[1]:
                     lat.append(r[0])
+                    misses = 0
+                else:
+                    misses += 1
+                    if misses == 3:
+                        break
+            if misses >= 3:
+                log(f"  {name} Q{q} ({len(data) // 1024} KiB): 3 frames in a row without "
+                    "frame-done, stopping here so the decoder isn't flooded")
+                ask(f"Does the LG show {name}?")
+                return results
             if lat:
                 med = statistics.median(lat)
                 results.append((name, q, len(data), med))
