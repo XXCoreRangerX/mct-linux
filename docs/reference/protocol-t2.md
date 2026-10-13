@@ -534,6 +534,18 @@ Also on 2026-10-12 (steps l, m, n, p; log
   off/on, `fcf6 = 00/01` stays the clean way. The
   second cursor slot's address unit (z2) couldn't be judged without a
   picture; not worth more probing.
+- **EP2 timeout (w, log `captures/t2_probe-20261013-150844.log`):**
+  `0x91` reads MC8032 register 4 (4 bytes, big-endian; the init leaves
+  `0x61a80`). With `0x90` setting it to `0x1000`, a `0x13` cut off after
+  555 of 1111 payload bytes was ended by the chip itself after **307 ms**,
+  with no padding: about 75 µs per unit, so the init's `0x61a80` is about
+  **30 s**. That explains step z's ~30 s per command after the Mac
+  monitor-off: the chip took no payload and each command ended by
+  timeout. But after the timeout the stream was **out of step**: the next
+  complete `0x13` (with `0x61a80` set back) didn't draw where it should,
+  the flip back was missed, and the box turned up later in buffer A's
+  bottom-right corner. So a short timeout ends a stuck command but doesn't
+  resync the parser; the padding recovery stays needed.
 - **Cursor (u): edge clipping in hardware works** (u3-u5: negative x, y
   and both via `fe44/fe45` and `fe36 = 4f/47`), so the driver's shifted
   re-upload for cursors past the top/left edge could go. A **second shape
