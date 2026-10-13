@@ -5,7 +5,7 @@
 set -eu
 if [ "$(id -u)" != 0 ]; then
 	py=$(nix build --no-link --print-out-paths --impure --expr \
-		'with import <nixpkgs> {}; python3.withPackages (p: [ p.pyusb p.numpy ])')/bin/python3
+		'with import <nixpkgs> {}; python3.withPackages (p: [ p.pyusb p.numpy p.pillow ])')/bin/python3
 	exec sudo PY="$py" "$0" "$@"
 fi
 drv=/sys/bus/usb/drivers/mct
