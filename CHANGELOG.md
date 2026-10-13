@@ -30,7 +30,7 @@ Driver versions: mct_t6 0.29.7, mct_t2 0.3.36.
   DTU-1031AX) only with the new module parameter `untested_ids`.
 - JPEG: works from userspace (full frames and partial updates) but is
   slower than raw frames on USB 3; not in the driver, work in progress
-  ([docs/research/t6-jpeg.md](docs/research/t6-jpeg.md),
+  ([docs/research/t6-jpeg.md](https://github.com/XXCoreRangerX/mct-linux/blob/main/docs/research/t6-jpeg.md),
   `tools/t6_jpeg_test.py`).
 
 **Trigger II (the tablet)**
