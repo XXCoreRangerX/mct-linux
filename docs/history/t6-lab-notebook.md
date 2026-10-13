@@ -1059,3 +1059,58 @@ resampled, since the 5600 offers only 48 kHz.
 - monitor name "27GN7";
 - one short audio descriptor `09 07 07`: LPCM, 2 channels, 32/44.1/48 kHz,
   16/20/24-bit.
+
+**JPEG path, phase 0 (2026-10-13, `tools/t6_jpeg_test.py`, LG at 1080p60,
+logs `captures/t6_jpeg-20261013-*.log`).**
+
+Full-frame JPEGs work on the 5600 (firmware 17091401):
+- Command 3, 4:2:0, Pillow's standard tables, no restart markers.
+- Planes at fb + 0x30, UV at pitch x align16(h), pitch align16(w).
+- Payload is the 48-byte header, the JPEG and 1024 zero bytes.
+- Test cards, flat grey, a green card and noise all showed correctly. Q75
+  looks blocky, Q95 clean.
+
+Frame-done events (`0x13` bit 2, fence at `0x0c`) come for every frame.
+They seem to repeat the last finished fence, so a time is "decode plus
+the next report", 10-12 ms at least.
+
+Transport rules found the hard way:
+- **No "more" flag on JPEG fragments.** With it, nothing displayed. Raw
+  frames are the other way round.
+- **No ring that wraps back with `FLAG_RESET_JPEG`** (the Ubuntu daemon's
+  way). At the first wrap the event endpoint went into I/O errors. In one
+  run the JPEG path was dead until a power cycle; in another, only the
+  events recovered later. Three fixed 3 MiB slots used in turn (at most 2
+  frames in flight, the flag only on the first frame) had no errors at
+  all until the noise frames.
+
+Decode time at 1080p (frames one at a time, and back to back with at most
+2 in flight):
+
+| Content | JPEG | Per frame | Back to back |
+|---|---|---|---|
+| flat grey, Q75/Q95 | 32 KiB | 11.9 ms | ~100 fps |
+| green test card, Q75 | 94 KiB | 11.7 ms | 99 fps |
+| green test card, Q95 | 153 KiB | 19.5 ms | 50 fps |
+| noise, Q75 | 1.2 MiB | **326 ms** | ~1 fps |
+| noise, Q95 | 2.4 MiB | no event within 1 s | - |
+
+So the decoder is bound by the compressed data, not by pixels:
+- From ~100 fps for simple pictures it drops to ~3 fps at 1.2 MB of noise
+  (~3.7 MB/s of bitstream).
+- During the slow noise frames the pyusb event reads failed again (695
+  errors). The kernel reads events fine, so this is the userspace reader.
+- J3 (command 7 into a hidden buffer at up to 3840x2160) left the picture
+  alone, but its timings were lost to the broken event reads.
+
+Verdict, against the research estimate (100-135 Mpixel/s):
+- Ordinary pictures reach ~100-200 Mpixel/s.
+- Detailed or noisy ones fall far below.
+- On USB 3, raw NV12 already gives ~95-100 fps at 1080p whatever the
+  content, so JPEG would be slower and content-dependent.
+- On USB 2 (raw ~11 fps at 1080p), JPEG at a moderate quality would be
+  ~50-100 fps for desktop content but collapse on photos and grain unless
+  the quality drops as the frame size grows.
+
+So JPEG is worth building only for USB 2 links, with a size budget per
+frame and raw as the fallback.
