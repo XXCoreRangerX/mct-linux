@@ -7,6 +7,12 @@ on:
   push:
     tags: ["v*"]
 
+# GitHub delivered the v0.6.0 tag push twice; the second run failed at
+# "release already exists". One run per tag:
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
