@@ -20,10 +20,13 @@ statistics) and fills in:
 
 - `struct mct_config`: hooks, min/max image size, connector and encoder
   type, cursor size (the T2 64 px, the T6 128 px), whether to poll the
-  connector, whether to offer a gamma LUT, the debugfs file name.
+  connector, whether to offer a gamma LUT, the debugfs file name, and
+  `mode_bufs`: how many chip buffers of w x h x 4 bytes a mode needs
+  (the T6: 4).
 - `struct mct_funcs`: `get_modes`, `mode_valid`, `detect`,
   `late_register` / `early_unregister` (the T2's backlight), `enable`
-  (may allocate per-mode buffers, updates are stopped), `disable`, `stop`
+  (updates are stopped; the mode's buffers are in `mdev->mode_buf[]`),
+  `disable`, `stop`
   (wait for transfers), `update` (the worker body: send what changed),
   `gamma`, `cursor_set` (pixels as on screen, position may be negative),
   `cursor_hide`, `stats`.
@@ -34,6 +37,25 @@ timer (`mct_settle()`) the chips use to come back after motion. USB probe,
 disconnect, suspend and resume go through `kernel/mct.h`'s `mct_backend`;
 the core has `mct_init`, `mct_register`, `mct_unplug`, `mct_suspend`,
 `mct_resume`, and `mct_shadow_alloc` for chips with a fixed size.
+
+Commit paths (since 2026-10-13, after what reviewers asked of drm/trigger5
+and appletbdrm):
+- **No USB I/O in a commit.** The primary plane's `atomic_update` only
+  copies damaged rows into the shadow. The cursor plane's stores the image,
+  position and on/off under `cur_lock` and queues `cur_work`, which calls
+  `cursor_set`/`cursor_hide`; moves in between collapse into the last one.
+  CRTC enable/disable still set the mode and power over USB, as udl and
+  gud do.
+- **No allocations in a commit.** The shadow and the chip's `mode_bufs`
+  are allocated in the CRTC's `atomic_check` when the mode size changes
+  (a failure rejects the commit with -ENOMEM), carried in `struct
+  mct_crtc_state`, and swapped in by `atomic_enable`; the replaced ones are
+  freed with the old state.
+- **Damage**: the raw clips are read and every row they could cover under
+  any rotation is marked (some compositors send them in rotated
+  coordinates), so a few extra rows at worst.
+- **USB buffers** are kmalloc'd bounce buffers or coherent URB buffers,
+  never vmalloc'd memory.
 
 ## The design as written before
 

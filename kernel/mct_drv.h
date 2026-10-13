@@ -71,8 +71,11 @@ struct mct_config {
 	int cursor_size;		/* square hardware cursor, pixels */
 	bool poll;			/* monitor can change: poll the connector */
 	bool gamma;			/* offer a 256-entry gamma LUT */
+	int mode_bufs;			/* chip buffers of w * h * 4 bytes per mode */
 	const char *stats_name;		/* debugfs file */
 };
+
+#define MCT_MAX_MODE_BUFS	4
 
 struct mct_device {
 	struct drm_device dev;
@@ -87,6 +90,9 @@ struct mct_device {
 	struct mutex lock;		/* the fields below, up to work */
 	u8 *shadow;			/* XRGB8888 image as committed by userspace */
 	size_t shadow_size;		/* allocated for the current mode */
+	/* the chip's per-mode buffers (mct_config.mode_bufs), as large */
+	u8 *mode_buf[MCT_MAX_MODE_BUFS];
+	int nmode_bufs;
 	bool shadow_valid;		/* holds a whole committed image */
 	u8 *rowmask;			/* rows to copy from the framebuffer */
 	u8 *changed;			/* shadow rows changed, cleared by the chip code */
@@ -97,8 +103,17 @@ struct mct_device {
 
 	struct work_struct work;	/* runs funcs->update */
 	struct delayed_work settle_work;	/* marks dirty and runs the worker */
-	u8 *cur;			/* cursor pixels for funcs->cursor_set */
 	int cur_size;
+	/*
+	 * The cursor: the commit stores it here and cur_work sends it, so no
+	 * commit waits for USB. Moves in between collapse into the last one.
+	 */
+	struct mutex cur_lock;		/* cur, cur_x, cur_y, cur_on, cur_pending */
+	u8 *cur;			/* pixels as committed */
+	int cur_x, cur_y;
+	bool cur_on, cur_pending;
+	u8 *cur_send;			/* cur_work's copy for funcs->cursor_set */
+	struct work_struct cur_work;
 	const char *chip;
 	struct attribute **attrs;	/* the sysfs "mct" group: common + chip files */
 	struct attribute_group attr_group;

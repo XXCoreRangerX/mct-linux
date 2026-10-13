@@ -77,7 +77,7 @@ MODULE_PARM_DESC(audio_lead_ms, "HDMI audio: how far ahead of playback the adapt
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	29
-#define DRIVER_PATCH	5
+#define DRIVER_PATCH	6
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -327,7 +327,6 @@ struct mct_t6 {
 	u8 lut[3][256];			/* gamma, R G B, applied in software */
 	struct t6_layout lay;		/* of img and hw, set by the worker */
 	u8 *hw[3];			/* NV12 image each frame buffer holds */
-	size_t img_size;		/* of img and hw[], for the current mode */
 	bool hw_valid[3];
 	unsigned int buf;		/* next frame buffer to write */
 	u32 seq;
@@ -1447,38 +1446,19 @@ static void t6_gamma(struct mct_device *mdev, const struct drm_color_lut *lut)
  * img and hw[] for a w x h mode: up to 4 bytes per pixel in any layout.
  * Called with updates stopped; kept while the size stays the same.
  */
-static int t6_alloc_images(struct mct_t6 *t6, int w, int h)
-{
-	size_t size = (size_t)w * h * 4;
-	int i;
-
-	if (size == t6->img_size)
-		return 0;
-	kvfree(t6->img);
-	t6->img = kvmalloc(size, GFP_KERNEL);
-	for (i = 0; i < ARRAY_SIZE(t6->hw); i++) {
-		kvfree(t6->hw[i]);
-		t6->hw[i] = kvmalloc(size, GFP_KERNEL);
-	}
-	t6->img_size = size;
-	if (t6->img && t6->hw[0] && t6->hw[1] && t6->hw[2])
-		return 0;
-	t6->img_size = 0;	/* try again next time */
-	return -ENOMEM;
-}
-
 static int t6_enable(struct mct_device *mdev, const struct drm_display_mode *mode)
 {
 	struct mct_t6 *t6 = to_t6(mdev);
 	struct t6_mode m;
-	int idx, ret;
+	int idx, ret, i;
 
 	ret = t6_mode_entry(t6, mode, &m);
 	if (ret)
 		return ret;
-	ret = t6_alloc_images(t6, mode->hdisplay, mode->vdisplay);
-	if (ret)
-		return ret;
+	/* the core allocated them for this mode in atomic_check */
+	t6->img = mdev->mode_buf[0];
+	for (i = 0; i < ARRAY_SIZE(t6->hw); i++)
+		t6->hw[i] = mdev->mode_buf[1 + i];
 	mutex_lock(&t6->mode_lock);
 	t6->mode_entry = m;
 	msleep(50);	/* after output off, before the new mode, as the vendor driver does */
@@ -2511,10 +2491,6 @@ static void t6_release(struct drm_device *dev, void *res)
 
 	usb_free_urb(t6->ev_urb);
 	drm_edid_free(t6->last_edid);
-	kvfree(t6->img);
-	kvfree(t6->hw[0]);
-	kvfree(t6->hw[1]);
-	kvfree(t6->hw[2]);
 }
 
 /*
@@ -3315,6 +3291,7 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 		.poll = true,
 		.gamma = true,
 		.stats_name = "mct_t6_stats",
+		.mode_bufs = 4,		/* img and hw[3] */
 		.chip = "t6",
 		.attrs = t6_attrs,
 	};

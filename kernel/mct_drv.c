@@ -64,6 +64,35 @@ static void mct_settle_work(struct work_struct *work)
 	mct_kick(mdev);
 }
 
+/* sends the last committed cursor state (mct_cursor_atomic_update) */
+static void mct_cursor_work(struct work_struct *work)
+{
+	struct mct_device *mdev = container_of(work, struct mct_device, cur_work);
+	int x, y, idx;
+	bool on;
+
+	mutex_lock(&mdev->cur_lock);
+	if (!mdev->cur_pending) {
+		mutex_unlock(&mdev->cur_lock);
+		return;
+	}
+	mdev->cur_pending = false;
+	on = mdev->cur_on;
+	x = mdev->cur_x;
+	y = mdev->cur_y;
+	if (on)
+		memcpy(mdev->cur_send, mdev->cur, mdev->cur_size * mdev->cur_size * 4);
+	mutex_unlock(&mdev->cur_lock);
+
+	if (!drm_dev_enter(&mdev->dev, &idx))
+		return;
+	if (on)
+		mdev->funcs->cursor_set(mdev, mdev->cur_send, x, y);
+	else
+		mdev->funcs->cursor_hide(mdev);
+	drm_dev_exit(idx);
+}
+
 static void mct_stop_updates(struct mct_device *mdev)
 {
 	/* the worker re-arms the settle timer and the timer queues the worker */
@@ -71,6 +100,7 @@ static void mct_stop_updates(struct mct_device *mdev)
 		cancel_work_sync(&mdev->work);
 	} while (cancel_delayed_work_sync(&mdev->settle_work));
 	cancel_work_sync(&mdev->work);
+	cancel_work_sync(&mdev->cur_work);
 	if (mdev->funcs->stop)
 		mdev->funcs->stop(mdev);
 	mutex_lock(&mdev->lock);
@@ -322,25 +352,28 @@ static void mct_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_
 	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
 	struct drm_shadow_plane_state *shadow = to_drm_shadow_plane_state(new_state);
 	struct drm_framebuffer *fb = new_state->fb;
-	int y, w, idx;
+	bool on = fb && new_state->visible;
+	int y, w;
 
-	if (!drm_dev_enter(plane->dev, &idx))
+	/* only store it: mct_cursor_work does the USB part */
+	if (on && drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
 		return;
-	if (!fb || !new_state->visible) {
-		mdev->funcs->cursor_hide(mdev);
-		goto out;
+	mutex_lock(&mdev->cur_lock);
+	if (on) {
+		memset(mdev->cur, 0, mdev->cur_size * mdev->cur_size * 4);
+		w = min_t(int, fb->width, mdev->cur_size) * 4;
+		for (y = 0; y < min_t(int, fb->height, mdev->cur_size); y++)
+			iosys_map_memcpy_from(mdev->cur + y * mdev->cur_size * 4,
+					      &shadow->data[0], y * fb->pitches[0], w);
+		mdev->cur_x = new_state->crtc_x;
+		mdev->cur_y = new_state->crtc_y;
 	}
-	if (drm_gem_fb_begin_cpu_access(fb, DMA_FROM_DEVICE))
-		goto out;
-	memset(mdev->cur, 0, mdev->cur_size * mdev->cur_size * 4);
-	w = min_t(int, fb->width, mdev->cur_size) * 4;
-	for (y = 0; y < min_t(int, fb->height, mdev->cur_size); y++)
-		iosys_map_memcpy_from(mdev->cur + y * mdev->cur_size * 4, &shadow->data[0],
-				      y * fb->pitches[0], w);
-	drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
-	mdev->funcs->cursor_set(mdev, mdev->cur, new_state->crtc_x, new_state->crtc_y);
-out:
-	drm_dev_exit(idx);
+	mdev->cur_on = on;
+	mdev->cur_pending = true;
+	mutex_unlock(&mdev->cur_lock);
+	if (on)
+		drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
+	queue_work(system_highpri_wq, &mdev->cur_work);
 }
 
 static const struct drm_plane_helper_funcs mct_cursor_helper_funcs = {
@@ -352,13 +385,97 @@ static const struct drm_plane_helper_funcs mct_cursor_helper_funcs = {
 /* ------------------------------------------------------------------ */
 /* CRTC / encoder / connector					      */
 
+/*
+ * The buffers sized by the mode (the shadow and the chip's mode_bufs) are
+ * allocated in atomic_check, where a failure can still reject the commit,
+ * carried in the CRTC state, and swapped in by atomic_enable; what they
+ * replace is freed with the old state.
+ */
+struct mct_crtc_state {
+	struct drm_crtc_state base;
+	size_t size;			/* buffer size of this state's mode */
+	u8 *bufs[1 + MCT_MAX_MODE_BUFS];	/* new buffers, or none */
+};
+
+#define to_mct_crtc_state(s) container_of(s, struct mct_crtc_state, base)
+
+static void mct_crtc_state_free_bufs(struct mct_crtc_state *s)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(s->bufs); i++) {
+		kvfree(s->bufs[i]);
+		s->bufs[i] = NULL;
+	}
+}
+
+static void mct_crtc_reset(struct drm_crtc *crtc)
+{
+	struct mct_crtc_state *s = kzalloc(sizeof(*s), GFP_KERNEL);
+
+	if (crtc->state)
+		crtc->funcs->atomic_destroy_state(crtc, crtc->state);
+	if (s)
+		__drm_atomic_helper_crtc_reset(crtc, &s->base);
+	else
+		__drm_atomic_helper_crtc_reset(crtc, NULL);
+}
+
+static struct drm_crtc_state *mct_crtc_duplicate_state(struct drm_crtc *crtc)
+{
+	struct mct_crtc_state *s = kzalloc(sizeof(*s), GFP_KERNEL);
+
+	if (!s)
+		return NULL;
+	__drm_atomic_helper_crtc_duplicate_state(crtc, &s->base);
+	s->size = to_mct_crtc_state(crtc->state)->size;
+	return &s->base;
+}
+
+static void mct_crtc_destroy_state(struct drm_crtc *crtc, struct drm_crtc_state *state)
+{
+	struct mct_crtc_state *s = to_mct_crtc_state(state);
+
+	mct_crtc_state_free_bufs(s);
+	__drm_atomic_helper_crtc_destroy_state(state);
+	kfree(s);
+}
+
+static int mct_crtc_alloc_bufs(struct mct_device *mdev, struct drm_atomic_commit *state,
+			       struct drm_crtc *crtc, struct drm_crtc_state *crtc_state)
+{
+	struct mct_crtc_state *s = to_mct_crtc_state(crtc_state);
+	struct drm_crtc_state *old = drm_atomic_get_old_crtc_state(state, crtc);
+	int i;
+
+	s->size = to_mct_crtc_state(old)->size;
+	mct_crtc_state_free_bufs(s);
+	if (!crtc_state->enable)
+		return 0;
+	s->size = (size_t)crtc_state->mode.hdisplay * crtc_state->mode.vdisplay * 4;
+	if (s->size == to_mct_crtc_state(old)->size)
+		return 0;
+	for (i = 0; i < 1 + mdev->nmode_bufs; i++) {
+		s->bufs[i] = kvzalloc(s->size, GFP_KERNEL);
+		if (!s->bufs[i]) {
+			mct_crtc_state_free_bufs(s);
+			return -ENOMEM;
+		}
+	}
+	return 0;
+}
+
 static int mct_crtc_atomic_check(struct drm_crtc *crtc, struct drm_atomic_commit *state)
 {
 	struct mct_device *mdev = to_mct(crtc->dev);
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
+	int ret;
 
 	if (crtc_state->enable && mdev->funcs->mode_valid(mdev, &crtc_state->mode) != MODE_OK)
 		return -EINVAL;
+	ret = mct_crtc_alloc_bufs(mdev, state, crtc, crtc_state);
+	if (ret)
+		return ret;
 	if (crtc_state->gamma_lut && drm_color_lut_size(crtc_state->gamma_lut) != 256)
 		return -EINVAL;
 	return drm_crtc_helper_atomic_check(crtc, state);
@@ -395,11 +512,21 @@ static void mct_crtc_atomic_enable(struct drm_crtc *crtc, struct drm_atomic_comm
 {
 	struct mct_device *mdev = to_mct(crtc->dev);
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
+	struct mct_crtc_state *s = to_mct_crtc_state(crtc_state);
 	const struct drm_display_mode *mode = &crtc_state->mode;
+	int i;
 
-	/* if this fails (no memory) the display stays dark, the rest works */
-	if (mct_shadow_alloc(mdev, mode->hdisplay, mode->vdisplay) ||
-	    mdev->funcs->enable(mdev, mode)) {
+	/* a new size: take the buffers atomic_check made (updates are stopped) */
+	if (s->bufs[0]) {
+		mutex_lock(&mdev->lock);
+		swap(mdev->shadow, s->bufs[0]);
+		mdev->shadow_size = s->size;
+		for (i = 0; i < mdev->nmode_bufs; i++)
+			swap(mdev->mode_buf[i], s->bufs[1 + i]);
+		mutex_unlock(&mdev->lock);
+	}
+	/* if this fails the display stays dark, the rest works */
+	if (!mdev->shadow || mdev->shadow_size != s->size || mdev->funcs->enable(mdev, mode)) {
 		drm_err(&mdev->dev, "could not set up %dx%d\n", mode->hdisplay, mode->vdisplay);
 		goto out;
 	}
@@ -440,12 +567,12 @@ static const struct drm_crtc_helper_funcs mct_crtc_helper_funcs = {
 };
 
 static const struct drm_crtc_funcs mct_crtc_funcs = {
-	.reset = drm_atomic_helper_crtc_reset,
+	.reset = mct_crtc_reset,
 	.destroy = drm_crtc_cleanup,
 	.set_config = drm_atomic_helper_set_config,
 	.page_flip = drm_atomic_helper_page_flip,
-	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
+	.atomic_duplicate_state = mct_crtc_duplicate_state,
+	.atomic_destroy_state = mct_crtc_destroy_state,
 	DRM_CRTC_VBLANK_TIMER_FUNCS,
 };
 
@@ -715,11 +842,15 @@ static const struct drm_mode_config_funcs mct_mode_config_funcs = {
 static void mct_release(struct drm_device *dev, void *res)
 {
 	struct mct_device *mdev = to_mct(dev);
+	int i;
 
 	/* a late sysfs write may have queued work after the unplug stopped it */
 	cancel_delayed_work_sync(&mdev->settle_work);
 	cancel_work_sync(&mdev->work);
+	cancel_work_sync(&mdev->cur_work);
 	kvfree(mdev->shadow);
+	for (i = 0; i < mdev->nmode_bufs; i++)
+		kvfree(mdev->mode_buf[i]);
 }
 
 int mct_init(struct mct_device *mdev, const struct mct_config *cfg)
@@ -729,7 +860,8 @@ int mct_init(struct mct_device *mdev, const struct mct_config *cfg)
 	int ret;
 
 	mdev->funcs = cfg->funcs;
-	ret = drmm_mutex_init(dev, &mdev->lock);
+	mdev->nmode_bufs = min(cfg->mode_bufs, MCT_MAX_MODE_BUFS);
+	ret = drmm_mutex_init(dev, &mdev->lock) ?: drmm_mutex_init(dev, &mdev->cur_lock);
 	if (ret)
 		return ret;
 	ret = mct_attrs_init(mdev, cfg);
@@ -737,6 +869,7 @@ int mct_init(struct mct_device *mdev, const struct mct_config *cfg)
 		return ret;
 	INIT_WORK(&mdev->work, mct_update_work);
 	INIT_DELAYED_WORK(&mdev->settle_work, mct_settle_work);
+	INIT_WORK(&mdev->cur_work, mct_cursor_work);
 
 	ret = drmm_add_action_or_reset(dev, mct_release, NULL);
 	if (ret)
@@ -745,7 +878,8 @@ int mct_init(struct mct_device *mdev, const struct mct_config *cfg)
 	mdev->changed = drmm_kzalloc(dev, rows, GFP_KERNEL);
 	mdev->cur_size = cfg->cursor_size;
 	mdev->cur = drmm_kzalloc(dev, mdev->cur_size * mdev->cur_size * 4, GFP_KERNEL);
-	if (!mdev->rowmask || !mdev->changed || !mdev->cur)
+	mdev->cur_send = drmm_kzalloc(dev, mdev->cur_size * mdev->cur_size * 4, GFP_KERNEL);
+	if (!mdev->rowmask || !mdev->changed || !mdev->cur || !mdev->cur_send)
 		return -ENOMEM;
 
 	ret = drmm_mode_config_init(dev);
