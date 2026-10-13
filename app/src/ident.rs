@@ -433,6 +433,7 @@ pub fn identify(display: &Display, info: Option<&Info>) -> Vec<Section> {
         );
         s.add("vram_mb", "Video memory", i.vram_mb.map(crate::text::vram));
         s.add("display_flags", "Display flags", i.display_flags.clone());
+        s.add("id_rom", "ID ROM", i.id_rom.clone());
     }
     s.done("chip", "Chip", &mut out);
 

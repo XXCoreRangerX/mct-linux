@@ -34,6 +34,9 @@ drm_info and in the kernel log at probe).
   Wacom panel's EDID, since plain T2 adapters share them), and untested
   Trigger 6 adapters, docks and the Wacom DTU-1031AX behind the new module
   parameter `untested_ids` (mct_t6 0.29.4, mct_t2 0.3.35).
+- mct_t2 0.3.36 reads the tablet's ID ROM: checksum, version, video
+  memory and orientation in the kernel log, sysfs (`vram_mb`, `id_rom`) and
+  the app.
 - mct_t2 0.3.34: the chip clips a cursor at the right and bottom edges
   instead of the driver re-uploading a shifted image on every move there.
 - T2 protocol corrected and extended from the vendor drivers and captures;

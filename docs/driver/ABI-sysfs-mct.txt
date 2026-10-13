@@ -49,6 +49,13 @@ Description:
 		Read-only, Trigger II:
 
 		pixel_format	"RGB24" (sent as planar RLE), or "-" while off
+		vram_mb		video memory in MiB from the ID ROM, or "-"
+				if the ROM wasn't read or its checksum is
+				wrong
+		id_rom		the ID ROM's version, panel rotation and base
+				USB ID, e.g. "v1.8, rotated 180 degrees, USB
+				ID 0711:5200"; "checksum wrong", or "-" if it
+				wasn't read
 
 		backlight	name of the backlight device in
 				/sys/class/backlight/, or "-"

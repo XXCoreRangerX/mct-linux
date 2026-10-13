@@ -344,11 +344,14 @@ values; the init writes `fc4b=02`.
 
 | Byte | Meaning (code) | This tablet |
 |---|---|---|
+| `0x00-0x01` | signature `55 aa` | `55 aa` |
+| `0x04-0x05` | checksum: byte 4 = sum of bytes 6-255 (mod 256), byte 5 its complement (legacy Windows driver `FUN_14001c73c`) | `00 ff`, valid |
 | `0x06` | ROM version | `0x18`: v1.8 |
 | `0x08` | bits 0-1: DRAM address mode (flip address `>> 2` if 0, else `>> 1`; `fbff` = `81`/`82`) | `0x64`: `>> 2`, `fbff=81` |
-| `0x09` | DRAM geometry; size `((1 << ((b & 0xf) + 1)) & 0xfe) << 22` | `0x21`: **16 MiB** (inferred) |
+| `0x09` | DRAM geometry; size `((1 << ((b & 0xf) + 1)) & 0xfe) << 22` | `0x21`: **16 MiB** (verified 2026-10-13, probe step s) |
 | `0x0b` | bits 0-1: DVO mode (`fb96` = `00`, or `91` for 24-bit DVO); bits 2-3 = 1: HDMI model | `0x80`: `fb96=00`, no HDMI |
 | `0x0d-0x0f` | DDR PLL `fcf0-fcf2` | `01 19 00`, as Windows writes |
+| `0x10-0x13` | base USB ID (VID, PID; cyrozap's notes) | `07 11 52 00`: `0711:5200` |
 | `0x17` | video timing source; 4 (with OEM type 1) = the EDID in the ROM at `+0x80` | `0x04` |
 | `0x18` | if bits 0-1 are set, bit 6 = **rotated 180 degrees** | `0xf1`: rotated |
 | `0x6f` | OEM type | `0x01` |

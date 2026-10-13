@@ -67,7 +67,7 @@ MODULE_PARM_DESC(half_motion, "Experimental, off by default. Default for new dev
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	35
+#define DRIVER_PATCH	36
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -156,6 +156,8 @@ struct mct_t2 {
 	} stats;
 	const struct drm_edid *edid;	/* read from the device at init */
 	bool check_panel;		/* USB ID also used by other T2 devices */
+	u8 rom[256];			/* ID ROM, from the init's 0x1d read */
+	bool rom_read, rom_reported;
 	struct backlight_device *bl;
 	char bl_name[32];		/* for sysfs; empty without a backlight */
 	struct mutex power_lock;		/* crtc_on + bl_off -> pixel clock */
@@ -845,6 +847,32 @@ static unsigned int t2_pace_us(u8 ep, const u8 *data)
 	return 20000;
 }
 
+/*
+ * The ID ROM (docs/reference/protocol-t2.md, "ID ROM"): signature 55 aa,
+ * byte 4 the sum of bytes 6-255 and byte 5 its complement (the legacy
+ * Windows driver's check), byte 6 the version, byte 9 the video memory,
+ * byte 0x18 the 180 degree flag, the base USB IDs at 0x10.
+ */
+static bool t2_rom_ok(const u8 *rom)
+{
+	u8 sum = 0;
+	int i;
+
+	for (i = 6; i < 256; i++)
+		sum += rom[i];
+	return rom[0] == 0x55 && rom[1] == 0xaa && rom[4] == sum && rom[5] == (u8)~sum;
+}
+
+static unsigned int t2_rom_vram_mb(const u8 *rom)
+{
+	return (((1u << ((rom[9] & 0xf) + 1)) & 0xfe) << 22) >> 20;
+}
+
+static bool t2_rom_rotated(const u8 *rom)
+{
+	return (rom[0x18] & 3) && (rom[0x18] & 0x40);
+}
+
 /* manufacturer "WAC" in the panel EDID of the 0x1d reply (at +0x80) */
 static bool t2_wacom_panel(const u8 *reply, int len)
 {
@@ -902,9 +930,13 @@ static int t2_hw_init_once(struct mct_t2 *t2)
 			ret = t2_in(t2, rdlen);
 			if (ret < 0)
 				goto err;
-			/* 0x1d device info: panel EDID at +0x80 */
+			/* 0x1d device info: the ID ROM, panel EDID at +0x80 */
 			if (data && data[0] == 0x1d && ret >= 0x80 + EDID_LENGTH && !t2->edid)
 				t2->edid = drm_edid_alloc(t2->bounce + 0x80, EDID_LENGTH);
+			if (data && data[0] == 0x1d && ret >= sizeof(t2->rom) && !t2->rom_read) {
+				memcpy(t2->rom, t2->bounce, sizeof(t2->rom));
+				t2->rom_read = true;
+			}
 			/*
 			 * Before anything panel-specific: on IDs that plain T2
 			 * adapters share (j5create JUA230 and others use
@@ -1057,6 +1089,27 @@ static bool t2_init_took(struct mct_t2 *t2)
 	return true;
 }
 
+/* once per device: what the ID ROM says, and whether it can be trusted */
+static void t2_rom_report(struct mct_t2 *t2)
+{
+	static const char * const why = "this driver assumes the DTU-1031X's layout anyway";
+	const u8 *r = t2->rom;
+
+	if (!t2->rom_read || t2->rom_reported)
+		return;
+	t2->rom_reported = true;
+	if (!t2_rom_ok(r)) {
+		drm_warn(&t2->base.dev, "ID ROM checksum wrong (%02x %02x); %s\n", r[4], r[5], why);
+		return;
+	}
+	drm_info(&t2->base.dev, "ID ROM v%u.%u, %u MiB video memory%s, USB ID %02x%02x:%02x%02x\n",
+		 r[6] >> 4, r[6] & 0xf, t2_rom_vram_mb(r),
+		 t2_rom_rotated(r) ? ", rotated 180 degrees" : "", r[0x10], r[0x11],
+		 r[0x12], r[0x13]);
+	if (!t2_rom_rotated(r))
+		drm_warn(&t2->base.dev, "the ID ROM doesn't mark the panel as rotated; %s\n", why);
+}
+
 static int t2_hw_init(struct mct_t2 *t2)
 {
 	int ret, tries;
@@ -1068,8 +1121,10 @@ static int t2_hw_init(struct mct_t2 *t2)
 		ret = t2_hw_init_once(t2);
 		if (ret)
 			return ret;
-		if (t2_init_took(t2))
+		if (t2_init_took(t2)) {
+			t2_rom_report(t2);
 			return 0;
+		}
 		if (!tries)
 			drm_warn(&t2->base.dev, "retrying device init\n");
 	}
@@ -1584,6 +1639,38 @@ T2_SHOW_U64(updates, t2->stats.updates);
 T2_SHOW_U64(bytes, t2->stats.bytes);
 T2_SHOW_U64(errors, t2->stats.errors);
 
+/* from the ID ROM; "-" if it wasn't read or its checksum is wrong */
+static ssize_t vram_mb_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t2 *t2 = t2_from_dev(dev);
+
+	if (!t2)
+		return -ENODEV;
+	if (!t2->rom_read || !t2_rom_ok(t2->rom))
+		return sysfs_emit(buf, "-\n");
+	return sysfs_emit(buf, "%u\n", t2_rom_vram_mb(t2->rom));
+}
+static DEVICE_ATTR_RO(vram_mb);
+
+/* version, checksum, rotation and base USB IDs of the ID ROM */
+static ssize_t id_rom_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct mct_t2 *t2 = t2_from_dev(dev);
+	const u8 *r;
+
+	if (!t2)
+		return -ENODEV;
+	r = t2->rom;
+	if (!t2->rom_read)
+		return sysfs_emit(buf, "-\n");
+	if (!t2_rom_ok(r))
+		return sysfs_emit(buf, "checksum wrong\n");
+	return sysfs_emit(buf, "v%u.%u, %s, USB ID %02x%02x:%02x%02x\n", r[6] >> 4, r[6] & 0xf,
+			  t2_rom_rotated(r) ? "rotated 180 degrees" : "not rotated",
+			  r[0x10], r[0x11], r[0x12], r[0x13]);
+}
+static DEVICE_ATTR_RO(id_rom);
+
 static ssize_t backlight_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct mct_t2 *t2 = t2_from_dev(dev);
@@ -1667,6 +1754,8 @@ static struct attribute *t2_attrs[] = {
 	&dev_attr_lossy.attr,
 	&dev_attr_motion.attr,
 	&dev_attr_pixel_format.attr,
+	&dev_attr_vram_mb.attr,
+	&dev_attr_id_rom.attr,
 	NULL
 };
 

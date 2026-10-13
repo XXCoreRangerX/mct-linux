@@ -310,6 +310,11 @@ tearing, and measured diff time is negligible compared with USB transfer time.
 
 - **Trimmed init**: 78 transfers, ~1 s from cold (see `docs/reference/init-sequence.md`), black
   frame into buffer A right before `0x14`.
+- **ID ROM** (since 0.3.36): the `0x1d` read at init is kept; its checksum,
+  version, video memory, 180-degree flag and base USB ID are logged once
+  and shown in sysfs (`vram_mb`, `id_rom`) and the app. A wrong checksum
+  or a ROM that doesn't mark the panel as rotated is logged; the driver
+  still uses the DTU-1031X's fixed layout.
 - **USB IDs**: `0711:5209` and `520d` (tested); `5201` and `520f` (other
   DTU-1031X units, untested) only go past the `0x1d` ROM read, the 5th
   init record after four GPIO writes, if the panel EDID's manufacturer is

@@ -37,6 +37,7 @@ pub const KEYS: &[&str] = &[
     "firmware",
     "serial",
     "display_flags",
+    "id_rom",
     "driver_version",
     "updates",
     "bytes",
@@ -232,6 +233,10 @@ pub struct Info {
     pub serial: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_flags: Option<String>,
+    /// T2 ID ROM: version, rotation and base USB ID, e.g.
+    /// `v1.8, rotated 180 degrees, USB ID 0711:5200`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id_rom: Option<String>,
     /// e.g. `mct_t6 0.26.0`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub driver_version: Option<String>,
@@ -284,6 +289,7 @@ impl Info {
             "firmware" => s(&self.firmware),
             "serial" => s(&self.serial),
             "display_flags" => s(&self.display_flags),
+            "id_rom" => s(&self.id_rom),
             "driver_version" => s(&self.driver_version),
             "updates" => s(&self.updates),
             "bytes" => s(&self.bytes),
@@ -561,6 +567,7 @@ impl Device {
             firmware: none_if_dash(r("firmware")?),
             serial: none_if_dash(r("serial")?),
             display_flags: none_if_dash(r("display_flags")?),
+            id_rom: none_if_dash(r("id_rom")?),
             driver_version: none_if_dash(r("driver_version")?),
             updates: parse(r("updates")?),
             bytes: parse(r("bytes")?),

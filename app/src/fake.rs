@@ -226,6 +226,8 @@ pub const T2_FILES: &[(&str, &str)] = &[
     ("lossy", "0"),
     ("motion", "lossy"),
     ("backlight", T2_BACKLIGHT),
+    ("vram_mb", "16"),
+    ("id_rom", "v1.8, rotated 180 degrees, USB ID 0711:5200"),
 ];
 
 pub fn add_t6_a(root: &Path) -> io::Result<PathBuf> {
