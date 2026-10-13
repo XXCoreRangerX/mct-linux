@@ -114,8 +114,9 @@ class Jpeg:
         self.ring = (dest + len(payload) + 0xFFF) & ~0xFFF
         payload = bytearray(payload)
         payload[0x2F] = flags
-        # every fragment but the last marked "more follows", as for raw frames
-        self.t.send(bytes(payload), dest=dest, more_flag=True)
+        # fragments with their offset and "more" = 0: with "more" set on all but
+        # the last (as raw frames take it) the 5600 showed nothing (2026-10-13)
+        self.t.send(bytes(payload), dest=dest)
 
     def flip(self, data, fb, w=W, h=H):
         """Command 3: decode into frame buffer fb and show it."""
