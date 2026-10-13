@@ -67,7 +67,7 @@ MODULE_PARM_DESC(half_motion, "Default for new devices: send full-screen updates
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	31
+#define DRIVER_PATCH	32
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -131,6 +131,14 @@ struct mct_t2 {
 	 * image there, so these are added to the next update of that buffer.
 	 */
 	u8 stale[2][T2_TILE_ROWS_ALL];	/* tile masks per device tile row */
+	/*
+	 * The last update's half-resolution tiles: they stay half for one more
+	 * update, and a drag stays in half mode while it is at least half the
+	 * budget, so tiles at the edge of a moving area don't alternate
+	 * between blurred and sharp from one update to the next.
+	 */
+	u8 half_prev[T2_TILE_ROWS_ALL];
+	bool half_last;
 	struct drm_rect trects[T2_MAX_TRECTS];	/* t2_present_tiles scratch, io_lock held */
 	u8 enc_ch[3][1024];		/* t2_encode scratch, io_lock held */
 	u8 *enc_pix[1024];			/* shadow snapshot being sent */
@@ -684,10 +692,13 @@ static int t2_present_tiles(struct mct_t2 *t2, bool lossless, int back, int *use
 
 	n = t2_mask_rects(need, rects);
 	*went_half = !lossless && moving_known &&
-		     t2_exact_size(t2, rects, n, T2_FRAME_BUDGET) > T2_FRAME_BUDGET;
+		     t2_exact_size(t2, rects, n, T2_FRAME_BUDGET) >
+		     (t2->half_last ? T2_FRAME_BUDGET / 2 : T2_FRAME_BUDGET);
+	t2->half_last = *went_half;
 	if (*went_half) {
 		for (ty = 0; ty < T2_TILE_ROWS; ty++)
-			half[ty] = need[ty] & t2_tile_diff(t2->snap, t2->hw[front], ty);
+			half[ty] = need[ty] & (t2_tile_diff(t2->snap, t2->hw[front], ty) |
+					       t2->half_prev[ty]);
 		n = t2_mask_rects(half, rects);
 		for (i = 0; i < n && !ret; i++) {
 			ret = t2_send_half_rect(t2, t2->snap, base, &rects[i], sent, &area);
@@ -701,8 +712,11 @@ static int t2_present_tiles(struct mct_t2 *t2, bool lossless, int back, int *use
 		 */
 		for (ty = 0; ty < T2_TILE_ROWS_ALL; ty++)
 			need[ty] = (need[ty] | blur[ty]) & ~half[ty];
-	} else if (!lossless && READ_ONCE(t2->lossy) > 0) {
-		tol = READ_ONCE(t2->lossy);
+		memcpy(t2->half_prev, half, sizeof(half));
+	} else {
+		memset(t2->half_prev, 0, sizeof(t2->half_prev));
+		if (!lossless && READ_ONCE(t2->lossy) > 0)
+			tol = READ_ONCE(t2->lossy);
 	}
 	n = t2_mask_rects(need, rects);
 	for (i = 0; i < n && !ret; i++) {
@@ -752,6 +766,8 @@ static int t2_present(struct mct_t2 *t2, bool lossless, bool *went_lossy)
 
 		t2->hw_valid[back] = false;
 		memset(t2->stale[back], 0, sizeof(t2->stale[back]));
+		memset(t2->half_prev, 0, sizeof(t2->half_prev));
+		t2->half_last = false;
 		for (i = 0; i < n && !ret; i++)
 			ret = t2_send_visible_rect(t2, t2->snap, base, &bands[i], tol, &sent,
 						   &used);

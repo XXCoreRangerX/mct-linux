@@ -1387,6 +1387,40 @@ def step_x(opt):
     return cmds, f"PASS = {T_PIC} (the picture for the light test)", restore, checks
 
 
+# --- step y: does the 2x scaler read past the source's edges? (lab
+# captures/t2-research/scaler-sync.md, probe P1). mct_t2's half mode decodes
+# the half-size source at 0x560000 and scales it 2x into the hidden buffer;
+# if the filter takes neighbours from outside the source, the edges of every
+# half-resolution area blend with leftovers of earlier frames (a flickering
+# band). Here the leftovers are magenta and the source is plain grey.
+
+MAGENTA = (0xff, 0x00, 0xff)
+Y_FILL_H = 64                   # 1024 x 64 at the framebuffer pitch: 192 KiB of magenta
+Y_SRC = HALF_SRC + 0x10000      # the grey source: magenta before and after it
+
+
+def step_y(opt):
+    sw, sh = BOX_W // 2, BOX_H // 2
+    dst = fb_addr(FB_B, TEST_VX, BOX_VY, BOX_W, BOX_H)
+    fill = rle_rect(solid(W, Y_FILL_H, MAGENTA), W, Y_FILL_H)
+    pay = rle_rect(solid(sw, sh, GREY), sw, sh)
+    assert Y_SRC + sw * sh * 3 <= HALF_SRC + W * 3 * Y_FILL_H
+    return ([cmd_full("clear buffer B (dark green)", FB_B, BG_B),
+             cmd_rle("grey band across the screen", FB_B, 0, BAND_VY, W, BAND_H,
+                     solid(W, BAND_H, GREY)),
+             Cmd(f"scratch {HALF_SRC:#x}-{HALF_SRC + W * 3 * Y_FILL_H:#x} filled with magenta "
+                 f"(0x13 {W}x{Y_FILL_H} in place there)",
+                 hdr13(HALF_SRC, HALF_SRC, W, Y_FILL_H, W, Y_FILL_H, 0x00, W * Y_FILL_H * 3,
+                       len(fill)), fill),
+             Cmd(f"test box: plain grey {sw}x{sh} decoded at {Y_SRC:#x} (inside the magenta), "
+                 f"scaled 2x to {BOX_W}x{BOX_H} in the band",
+                 hdr13(Y_SRC, dst, sw, sh, BOX_W, BOX_H, 0x00, sw * sh * 3, len(pay)), pay)],
+            "PASS = the band is plain grey everywhere: the box can't be seen at all. "
+            "FAIL = a pink/magenta (or any other) line or tint along any edge of where the "
+            "box is (middle of the band, right half): write which edges (top, bottom, left, "
+            "right) and how thick")
+
+
 # --- step u: cursor shape by address, edge clipping
 
 CURSOR_ADDR_REGS = [0xfe30, 0xfe31, 0xfe32, 0xfe33]
@@ -1544,6 +1578,8 @@ STEPS = [
     ("v", "flip with EP2 0x16 register lists (rhgndf/trigger2) instead of 0x15", "low", step_v),
     ("w", "EP2 timeout 0x1000 (0x90 register 4): does the chip recover from a truncated 0x13 "
      "by itself? init value restored afterwards", "medium-low", step_w),
+    ("y", "2x scaler edge taps: plain grey source in magenta-filled scratch, scaled into a "
+     "grey band", "low", step_y),
     ("x", "the ID ROM's 'light' GPIO (feb1 bit 6, backlight enable?): low, then high; only "
      "that bit changes; registers restored afterwards", "low", step_x),
 ]
@@ -1563,6 +1599,8 @@ STEP_NOTES = {
          "The values read at the start are written back afterwards, also on failure or quit "
          "(fcb0 through 04 as the Mac on sequence), and if they do not read back or a check "
          "fails the normal init runs again. No mode, PLL or timing register is touched.",
+    "y": "Only VRAM writes: the hidden buffer and the scratch area mct_t2's half mode "
+         "uses (0x560000-0x590000). No registers.",
     "x": "Changes only bit 6 of feb1 (and makes it an output in feb0, as the init does): the "
          "line the ID ROM (byte 0x1f = 01) names 'light', which Windows' own init holds low "
          "and then high (feb1 b7 -> f7). Bits 0-1 (pulsed as a reset in the init) and the "

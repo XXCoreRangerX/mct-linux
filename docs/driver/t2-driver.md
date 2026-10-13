@@ -213,7 +213,16 @@ found no "scaler done" register (protocol-t2.md, "Tested on the tablet
 2026-10-13"), so neither the scaler nor the scratch source is broken in
 general. Left to look at: the tile bookkeeping across the two buffers
 (stale tiles after a flip), edge taps of the scaler (report probe P1), and
-whether the band is the half rect's own edge.
+whether the band is the half rect's own edge. Probe step y (2026-10-13): a plain grey
+source decoded inside magenta-filled scratch and scaled 2x into a grey
+band showed no line at all, so the scaler doesn't read past the source
+(top/bottom; left/right taps would read the neighbouring packed rows, also
+grey). That leaves the driver's own per-update decisions: a tile at the
+edge of a moving area that changes only every other update alternated
+blurred/sharp, and a drag near the budget switched the whole moving area
+between half and exact. 0.3.32 adds hysteresis: half-resolution tiles stay
+half for one more update, and half mode stays on while the update is at
+least half the budget.
 
 ## Software gamma (driver 0.3.23)
 
