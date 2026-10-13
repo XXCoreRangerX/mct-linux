@@ -138,7 +138,9 @@ class Events(threading.Thread):
                 ev = bytes(self.dev.read(t6dev.EP_ACK, 64, 2000))
             except usb.core.USBTimeoutError:
                 continue
-            except usb.core.USBError as e:
+            except (usb.core.USBError, ValueError) as e:
+                if self.stop:
+                    return
                 self.errors += 1
                 log(f"  event read error: {e}", console=False)
                 try:
@@ -156,6 +158,7 @@ class Events(threading.Thread):
 class Jpeg:
     def __init__(self, t):
         self.t = t
+        self.shown = None           # frame buffer on screen (last flip)
         self.slot = 0
         self.fence = 0
         self.first = True
@@ -179,6 +182,7 @@ class Jpeg:
                           a16(w), a16(w), p0, p0 + a16(w) * a16(h), 0, FMT_JPEG, 0)
         flags = FLAG_RESET_JPEG if self.first else 0
         self.first = False
+        self.shown = fb
         return self.fence, self._send(hdr, data, flags)
 
     def decode(self, data, fb, w, h, x=0, y=0, pitch=None, buf_h=None):
@@ -327,7 +331,8 @@ def j2(t, j):
 
 def j3(t, j):
     log("\n=== J3: large JPEGs decoded into a hidden buffer (command 7, no flip)")
-    hidden = FB[1]
+    hidden = next(fb for fb in (FB[2], FB[1], FB[0]) if fb != j.shown)   # not on screen
+    log(f"  decoding into buffer at {hidden:#x} (on screen: {j.shown:#x})", console=False)
     for w, h in ((1920, 1080), (2560, 1440), (3440, 1440), (3840, 2160)):
         if a16(w) * a16(h) * 3 // 2 + 0x30 > FB[1] - FB[0]:
             log(f"  {w}x{h}: does not fit a frame buffer, skipped")
@@ -366,6 +371,7 @@ def p(t, j):
     r = j.wait(j.decode(jpeg(box, 95), FB[1], 256, 128, x=x, y=y, pitch=W, buf_h=a16(H)))
     log(f"  256x128 box at ({x},{y}) into buffer 1: {'ok' if r else 'no event'}")
     empty_flip(t, FB[1], FMT_NV12, W, W * a16(H), 2)
+    j.shown = FB[1]
     ok = ask("After the flip: the same test card, plus a red-bordered white box with a blue "
              "bar in the middle of the screen, everything else unchanged and no garbage?")
     log(f"RESULT P: {'PASS' if ok and ok0 else 'FAIL'} (picture before: {'y' if ok0 else 'n'})")

@@ -1124,3 +1124,32 @@ The adapter's state from the JPEG frames (decoder or colour conversion)
 outlives the driver rebind, so the script now ends by telling the user to
 replug the T6 (confirmed: only the replug brought the clean picture back). If the driver ever uses JPEG, it has to know how to bring
 the adapter back to its raw state (untested: `0x86` "reset JPEG engine").
+
+**JPEG, second round (2026-10-13, `captures/t6-jpeg/t6_jpeg-20261013-190320.log`,
+after a replug).** Event reads in a background thread with 2 s timeouts:
+21 read errors in the whole run instead of hundreds.
+
+- **Partial JPEG updates work.** Command 7 with a 256x128 JPEG at (832,
+  448) decoded into the hidden buffer:
+  - plane 0 = base + y·1920 + x;
+  - plane 1 = base + 1920·1088 + (y/2)·1920 + x.
+
+  The empty flip that mct_t6 uses (NV12, UV at 1920·1088) then showed the
+  box in place and the rest unchanged.
+- **Decode time grows faster than the size** (one test card per size,
+  Q95, command 7):
+
+  | Size | JPEG | Decode | Throughput |
+  |---|---|---|---|
+  | 1920x1080 | 203 KiB | 29 ms | 71 Mpixel/s |
+  | 2560x1440 | 343 KiB | 71 ms | 52 Mpixel/s |
+  | 3440x1440 | 459 KiB | 120 ms | 41 Mpixel/s |
+  | 3840x2160 | 752 KiB | 329 ms | 25 Mpixel/s |
+
+  At the MO34WQC2's 3440x1440 that's ~8 fps, far below raw NV12 there
+  (~45 fps). The large JPEGs showed up garbled because the script decoded
+  them into the buffer P had just put on screen (fixed).
+- **The clean check after JPEG was clean.** RGB24 and NV12 pictures drawn
+  exactly like mct_t6 (session 7 rectangle writes, empty flip) looked
+  right, so this run left no bad state. The tint after the first run
+  probably came from the wrapping ring, not from JPEG itself.
