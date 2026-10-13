@@ -26,7 +26,13 @@ import t6dev
 
 W, H = 1920, 1080
 FB = (0x0, 0xFFFEC0, 0x1FFFD80)          # mct_t6's three frame buffers
-RING, RING_END = 0x3000000, 0x39FF800    # the bitstream ring (Windows: VRAM - 0xA00000)
+# JPEG bitstream slots above the frame buffers (Windows: a ring at VRAM -
+# 0xA00000). A ring that wraps back to its start with FLAG_RESET_JPEG (the
+# Ubuntu daemon's way) broke the 5600's decoder and event endpoint until a
+# power cycle (2026-10-13), so: three fixed slots in turn, at most 2 frames
+# in flight, the reset flag only on the first frame.
+SLOTS = (0x3000000, 0x3300000, 0x3600000)
+SLOT_SIZE = 0x300000
 FMT_NV12, FMT_JPEG = 6, 0xD
 FLAG_RESET_JPEG = 0x80
 EV_DONE, EV_JPEG_ERR = 0x04, 0x08
@@ -96,7 +102,7 @@ def jpeg(img, q):
 class Jpeg:
     def __init__(self, t):
         self.t = t
-        self.ring = RING
+        self.slot = 0
         self.fence = 0
         self.first = True
         self.events = 0
@@ -106,12 +112,9 @@ class Jpeg:
         return hdr + data + bytes(1024)                 # Ubuntu daemon: JPEG + 1024 zero bytes
 
     def _send(self, payload, flags):
-        dest = self.ring
-        if dest + len(payload) > RING_END:
-            dest = RING                                 # wrap: the decoder must reset
-            flags |= FLAG_RESET_JPEG
-            log("  ring wrapped", console=False)
-        self.ring = (dest + len(payload) + 0xFFF) & ~0xFFF
+        assert len(payload) <= SLOT_SIZE, "JPEG too large for a slot"
+        dest = SLOTS[self.slot]
+        self.slot = (self.slot + 1) % len(SLOTS)
         payload = bytearray(payload)
         payload[0x2F] = flags
         # fragments with their offset and "more" = 0: with "more" set on all but
