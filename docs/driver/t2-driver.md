@@ -222,7 +222,13 @@ edge of a moving area that changes only every other update alternated
 blurred/sharp, and a drag near the budget switched the whole moving area
 between half and exact. 0.3.32 adds hysteresis: half-resolution tiles stay
 half for one more update, and half mode stays on while the update is at
-least half the budget.
+least half the budget. Test of 0.3.32: the flicker is gone. But with a
+photo wallpaper the tablet stayed in half mode with nothing moving: the
+hysteresis kept the blurred tiles half, and re-sharpening a photo costs
+more than half the budget, so it never left. A black wallpaper was cheap
+enough to get out. 0.3.33 keeps only the tiles that actually **moved** in
+the last update half, and stays in half mode only while something moves;
+a still picture is always sharpened.
 
 ## Software gamma (driver 0.3.23)
 

@@ -1044,3 +1044,10 @@ JUA254H-IC24030502 with its request dispatcher).
   nothing, and the repeat played. Most likely that `speaker-test` didn't
   get the device (PipeWire holds it while its sink is active; use
   `pactl suspend-sink … 1` for `hw:` tests).
+
+**Long playback (2026-10-13, mct_t6 0.29.3).** Music through PipeWire on
+the JUA254H for a long session: no drift, delay or crackle, so host-clock
+pacing is enough (as the vendor analysis suggested). Bit-perfect: the
+path carries 48 kHz S16 unchanged at volume 31 (0 dB), so PipeWire needs
+48 kHz/S16 content and no resampling for that; 44.1 kHz content is always
+resampled, since the 5600 offers only 48 kHz.
