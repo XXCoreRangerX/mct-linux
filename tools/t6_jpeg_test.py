@@ -13,7 +13,9 @@ the end). LG at 1920x1080@60 only; no other timing is touched.
   J3  large JPEGs decoded into a hidden buffer with command 7 (no flip, no
       mode change): 2560x1440, 3440x1440, 3840x2160
 
-Sends only what the driver sends anyway (set mode 0x12, software ready 0x31,
+Afterwards replug the T6: the decoder's state outlives the driver rebind,
+and the driver's frames showed a tint, blocky colours and a garbage band at
+the bottom until a power cycle. Sends only what the driver sends anyway (set mode 0x12, software ready 0x31,
 output 0x03, bulk sessions with signature 0). Log: /tmp/t6_jpeg-<time>.log.
 """
 import io, os, statistics, struct, sys, time
@@ -289,6 +291,9 @@ def main():
     j2(j)
     j3(j)
     log(f"\n{j.events} interrupt events, {j.read_errors} read errors; log: {log_path}")
+    log("\nUNPLUG AND REPLUG THE T6 NOW: rebinding the driver doesn't reset the JPEG "
+        "decoder, and the driver's frames came out tinted and blocky after this test "
+        "(2026-10-13) until the adapter was power-cycled.")
 
 
 if __name__ == "__main__":

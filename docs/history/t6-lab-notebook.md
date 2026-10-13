@@ -1114,3 +1114,12 @@ Verdict, against the research estimate (100-135 Mpixel/s):
 
 So JPEG is worth building only for USB 2 links, with a size budget per
 frame and raw as the fallback.
+
+**After the JPEG test (2026-10-13).** With the driver bound again, the LG
+showed a garbage band ~50 px high at the bottom. After a mode change to
+120 Hz there was a green tint in the middle; back at 144 Hz the band was
+purple/green and the whole picture looked blocky and rainbow-coloured.
+The adapter's state from the JPEG frames (decoder or colour conversion)
+outlives the driver rebind, so the script now ends by telling the user to
+replug the T6. If the driver ever uses JPEG, it has to know how to bring
+the adapter back to its raw state (untested: `0x86` "reset JPEG engine").
