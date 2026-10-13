@@ -33,8 +33,8 @@ pub const BRIGHTNESS_DESCRIPTION: &str = "0 turns the backlight off";
 pub const LOSSY_DESCRIPTION: &str =
     "Allow lossy updates during heavy motion. 0 keeps every update lossless.";
 
-pub const HALF_MOTION_DESCRIPTION: &str = "Send full-screen motion at half resolution, upscaled by \
-     the tablet: a little blur instead of streaks. The exact picture returns when motion stops.";
+pub const HALF_MOTION_DESCRIPTION: &str = "Experimental, off by default. Send heavy motion at half \
+     resolution, upscaled by the tablet. Can show glitches at the edges of moving windows.";
 
 pub const CREDITS: &str = "Protocol work builds on cyrozap's notes and the trigger6 driver";
 

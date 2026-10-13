@@ -19,14 +19,14 @@ work from the research of 2026-10-12/13. Sources are lab reports in
 | 2 | T6 + LG | 1080p144 (now 120 px blanking): picture, then `speaker-test` | stable picture, clean tone. **Done 2026-10-13: pass** |
 | 3 | T6 + LG | volume: `amixer -c JUA254H set PCM 31 / 15 / 0`, mute/unmute | 15 clearly quieter, 0 silent (first `40 23` on the 5600). **Done 2026-10-13: pass** |
 | 4 | T6 | long playback (an hour of music) | no crackle or growing delay (drift). **Done 2026-10-13: pass** |
-| 5 | tablet | half-resolution motion: drag windows | no flickering band at the edges (0.3.31 fix). **2026-10-13: still flickers; 0.3.32 (hysteresis): gone, but stuck in half mode on a photo wallpaper; 0.3.33 to test** |
+| 5 | tablet | half-resolution motion: drag windows | no flickering band at the edges (0.3.31 fix). **2026-10-13: still flickers; 0.3.32 (hysteresis): gone, but stuck in half mode on a photo wallpaper; 0.3.33: fixed, but parts of translucent windows vanish near edges again. Half mode stays experimental and off; parked** |
 | 6 | tablet | `tools/t2_probe.py --steps q,r,s,t,u,v,x`, then `--steps w` alone | **Done 2026-10-13 except w**: q no (and it upsets the chip until re-init), r scaler fine and no done-signal, s 16 MiB yes, t off works / on needs `fb60=01`, u clipping yes / second shape no, v yes, x no effect (protocol-t2.md) |
 
 ### 2. Then, by value
 
 | # | Work | From | Size |
 |---|---|---|---|
-| 1 | Act on the probe results: 16 MiB layout (s: room for per-buffer scratch sources and staging), hardware cursor clipping (u3-u5, drop the shifted re-upload), in-band `0x16` flips (v), timeout recovery (w, still to run); find the half-mode edge band (r ruled out the scaler: tile bookkeeping across buffers, edge taps P1, a tint/debug mask P5); follow-ups: t1b with `fb60=01`, the second cursor shape's address unit | `captures/t2-research/scaler-sync.md`, `wacom-and-t2-devices.md` | M |
+| 1 | Act on the probe results: 16 MiB layout (s: room for per-buffer scratch sources and staging), hardware cursor clipping (u3-u5, drop the shifted re-upload), in-band `0x16` flips (v), timeout recovery (w, still to run); ~~find the half-mode edge band~~ (parked 2026-10-13: half mode stays experimental and off); follow-ups: t1b with `fb60=01`, the second cursor shape's address unit | `captures/t2-research/scaler-sync.md`, `wacom-and-t2-devices.md` | M |
 | 2 | More USB IDs: T2 `0711:5200-520f` (DTU-1031X seen as `5201`, `520f`), identify by ID ROM/EDID; T6 PID range + interface class (`0711:5600-560b`, `19ff:560b-560e`, `03f0:0182`), untested ones opt-in; DTU-1031AX (`0711:5609`, maybe `056a:039f` interface 0) with its quirk (no rotation, EDID's own mode only) | `captures/scout/web-research-2026-10-13.md`, `captures/t2-research/wacom-and-t2-devices.md` | S |
 | 3 | HDMI audio extras: ELD and jack controls from the connector's EDID; optional short prefill on start | `captures/t6-research/audio-analysis.md` | S |
 | 4 | T2: read the ID ROM properly (checksum bytes 4/5, version 0x16-0x18, GPIO map 0x1a-0x1f, 180° flag, EDID) | `wacom-and-t2-devices.md` | S-M |

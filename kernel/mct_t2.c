@@ -61,7 +61,7 @@ MODULE_PARM_DESC(lossy, "Default for new devices: maximum lossy tolerance (1-8; 
 
 static bool half_motion;
 module_param(half_motion, bool, 0644);
-MODULE_PARM_DESC(half_motion, "Default for new devices: send full-screen updates too big for a frame at half resolution, upscaled 2x by the chip (a blur instead of lossy streaks), refined once motion stops. Per device: /sys/bus/usb/devices/<interface>/mct/motion (lossy or half).");
+MODULE_PARM_DESC(half_motion, "Experimental, off by default. Default for new devices: send full-screen updates too big for a frame at half resolution, upscaled 2x by the chip (a blur instead of lossy streaks), refined once motion stops. Per device: /sys/bus/usb/devices/<interface>/mct/motion (lossy or half).");
 
 #define DRIVER_NAME	"mct_t2"
 #define DRIVER_DESC	"MCT Trigger II USB display"

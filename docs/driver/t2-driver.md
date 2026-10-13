@@ -228,7 +228,14 @@ hysteresis kept the blurred tiles half, and re-sharpening a photo costs
 more than half the budget, so it never left. A black wallpaper was cheap
 enough to get out. 0.3.33 keeps only the tiles that actually **moved** in
 the last update half, and stays in half mode only while something moves;
-a still picture is always sharpened.
+a still picture is always sharpened. Test of 0.3.33: the wallpaper and
+edge-flicker problems are gone, but parts of a translucent window near its
+edges vanish again during moves (as with 0.3.29, before the scratch
+decode). **Half mode stays experimental and off by default** (the user,
+2026-10-13); no more work on it planned for now. Ideas if it's picked up
+again: a debug tint of half areas (lab `captures/t2-research/scaler-sync.md`
+P5) to see whether the vanishing parts are half tiles or exact ones, and
+the moved/half bookkeeping of tiles that change only in one buffer.
 
 ## Software gamma (driver 0.3.23)
 

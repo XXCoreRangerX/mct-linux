@@ -175,7 +175,7 @@ impl Page {
         let f = send(|v| AppMsg::SetLossy(v.round() as u32));
         lossy.connect_value_notify(move |r| f(r.value()));
         let half_motion = adw::SwitchRow::builder()
-            .title("Half resolution during heavy motion")
+            .title("Half resolution during heavy motion (experimental)")
             .subtitle(text::HALF_MOTION_DESCRIPTION)
             .build();
         {
