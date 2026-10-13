@@ -33,7 +33,7 @@ docstring first; the interactive ones wait for a y/n answer per step.**
 | `t6_pacing_test.py` | are frame-done events tied to the refresh (no) |
 | `t6_cancel_test.sh` | what the cancel request (0x14) and a cut transfer do |
 | `t6_robust_test.sh` | interactive: injected transfer errors, monitor off/on |
-| `t6_jpeg_test.py` | JPEG path phase 0 (run with `t6_run.sh`): full-frame JPEGs into the three buffers (does it work), decode time at 1080p per content and quality, and large JPEGs decoded into a hidden buffer (2560x1440 to 3840x2160); LG at 1080p60 only |
+| `t6_jpeg_test.py` | the T6 JPEG path from userspace (run with `t6_run.sh`, `--steps J1,P,J3,K,R` by default): full-frame JPEGs (J1), decode speed at 1080p (J2), large JPEGs into a hidden buffer (J3), a partial JPEG update + flip (P), a clean check drawn the way mct_t6 draws (K) and recovery attempts without a replug (R); LG at 1080p60 only |
 | `t6_audio_clock.sh` | interactive: bisects where T6 HDMI audio breaks, by pixel clock (`clock`, CTA 1080p timing) or by horizontal blanking (`hblank`, 1080p 120 Hz), setting each mode through niri and asking about a test tone; restores the mode |
 | `t6_probe.py` | interactive, untried features: function descriptors and audio caps, EDID through the I2C requests, DDC/CI brightness read (LG only), a quiet HDMI audio test tone; `--dry-run` prints every request without USB, `--self-test` checks the builders |
 | `t6_modes.sh` | switch a niri output through modes, y/n per mode |
