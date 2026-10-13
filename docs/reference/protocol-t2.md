@@ -525,8 +525,13 @@ Also on 2026-10-12 (steps l, m, n, p; log
   `captures/t2_probe-20261013-150137.log`): backlight on, no picture**, and
   the video engine stalled: each 16 KiB `0x12` cursor upload afterwards
   took ~30 s instead of milliseconds, and `fc6f` read back `00` after `30`
-  was written. Only the init recovered it. **Don't use the Mac power
-  sets on this tablet**; `fcf6 = 00/01` is the clean screen off/on. The
+  was written. Only the init recovered it. The probe applied it wrongly:
+  the Mac driver calls monitorPowerOnOff (`FUN_100030350`) only inside its
+  mode-setting job queue (`MCTT2Device::addModeSettingJobsToQueue`: off as
+  the first job, on as the last, `FUN_1000763c4`), around the timing and
+  PLL jobs. So "off" resets the display pipeline for a mode set, and "on"
+  needs that mode set in between; it's not a screen switch. For screen
+  off/on, `fcf6 = 00/01` stays the clean way. The
   second cursor slot's address unit (z2) couldn't be judged without a
   picture; not worth more probing.
 - **Cursor (u): edge clipping in hardware works** (u3-u5: negative x, y
