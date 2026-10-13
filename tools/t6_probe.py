@@ -64,6 +64,10 @@ REQ_EDID, REQ_I2C_READ, REQ_STATUS, REQ_MODES = 0x80, 0x81, 0x87, 0x89
 REQ_AUD_ENGINE_CAPS, REQ_AUD_NODE_CAPS, REQ_AUD_NODE_VALUE, REQ_AUD_GET_STATE, REQ_AUD_FORMATS = \
     0xA1, 0xA2, 0xA3, 0xA4, 0xA5
 REQ_VERSION, REQ_FUNC_ID, REQ_SECTION = 0xB0, 0xB1, 0xB3
+# read-only requests from the firmware's dispatcher (lab
+# captures/t6-research/feature-gaps.md), untried before step F
+REQ_ROM_DATA, REQ_ROM_SIZE, REQ_RES_COUNT, REQ_IMG_SECTION, REQ_MAC, REQ_CONST = \
+    0xB2, 0xB4, 0x84, 0x8A, 0x83, 0x41
 
 FORBIDDEN = {0x01: "SPI ROM write", 0x13: "write ROM data", 0x30: "hardware reset",
              # firmware dispatcher (lab captures/t6-research/feature-gaps.md)
@@ -71,7 +75,8 @@ FORBIDDEN = {0x01: "SPI ROM write", 0x13: "write ROM data", 0x30: "hardware rese
              0x40: "internal firmware message"}
 ALLOWED_IN = {REQ_EDID, REQ_I2C_READ, REQ_STATUS, REQ_MODES, REQ_AUD_ENGINE_CAPS,
               REQ_AUD_NODE_CAPS, REQ_AUD_NODE_VALUE, REQ_AUD_GET_STATE, REQ_AUD_FORMATS,
-              REQ_VERSION, REQ_FUNC_ID, REQ_SECTION}
+              REQ_VERSION, REQ_FUNC_ID, REQ_SECTION, REQ_ROM_DATA, REQ_ROM_SIZE,
+              REQ_RES_COUNT, REQ_IMG_SECTION, REQ_MAC, REQ_CONST}
 ALLOWED_OUT = {REQ_I2C_WRITE, REQ_OUTPUT, REQ_SETMODE, REQ_AUD_SET_STATE, REQ_READY, REQ_CANCEL}
 
 DDC_EDID, DDC_CI = 0x50, 0x37            # 7-bit I2C addresses
@@ -894,12 +899,52 @@ def step_e(p, st):
     return step_d(p, st)
 
 
+def hexdump(b, width=16):
+    return [f"  {o:04x}: {b[o:o + width].hex(' ')}  "
+            + "".join(chr(c) if 32 <= c < 127 else "." for c in b[o:o + width])
+            for o in range(0, len(b), width)]
+
+
+def step_f(p, st):
+    """Read-only info requests the firmware's dispatcher has and nobody here
+    tried yet. A stall (error) just means this older firmware lacks one."""
+    reads = [
+        (REQ_ROM_DATA, 0, 0, 0x400, "boot data (Mac reads it at every start): 'BOOT', serial at 0x28, MAC at 0x30"),
+        (REQ_ROM_DATA, 1, 0, 0x100, "running image header: 'IMG_', version at 0x14, project code"),
+        (REQ_ROM_SIZE, 0, 0, 4, "ROM size in MiB"),
+        (REQ_RES_COUNT, 0, 0, 4, "number of ROM resolution-table entries"),
+        (REQ_IMG_SECTION, 0, 0, 0x430, "image section 0 (DISP), like b3"),
+        (REQ_MAC, 0, 0, 6, "MAC ID"),
+        (REQ_CONST, 0, 0, 1, "constant (6 in the newer firmware)"),
+    ]
+    answered = 0
+    for req, value, index, length, what in reads:
+        r = p.cin(req, value, index, length, what)
+        if r is None:
+            p.log("  no answer (stall or error): this firmware lacks it")
+            continue
+        answered += 1
+        p.log(f"  {len(r)} B")
+        for line in hexdump(r[:0x100]):
+            p.log(line, console=False)
+        if req == REQ_ROM_DATA and value == 0 and len(r) >= 0x36:
+            p.log(f"  tag {r[:4]!r}, structure version {r[0x0c]}, serial "
+                  f"{struct.unpack_from('<Q', r, 0x28)[0]:#018x}, MAC {r[0x30:0x36].hex(':')}")
+        elif req == REQ_ROM_DATA and value == 1 and len(r) >= 0x18:
+            p.log(f"  tag {r[:4]!r}, version {struct.unpack_from('<I', r, 0x14)[0]:#010x}")
+        elif len(r) <= 8:
+            p.log(f"  value: {r.hex(' ')}" + (f" ({struct.unpack_from('<I', r)[0]})" if len(r) == 4 else ""))
+    return f"{answered} of {len(reads)} answered (details in the log)"
+
+
 STEPS = {
     "A": ("function descriptors and audio caps (read-only)", step_a, "low"),
     "B": ("EDID through the I2C read request vs 0x80 (read-only)", step_b, "low"),
     "C": ("DDC/CI Get VCP brightness, LG only (I2C write + read)", step_c, "low-medium"),
     "D": ("HDMI audio test tone (enable, bulk sessions, disable)", step_d, "MEDIUM"),
     "E": ("audio clock: 20 s tone while logging interrupt events (EP 0x83)", step_e, "MEDIUM"),
+    "F": ("untried read-only info requests: boot data, image header, ROM size, MAC "
+          "(b2, b4, 84, 8a, 83, 41)", step_f, "low"),
 }
 
 
