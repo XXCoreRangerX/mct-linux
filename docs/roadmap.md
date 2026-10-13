@@ -30,7 +30,7 @@ work from the research of 2026-10-12/13. Sources are lab reports in
 | 2 | **Done 2026-10-13 (untested):** T2 `5201`/`520f` with a Wacom-EDID check before the panel init; T6 IDs behind `untested_ids`; DTU-1031AX panel-only modes. Was: more USB IDs: T2 `0711:5200-520f` (DTU-1031X seen as `5201`, `520f`), identify by ID ROM/EDID; T6 PID range + interface class (`0711:5600-560b`, `19ff:560b-560e`, `03f0:0182`), untested ones opt-in; DTU-1031AX (`0711:5609`, maybe `056a:039f` interface 0) with its quirk (no rotation, EDID's own mode only) | `captures/scout/web-research-2026-10-13.md`, `captures/t2-research/wacom-and-t2-devices.md` | S |
 | 3 | **Done 2026-10-13 (0.29.5, tested):** ELD and jack controls (LG: ELD names "27GN7", LPCM 2 ch 32/44.1/48 kHz; jack on). Was: HDMI audio extras: ELD and jack controls from the connector's EDID; optional short prefill on start | `captures/t6-research/audio-analysis.md` | S |
 | 4 | **Done 2026-10-13 (0.3.36; the EDID was already used):** checksum, version, video memory, rotation and base USB ID logged and in sysfs/app. Was: T2: read the ID ROM properly (checksum bytes 4/5, version 0x16-0x18, GPIO map 0x1a-0x1f, 180° flag, EDID) | `wacom-and-t2-devices.md` | S-M |
-| 5 | T6 software rotation in the conversion step (no hardware rotation in this firmware) | `captures/t6-research/feature-gaps.md` | M |
+| 5 | ~~T6 software rotation in the conversion step~~ **Dropped 2026-10-13**: compositors already rotate (niri renders the portrait T6 screen turned; the driver sends what it gets), so it would only matter for one that asks the display to rotate. Was: (no hardware rotation in this firmware) | `captures/t6-research/feature-gaps.md` | M |
 | 6 | T6 probes: read-only info `c0 b2` (serial, MAC), `c0 8a`, `c0 83`, `c0 41`; windowed flip (bytes 0x24-0x2b, letterbox without a mode set); YUV444 surface formats 0x11/0x12/0x15; timing flag bit 0 "custom" | `feature-gaps.md`, web research | S each |
 | 7 | Upstream readiness against what reviewers asked of drm/trigger5 and appletbdrm (no sleeping USB I/O in atomic paths, no allocations in the update path, damage clips in framebuffer coordinates, the damage-helper rework) | web research | M |
 | 8 | T6 JPEG path, phase 0: measure the JUA254's decode speed from userspace; then decide (USB 2 / hubs only, unless it beats raw). Recipe: lvalen91/JUA254H---Fedora, Tetra (FB_DIRECT partials, not CLIP_PRIMARY); our NV12 UV plane must start at pitch x align16(h) for the decoder | `captures/t6-research/jpeg-path.md`, `third_party/t6-sources/web-2026-10-13/` | S, then L |
@@ -127,9 +127,11 @@ writeback, a T5 backend now). Its top 10, not yet ordered with the user:
    brightness and input from ddcutil. Reads first, on the LG only (S to M).~~
    EDIT (2026-10-13): closed. The JUA254H firmware has no case for these
    requests (lab `captures/t6-research/feature-gaps.md`).
-   Instead: **software rotation** in mct_t6's conversion step (the T6
+   ~~Instead: **software rotation** in mct_t6's conversion step (the T6
    firmware has no hardware rotation, and the vendors rotate in software
-   or leave it to the OS), useful for portrait monitors (M).
+   or leave it to the OS), useful for portrait monitors (M).~~ EDIT
+   (2026-10-13): dropped, compositors already rotate (the user's T6
+   monitor runs in portrait through niri).
 3. **Cursor independent of `io_lock`:** no cursor stutter during large
    updates (S to M; already in the edge-case list below).
 4. **T2 resync as a work item** (M; below).
