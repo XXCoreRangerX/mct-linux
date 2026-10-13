@@ -1051,3 +1051,11 @@ pacing is enough (as the vendor analysis suggested). Bit-perfect: the
 path carries 48 kHz S16 unchanged at volume 31 (0 dB), so PipeWire needs
 48 kHz/S16 content and no resampling for that; 44.1 kHz content is always
 resampled, since the 5600 offers only 48 kHz.
+
+**ELD and jack controls (2026-10-13, mct_t6 0.29.5).** On the LG:
+`HDMI/DP,pcm=0 Jack` = on, and `ELD` = 28 bytes:
+- version 2;
+- manufacturer `1e 6d` (GSM, LG);
+- monitor name "27GN7";
+- one short audio descriptor `09 07 07`: LPCM, 2 channels, 32/44.1/48 kHz,
+  16/20/24-bit.
