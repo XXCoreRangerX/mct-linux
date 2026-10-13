@@ -18,6 +18,7 @@ tools/t6_run.sh (driver unbound, bound again at the end). LG at
   R   only if K isn't clean: recovery attempts, each followed by K again:
       request 0x86 (reset JPEG engine, MCT's t6.h), the mode set again,
       a full raw frame the vendor way
+  X   request 0x86 on its own, then a JPEG frame: does the decoder still work?
 
   tools/t6_run.sh tools/t6_jpeg_test.py [--steps J1,P,J3,K,R]   (default)
 
@@ -416,7 +417,24 @@ def r(t, j):
     k(t, j, "R3 (after a full raw frame the vendor way)")
 
 
-STEPS = {"J1": j1, "J2": j2, "J3": j3, "P": p, "K": k, "R": r}
+def x(t, j):
+    """Request 0x86 on its own (MCT's t6.h VENDOR_REQ_RESET_JPEG_ENGINE; the
+    newer firmware's dispatcher has no case for it), then one JPEG frame."""
+    log("\n=== X: request 0x86 (reset JPEG engine), then a JPEG frame")
+    try:
+        t.cout(REQ_RESET_JPEG, 0, 0)
+        log("  request 40 86: accepted")
+    except usb.core.USBError as e:
+        log(f"  request 40 86: {e} (this firmware doesn't have it)")
+    fb = next(f for f in FB if f != j.shown)
+    r = j.wait(j.flip(jpeg(card(W, H, 8, bg=(90, 30, 90)), 95), fb))
+    log("  JPEG frame afterwards: " + ("no frame-done" if r is None else
+                                     f"frame-done after {r[0] * 1000:.1f} ms" + (" (DECODER ERROR)" if r[1] else "")))
+    ok = ask("The LG shows a test card on PURPLE with 9 white blocks, clean?")
+    log(f"RESULT X: {'decoder works after 0x86' if ok else 'NOT shown after 0x86'}")
+
+
+STEPS = {"J1": j1, "J2": j2, "J3": j3, "P": p, "K": k, "R": r, "X": x}
 
 
 def main():
