@@ -41,7 +41,7 @@ of the vendor drivers for interoperability, and testing on real hardware.
 | Gamma (night light) | ✅ in software | ✅ in software |
 | Brightness | ➖ the monitor's own controls | ✅ standard backlight interface |
 | Hardware rotation | ❌ the compositor rotates | ❌ the compositor rotates |
-| JPEG mode | ❌ would need an encoder in the kernel ([roadmap](docs/roadmap.md)) | ➖ the chip has none |
+| JPEG mode | 🚧 being worked on: full-screen JPEG frames work in a test tool (`tools/t6_jpeg_test.py`), decode speed measured (~100 fps for simple pictures, much less for detailed ones); not in the driver yet ([roadmap](docs/roadmap.md)) | ➖ the chip has none |
 | Second output | ❌ dual-head adapters and docks | ➖ |
 | Audio | ✅ HDMI audio as an ALSA sound card (48 kHz stereo) while the display is on; needs 112 px of horizontal blanking, which the driver's modes keep where they can | ➖ |
 | **Devices and connection** | | |

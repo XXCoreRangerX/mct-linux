@@ -1061,7 +1061,8 @@ resampled, since the 5600 offers only 48 kHz.
   16/20/24-bit.
 
 **JPEG path, phase 0 (2026-10-13, `tools/t6_jpeg_test.py`, LG at 1080p60,
-logs `captures/t6_jpeg-20261013-*.log`).**
+logs ~~`captures/t6_jpeg-20261013-*.log`~~ EDIT (2026-10-13): moved to
+`captures/t6-jpeg/`, with an index of the runs).**
 
 Full-frame JPEGs work on the 5600 (firmware 17091401):
 - Command 3, 4:2:0, Pillow's standard tables, no restart markers.
