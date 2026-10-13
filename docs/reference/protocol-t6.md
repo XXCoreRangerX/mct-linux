@@ -58,7 +58,12 @@ Nothing here shares code or framing with the T2.
 | `40 33` | | | | writes the serial number into that sector (C). **Never sent** |
 | `40 40` | | | | posts an undocumented firmware-internal message (C). **Never sent** |
 | `40 34`, then EP 0x81 | | | | ROM read-back: bulk IN with signature 0x85 (C); EP 0x81 also carries audio capture (signature 0x83) |
-| `c0 b2`, `c0 8a`, `c0 83`, `c0 41` | | | | read-only: boot data (serial, MAC), running image header, image DISP section, others (C, firmware dispatcher; untried) |
+| `c0 b2` | 0 boot data / 1 image header | 0 | 0x400 / 0x100 B in | **V** on the 5600 (2026-10-13, `tools/t6_probe.py` step F): boot data "BOOT", structure version 1, boot code at 0x14 (`16062899`), board at 0x50, serial (0x28) and MAC (0x30) zero; image header "IMG_", version at 0x14 (`17091401`), board at 0x50 |
+| `c0 b4` | 0 | 0 | 4 B in | ROM size in MiB: 4 (V) |
+| `c0 84` | output | 0 | 4 B in | entries in the mode table: 30 (V; as `0x89` returns) |
+| `c0 8a` | section (0 DISP) | offset | n B in | an image section, the same DISP data as `b3` (V) |
+| `c0 83` | 0 | 0 | 6 B in | MAC ID: answers with 0 bytes on the 5600 (no network) (V) |
+| `c0 41` | 0 | 0 | 1 B in | 6 on the 5600: the feature level (V) |
 | `40 1f` | | 0..3 | none | hardware rotation (C); stalls on the 5600, also with 0 (V). Not in the JUA254H firmware at all, old or new; only in an HP monitor's (C) |
 | `40 23`, `40 24`, `c0 a1..a5` | | | | audio: `a1` engine caps, `a2`/`a3` node caps/values, `a4` engine state, `a5` formats, `24` set engine state, `23` node value (volume). **V** 2026-10-12: playback works on the 5600, see "Audio" below |
 
