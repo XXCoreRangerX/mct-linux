@@ -1387,6 +1387,62 @@ def step_x(opt):
     return cmds, f"PASS = {T_PIC} (the picture for the light test)", restore, checks
 
 
+# --- step z: loose ends of t and u (2026-10-13). t1b brought back a wrong
+# picture because fb60 stayed 00; u1's second cursor shape showed blue
+# garbage with fe30-33 = 0x4000 >> 2, maybe a different address unit
+# (blue = framebuffer A from 0xc000, where 0x4000 x 4 or more lands).
+
+MAC_MON_ON_FB60 = MAC_MON_ON + [(0xfb60, 0x01)]
+
+
+def cursor_addr_unit_list(addr, shift):
+    v = addr >> shift
+    return ep4_list([(0x30, v & 0xFF), (0x31, (v >> 8) & 0xFF), (0x32, (v >> 16) & 0xFF),
+                     (0x33, (v >> 24) & 0xFF)])
+
+
+def step_z(opt):
+    img = quads(BOX_W, BOX_H)
+    cmds = prep(img) + [
+        cmd_rle("test box (known-good 0x13)", FB_B, TEST_VX, BOX_VY, BOX_W, BOX_H, img),
+        RegRead("z: power registers at the start (kept for the restore)", T_REGS, save=True),
+        RegRead("z: cursor registers at the start (kept for the restore)", CURSOR_REGS,
+                save=True),
+        Cmd("upload cursor shape 1 (4-colour square) to VRAM 0", hdr12(0), CUR1, 16384),
+        Cmd(f"upload cursor shape 2 (cyan X) to VRAM {CUR2_ADDR:#x}", hdr12(CUR2_ADDR), CUR2,
+            16384),
+        Cmd("cursor address 0", cursor_addr_list(0), ep=4),
+        Cmd(f"cursor at device ({U_DX},{U_DY}), 64x64, shown", cursor_full_list(U_DX, U_DY),
+            ep=4)]
+    restore = [RegRestore("restore fc6f fc4f fc4d fcb0 fb60 to the values read at the start",
+                          T_RESTORE, via={0xfcb0: (0x04,)}, reinit=True)] + \
+        cursor_restore_items("restore") + [ReinitIfFailed()]
+    back = Cmd("cursor address back to 0 (shape 1)", cursor_addr_list(0), ep=4)
+    xq = ("PASS = the cursor changes to a cyan X on a transparent background (dark green "
+          "around it) at the same place. FAIL = blue or other garbage, unchanged, or gone")
+    checks = [
+        Check("z1", [RegRead("z1: before", T_REGS)]
+              + t_writes("z1", "monitor off (Mac)", MAC_MON_OFF) + [RegRead("z1: after", T_REGS)],
+              "PASS = the panel goes dark (as in t1). FAIL = no change"),
+        Check("z1b", [RegRead("z1b: before", T_REGS)]
+              + t_writes("z1b", "monitor on (Mac) and fb60 = 01", MAC_MON_ON_FB60)
+              + [RegRead("z1b: after", T_REGS)],
+              f"PASS = the same picture back, clean: {T_PIC}, with the cursor square above "
+              "them. FAIL = blue background, a garbage band at the bottom, or still dark"),
+        Check("z2a", [Cmd(f"z2a: cursor address {CUR2_ADDR:#x} in 16-byte units (fe31 = 04)",
+                          cursor_addr_unit_list(CUR2_ADDR, 4), ep=4),
+                      RegRead("z2a: fe30-33 after", CURSOR_ADDR_REGS)], xq),
+        Check("z2b", [back, Cmd(f"z2b: cursor address {CUR2_ADDR:#x} in 8-byte units "
+                                "(fe31 = 08)", cursor_addr_unit_list(CUR2_ADDR, 3), ep=4)], xq),
+        Check("z2c", [back, Cmd(f"z2c: cursor address {CUR2_ADDR:#x} in bytes (fe31 = 40)",
+                                cursor_addr_unit_list(CUR2_ADDR, 0), ep=4)], xq),
+        Check("z2d", [back], f"PASS = the first cursor is back: {CUR1_TEXT}. FAIL = anything "
+              "else"),
+    ]
+    return (cmds, f"PASS = {T_PIC}, and above them (centre) a cursor: {CUR1_TEXT}", restore,
+            checks)
+
+
 # --- step y: does the 2x scaler read past the source's edges? (lab
 # captures/t2-research/scaler-sync.md, probe P1). mct_t2's half mode decodes
 # the half-size source at 0x560000 and scales it 2x into the hidden buffer;
@@ -1580,6 +1636,8 @@ STEPS = [
      "by itself? init value restored afterwards", "medium-low", step_w),
     ("y", "2x scaler edge taps: plain grey source in magenta-filled scratch, scaled into a "
      "grey band", "low", step_y),
+    ("z", "loose ends: Mac monitor on with fb60 restored; the cursor address unit (shape 2 at "
+     "0x4000 as 16-, 8- and 1-byte units); registers restored afterwards", "low", step_z),
     ("x", "the ID ROM's 'light' GPIO (feb1 bit 6, backlight enable?): low, then high; only "
      "that bit changes; registers restored afterwards", "low", step_x),
 ]
@@ -1601,6 +1659,9 @@ STEP_NOTES = {
          "fails the normal init runs again. No mode, PLL or timing register is touched.",
     "y": "Only VRAM writes: the hidden buffer and the scratch area mct_t2's half mode "
          "uses (0x560000-0x590000). No registers.",
+    "z": "The Mac power registers as in step t (fb60, fcb0; restored afterwards) and the "
+         "cursor registers fe30-33 (address only; restored and both cursor slots zeroed "
+         "afterwards). A wrong address only shows other VRAM as the cursor.",
     "x": "Changes only bit 6 of feb1 (and makes it an output in feb0, as the init does): the "
          "line the ID ROM (byte 0x1f = 01) names 'light', which Windows' own init holds low "
          "and then high (feb1 b7 -> f7). Bits 0-1 (pulsed as a reset in the init) and the "
