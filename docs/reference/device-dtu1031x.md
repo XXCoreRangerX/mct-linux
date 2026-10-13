@@ -23,7 +23,8 @@ found the controller damaged in all three of their units.
 
 - MCT Trigger II **T2-285A** (USB->VGA) + EtronTech EM6A9320BIB-5H, 128 Mbit
   DDR (4 banks x 1M x 32 = 16 MiB of video memory; matches ID ROM byte
-  0x09 and the legacy Windows driver's 0x1000000)
+  0x09 and the legacy Windows driver's 0x1000000; verified 2026-10-13 by
+  drawing from 0xE00000 and 0x800000+ without a wrap)
 - Realtek **RTD2280DLW** VGA->LVDS (panel path; shows Wacom logo with no signal)
 - Wacom W8008 pen controller, SMSC USB2413 hub, MK60D X256ZV10
 - T2-285A chips run hot / fail often; keep sessions short-ish if flaky.
@@ -33,7 +34,8 @@ found the controller damaged in all three of their units.
   1 W in sleep. Active area 222.7 x 125.3 mm.
 - GPIO: ID ROM byte 0x1f = 01 assigns `feb0`/`feb1` bit 6 to function 1,
   which both vendor drivers call "light" (macOS `T2_lightOn`, Windows
-  `DelayLight`): probably the panel backlight enable. Untested.
+  `DelayLight`). Tested 2026-10-13: setting it low changes nothing visible,
+  so it isn't the backlight on this board.
 
 ## Panel / EDID (recovered live via `0x1d`, offset `0x80`)
 

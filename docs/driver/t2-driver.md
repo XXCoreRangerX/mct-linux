@@ -206,7 +206,14 @@ drawn blurred in this buffer only and marked stale, so it alternated
 blurred and sharp with each flip. 0.3.31 redraws every tile a half rect
 grew over exactly, in the same frame. No vendor waits between a scaled
 `0x13` and the flip; the scaler-race probes (step r and the report's
-P1-P4) stay as follow-ups if the edges still glitch.
+P1-P4) stay as follow-ups if the edges still glitch. EDIT (2026-10-13): 0.3.31 tested, the band at the
+edges still flickers, so the grown row wasn't the (only) cause. Probe step
+r then ran a full-screen 2x scale from `0x560000` cleanly three times and
+found no "scaler done" register (protocol-t2.md, "Tested on the tablet
+2026-10-13"), so neither the scaler nor the scratch source is broken in
+general. Left to look at: the tile bookkeeping across the two buffers
+(stale tiles after a flip), edge taps of the scaler (report probe P1), and
+whether the band is the half rect's own edge.
 
 ## Software gamma (driver 0.3.23)
 

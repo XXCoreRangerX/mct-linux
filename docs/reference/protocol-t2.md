@@ -35,7 +35,7 @@ reply, read `0x81` before the next OUT or the firmware stalls. Pace ~50 ms.
 | `0x14` | `14 <len16> (reg val)*` (27 B in the init) | none | fb-bank pairs: `66/67` y, `68/69` x, `6a/6b` h, `6c/6d` w (a window), `65` SEL, then `6e 01, 60 01, 6e 01`: **display enable** (captured, field names inferred from code) |
 | `0x16` | `16 <len16=0x20> <32 B pairs>` (35 B) | none | **timing packet**: regs `0x20-0x2f` = width/height-derived + mode params (full template in init doc) |
 | `0x22` | 62 B | none | second mode packet (regs incl. `0xfc`-area mirrors); template TBD from driver |
-| `0x0a` | `0a` + 768 zeros (769 B) | none | a 256x3 lookup table (B, G, R entries) acting on **all output** when non-zero (verified 2026-10-12: a palette loaded for an 8-bit test recoloured the 24-bit picture too); all zeros, as Windows sends, leaves the picture unchanged. The legacy driver pairs it with the 8-bit format. Possible hardware gamma, untested |
+| `0x0a` | `0a` + 768 zeros (769 B) | none | a 256x3 lookup table (B, G, R entries) acting on **all output** when non-zero (verified 2026-10-12: a palette loaded for an 8-bit test recoloured the 24-bit picture too); all zeros, as Windows sends, leaves the picture unchanged. The legacy driver pairs it with the 8-bit format. **Not usable as hardware gamma** (2026-10-13): identity, red-only and gamma 2.2 tables changed nothing visible, and afterwards later frames came out wrong until the next init, even after the zeros were loaded back. Never send anything but the init's zeros |
 | `0x1b` | `1b8000a000800000` (8 B) | 512 zeros (idle) | I2C read, bus 0 (`EP3CMD_READ_I2C_2` in the macOS driver): `cmd 80 00 <addr> <offset> <len16> 00`; bus 0 is not wired on this tablet |
 | `0x1d` | `1d8000ae00000100` (8 B) | 512 B | I2C read, bus 1 (`EP3CMD_READ_I2C_EX`): the **ID ROM** at `0xae`: `55aa00ff...`, `07115200`, `MCT`, `DTU-1031X`, **EDID at +0x80** (layout below) |
 | `0x1a` | `1a 80 00 <addr> <reg> <len16> fa` + data | none | I2C **write**, bus 0 (macOS driver, for HDMI transmitters at `0x72`); not for this tablet |
@@ -496,10 +496,48 @@ Also on 2026-10-12 (steps l, m, n, p; log
   software gamma), the channel order, and how the 8-bit source is really
   selected (format `00` with a w*h length was read as something else).
 
+### Tested on the tablet 2026-10-13 (logs `captures/t2_probe-20261013-141457.log`, `-142450.log`)
+
+- **`0x0a` as hardware gamma (q): no.** Identity, red-only and gamma 2.2
+  tables showed no visible change. Afterwards the chip was in a bad state:
+  a later full-screen 2x and plain 1:1 pictures came out wrong (reddish,
+  washed-out background, boxes doubled, a white/red line across), even
+  though the zero table had been loaded back. A re-init cleared it. The
+  same steps run again without q were all correct.
+- **Full-screen 2x from scratch VRAM (r): works.** 512x300 decoded at
+  `0x560000` (mct_t2's half-mode source) and scaled to 1024x600 into the
+  hidden buffer, three times, with a 1:1 run in between: the expected
+  picture. **No "scaler done" signal**: of 58 registers read in a tight
+  loop for ~40 ms after each payload (`fe70`, `fc59`, `fc34`, `fe57`,
+  `fe36`, `fe71/72`, `fc50-5d`, `fe60-67`, `fe78-7b`, `fe80-89`,
+  `fb60-6e`), only `fc57` changed, and it changes at rest too. The first
+  read answers 1.2 ms after the payload (1.6 ms for a 1:1 frame).
+- **16 MiB of VRAM (s): yes.** `0x13` staged at `0xD37000` (the Mac
+  driver's address), sources at `0xE00000` and `0x800000 + x`: all drawn
+  where expected, with no wrap at 8 MiB.
+- **Mac "monitor off" (t1: `fb60=00 fcb0=04 fcb0=20`): the backlight goes
+  fully off.** Its "on" (`fcb0=04 fcb0=09`) brings back a wrong picture:
+  buffer A's colour and a garbage band ~20 px high at the bottom, because
+  `fb60` stays `00` (the skipped check t1c would have restored it to `01`).
+  A re-init fixes it. `fcf6 = 00/01` (below) already gives a clean
+  off/on, so this adds nothing for now.
+- **Cursor (u): edge clipping in hardware works** (u3-u5: negative x, y
+  and both via `fe44/fe45` and `fe36 = 4f/47`), so the driver's shifted
+  re-upload for cursors past the top/left edge could go. A **second shape
+  at `0x4000` (u1) showed blue garbage**, although `fe30-33` read back as
+  sent (`00 10 00 00` = `0x4000 >> 2`): the address unit or the upload is
+  not understood yet.
+- **In-band flip with `0x16` lists on EP2 (v): works**, both directions
+  (`16 fb 01 65 <sel>` and `16 fc 06 b4 11 b1 .. b2 .. b3 .. b4 15 b4 11`),
+  so register writes can go in order with the frame data.
+- **ID ROM "light" GPIO (x, `feb1` bit 6 low): no visible effect.** Not
+  the backlight on this board.
+
 Still untested:
 
-- the `0x0a` table as hardware gamma (identity ramp first, then a curve)
-- a "scaler done" signal (half mode's edge glitch, see t2-driver.md)
+- ~~the `0x0a` table as hardware gamma (identity ramp first, then a curve)~~ (no, above)
+- ~~a "scaler done" signal (half mode's edge glitch, see t2-driver.md)~~ (none found, above)
+- the EP2 timeout (`0x90` register 4, probe step w)
 - the blit engine (`0x14`, or `0x15` register batches on `fc50-5d`, `fc34`,
   `fc59`, `fe60-89`, `fe70`), which could make scrolling a short command
   instead of resending the rows; the riskiest, since a wrong command may hang
