@@ -6,8 +6,8 @@ its settings.
 
 - **Trigger 6 (T6):** USB 3 to HDMI adapters such as the j5create JUA254
   ("T6 USB Station", `0711:5600`; `0711:5601` should work too). Any HDMI
-  monitor, from its EDID: up to 1080p at 144 Hz, 2560x1440 and 3440x1440 at
-  60 Hz, 3840x2160 at 30 Hz.
+  monitor, from its EDID: 1080p up to 144 Hz, 720p up to 240 Hz, 2560x1440
+  and 3440x1440 at 60 Hz, 3840x2160 at 30 Hz.
 - **Trigger II (T2):** the Wacom DTU-1031X pen display (1024x600, USB
   `0711:520d` / `0711:5209`). The pen (`056a:032f`) is a separate USB
   function handled by the in-kernel wacom driver.
@@ -32,7 +32,7 @@ of the vendor drivers for interoperability, and testing on real hardware.
 |---|---|---|
 | **Display** | | |
 | Picture | ✅ any HDMI monitor | ✅ built-in 1024x600 panel |
-| Modes | ✅ from the monitor's EDID, up to 3440x1440@60 and 3840x2160@30 | ✅ 1024x600 (fixed panel) |
+| Modes | ✅ from the monitor's EDID, plus extra refresh rates. Tested: 1920x1080 at 60, 75, 100, 120 and 144 Hz; 1280x720 up to 240 Hz; 2560x1440 at 60 Hz (80 Hz with reduced blanking); 3440x1440 at 60 Hz; 3840x2160 at 30 Hz | ✅ 1024x600 (fixed panel) |
 | Refresh rates | ✅ up to 144 Hz at 1080p, 240 Hz at 720p | ✅ 60 Hz (fixed panel) |
 | Pixel formats | ✅ RGB24, RGB32, YUV 4:4:4, NV12; automatic or fixed | ✅ RGB24, sent run-length encoded |
 | Picture quality | ✅ lossless at rest; NV12 during large motion (automatic) | ✅ lossless by default; optional lossy mode during heavy motion |
