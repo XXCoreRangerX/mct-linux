@@ -4,6 +4,12 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
+## Unreleased
+
+- T6: the cursor no longer waits for a frame being sent; its requests go
+  over the control endpoint with their own buffer and lock, so it stays
+  smooth during large updates (mct_t6 0.29.8).
+
 ## 0.6.0 (2026-10-13)
 
 Driver versions: mct_t6 0.29.7, mct_t2 0.3.36.

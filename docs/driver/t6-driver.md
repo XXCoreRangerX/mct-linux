@@ -147,6 +147,12 @@ uploads the smallest of 64, 96 or 128 px that holds everything visible, in
 Negative positions are sent as v - 1. A 128 px image is sent up to 0x10000
 bytes (16-bit offset).
 
+The cursor's control requests (move, show, image) use their own buffer
+under `cur.lock`, not `io_lock` (since 0.29.8): they go over the control
+endpoint while frames go over bulk, so a move doesn't wait for a frame
+that is being sent. They come from the core's cursor worker, never from
+inside a commit.
+
 ## Settings and information
 
 Per device in sysfs (`/sys/bus/usb/devices/<interface>/mct/`, see

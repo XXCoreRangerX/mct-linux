@@ -132,8 +132,8 @@ writeback, a T5 backend now). Its top 10, not yet ordered with the user:
    or leave it to the OS), useful for portrait monitors (M).~~ EDIT
    (2026-10-13): dropped, compositors already rotate (the user's T6
    monitor runs in portrait through niri).
-3. **Cursor independent of `io_lock`:** no cursor stutter during large
-   updates (S to M; already in the edge-case list below).
+3. ~~**Cursor independent of `io_lock`:** no cursor stutter during large
+   updates (S to M; already in the edge-case list below).~~ EDIT (2026-10-14): done in mct_t6 0.29.8, to test.
 4. **T2 resync as a work item** (M; below).
 5. **T6 buffers allocated in `atomic_check`** (M; below; also what upstream
    review asked of drm/trigger5).
@@ -268,9 +268,11 @@ switches the output off first. Left:
 - T2 resync after a failed frame holds io_lock for up to 45 s, so cursor
   updates in commits and DPMS/suspend wait (same fix as the probe/resume
   item above: a work item).
-- The T6 cursor update in a commit waits for io_lock while a frame is
+- ~~The T6 cursor update in a commit waits for io_lock while a frame is
   sent (~16 ms at 1080p on USB 3, longer on USB 2): cursor stutter during
-  large updates.
+  large updates.~~ EDIT (2026-10-14): the cursor left the commit in 0.6.0
+  (core worker) and `io_lock` in mct_t6 0.29.8 (its own buffer under
+  `cur.lock`); to test.
 - VT switches to a T6 console are mode sets (fbdev uses the preferred
   mode); with monitors that dislike signal changes, run the compositor at
   the preferred mode and use consoleblank=0.

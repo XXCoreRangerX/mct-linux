@@ -77,7 +77,7 @@ MODULE_PARM_DESC(audio_lead_ms, "HDMI audio: how far ahead of playback the adapt
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	29
-#define DRIVER_PATCH	7
+#define DRIVER_PATCH	8
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -351,7 +351,8 @@ struct mct_t6 {
 	bool enabled;			/* the output is on with mode_entry */
 
 	struct {
-		struct mutex lock;	/* cursor state: plane updates and redraws */
+		struct mutex lock;	/* cursor state and its control requests */
+		u8 *ctrl;		/* DMA-able buffer for its control requests */
 		u8 *img;		/* header + image being built */
 		u8 *shown;		/* last uploaded */
 		int bytes, shown_bytes;	/* of the two images */
@@ -1303,6 +1304,21 @@ static void t6_stop(struct mct_device *mdev)
  * request: overwriting the visible slot left it scrambled until the next
  * show.
  */
+/*
+ * The cursor's control requests use their own buffer under cur.lock, not
+ * io_lock: they go over the control endpoint while frames go over bulk,
+ * so a move doesn't wait for a frame being sent (cursor stutter during
+ * large updates).
+ */
+static int t6_cur_ctrl_out(struct mct_t6 *t6, u8 req, u16 value, u16 index, u16 len)
+{
+	struct usb_device *udev = t6_udev(t6);
+
+	return usb_control_msg(udev, usb_sndctrlpipe(udev, 0), req,
+			       USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+			       value, index, len ? t6->cur.ctrl : NULL, len, T6_TIMEOUT);
+}
+
 static int t6_cursor_slot(struct mct_t6 *t6, int which)
 {
 	return (t6->output ? 5 : 0) + which;
@@ -1314,10 +1330,8 @@ static int t6_cursor_show(struct mct_t6 *t6, bool show)
 
 	if (t6->cur.visible == show)
 		return 0;
-	mutex_lock(&t6->io_lock);
-	ret = t6_ctrl_out(t6, T6_REQ_CUR_SHOW(t6->output), t6_cursor_slot(t6, t6->cur.slot),
-			  show, 0);
-	mutex_unlock(&t6->io_lock);
+	ret = t6_cur_ctrl_out(t6, T6_REQ_CUR_SHOW(t6->output), t6_cursor_slot(t6, t6->cur.slot),
+			      show, 0);
 	if (ret < 0)
 		return ret;
 	t6->cur.visible = show;
@@ -1333,15 +1347,13 @@ static int t6_cursor_upload(struct mct_t6 *t6)
 	int next = !t6->cur.slot, slot = t6_cursor_slot(t6, next);
 	int off, n, ret = 0;
 
-	mutex_lock(&t6->io_lock);
 	for (off = 0; off < min(t6->cur.bytes, T6_CUR_MAX_SEND) && ret >= 0; off += n) {
 		n = min3(t6->cur.bytes - off, T6_CUR_MAX_SEND - off, T6_CTRL_BUF);
-		memcpy(t6->ctrl, t6->cur.img + off, n);
-		ret = t6_ctrl_out(t6, T6_REQ_CUR_IMG(t6->output), slot, off, n);
+		memcpy(t6->cur.ctrl, t6->cur.img + off, n);
+		ret = t6_cur_ctrl_out(t6, T6_REQ_CUR_IMG(t6->output), slot, off, n);
 	}
 	if (ret >= 0)
-		ret = t6_ctrl_out(t6, T6_REQ_CUR_SHOW(t6->output), slot, 1, 0);
-	mutex_unlock(&t6->io_lock);
+		ret = t6_cur_ctrl_out(t6, T6_REQ_CUR_SHOW(t6->output), slot, 1, 0);
 	if (ret < 0)
 		return ret;
 	memcpy(t6->cur.shown, t6->cur.img, t6->cur.bytes);
@@ -1357,10 +1369,8 @@ static int t6_cursor_move(struct mct_t6 *t6, int x, int y)
 {
 	int ret;
 
-	mutex_lock(&t6->io_lock);
-	ret = t6_ctrl_out(t6, T6_REQ_CUR_POS(t6->output), x < 0 ? (x - 1) & 0xffff : x,
-			  y < 0 ? (y - 1) & 0xffff : y, 0);
-	mutex_unlock(&t6->io_lock);
+	ret = t6_cur_ctrl_out(t6, T6_REQ_CUR_POS(t6->output), x < 0 ? (x - 1) & 0xffff : x,
+			      y < 0 ? (y - 1) & 0xffff : y, 0);
 	t6->cur.x = x;
 	t6->cur.y = y;
 	return ret < 0 ? ret : 0;
@@ -3440,7 +3450,8 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 	t6->ctrl = drmm_kmalloc(dev, T6_CTRL_BUF, GFP_KERNEL);
 	t6->cur.img = drmm_kmalloc(dev, T6_CUR_BYTES, GFP_KERNEL);
 	t6->cur.shown = drmm_kmalloc(dev, T6_CUR_BYTES, GFP_KERNEL);
-	if (!t6->ctrl || !t6->cur.img || !t6->cur.shown)
+	t6->cur.ctrl = drmm_kmalloc(dev, T6_CTRL_BUF, GFP_KERNEL);
+	if (!t6->ctrl || !t6->cur.img || !t6->cur.shown || !t6->cur.ctrl)
 		return -ENOMEM;
 	ret = t6_alloc_urbs(t6, interface);
 	if (ret)
