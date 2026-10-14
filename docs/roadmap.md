@@ -28,6 +28,27 @@ Never send: T2 `0x1a`, `0x1c`; T6 `0x01`, `0x13`, `0x30`, `0x15`, `0x33`,
 | Trigger 6 family | ~80% | Not done: second output, the chip's JPEG decoder. The 5600 is a single-output "Super Lite". Up to 3440x1440@60 (NV12; 4:4:4 up to 51 Hz) and 4K30 (NV12) work. |
 | Speed headroom | ~15-25% | Hard limits: ~350 MHz pixel clock (1080p144 max, no 1080p240), ~360 MB/s USB, per-format scanout bandwidth. Raw full-screen NV12 1080p ~98 fps. |
 
+## Next (2026-10-15)
+
+In this order:
+
+1. **T6 frame latency, lossless:** convert and send band by band, overlapped,
+   instead of converting the whole frame first (up to ~1 ms of the 9.4 ms
+   per 1080p frame measured with `tools/frame_latency.sh`).
+2. **Vendor comparison through the same VM path:** the vendor driver in the
+   Windows VM and mct in a NixOS VM, both seeing the device through the
+   same usb-redir tunnel, with mouse moves injected by QMP the same way.
+   Measured on both: injected move -> cursor packet on USB, bytes per
+   cursor move and shape change, shape caching, and for a fullscreen 1080p
+   video the frame rate, bytes per frame and what is sent at rest. T6
+   first, then the tablet; results into the README comparison, noting how
+   they were measured.
+3. **T2 resync as a work item:** recovery from a confused chip (up to 45 s)
+   blocks probe and resume and holds `io_lock` (the cursor freezes).
+4. **T2 frame latency statistics,** like the T6's.
+5. **Upstream readiness:** checkpatch, sparse, KUnit tests for the PLL,
+   colour conversion and RLE.
+
 ## Open
 
 ### Trigger 6
