@@ -112,6 +112,7 @@ struct mct_device {
 	u8 *cur;			/* pixels as committed */
 	int cur_x, cur_y;
 	bool cur_on, cur_pending;
+	ktime_t cur_since;		/* commit of the oldest update not yet sent */
 	u8 *cur_send;			/* cur_work's copy for funcs->cursor_set */
 	struct work_struct cur_work;
 	const char *chip;
@@ -124,6 +125,11 @@ struct mct_device {
 		u64 no_clips, clips, clip_px;	/* damage clips per commit */
 		u64 copies, ns_copy, ns_copy_max;	/* framebuffer -> shadow */
 		u64 ns_commit, ns_commit_max;		/* the same incl. CPU access setup */
+		/* cursor: commits, those replaced before they went out, and the
+		 * time from the commit to the end of the USB transfer */
+		u64 cur_commits, cur_coalesced;
+		u64 cur_moves, ns_cur_move, ns_cur_move_max;	/* position only */
+		u64 cur_shapes, ns_cur_shape, ns_cur_shape_max;	/* new image */
 		ktime_t since;
 	} stats;
 };

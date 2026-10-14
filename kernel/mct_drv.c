@@ -68,8 +68,11 @@ static void mct_settle_work(struct work_struct *work)
 static void mct_cursor_work(struct work_struct *work)
 {
 	struct mct_device *mdev = container_of(work, struct mct_device, cur_work);
+	size_t bytes = mdev->cur_size * mdev->cur_size * 4;
+	bool on, shape = false;
+	ktime_t since;
 	int x, y, idx;
-	bool on;
+	u64 ns;
 
 	mutex_lock(&mdev->cur_lock);
 	if (!mdev->cur_pending) {
@@ -80,8 +83,11 @@ static void mct_cursor_work(struct work_struct *work)
 	on = mdev->cur_on;
 	x = mdev->cur_x;
 	y = mdev->cur_y;
-	if (on)
-		memcpy(mdev->cur_send, mdev->cur, mdev->cur_size * mdev->cur_size * 4);
+	since = mdev->cur_since;
+	if (on && memcmp(mdev->cur_send, mdev->cur, bytes)) {
+		memcpy(mdev->cur_send, mdev->cur, bytes);
+		shape = true;
+	}
 	mutex_unlock(&mdev->cur_lock);
 
 	if (!drm_dev_enter(&mdev->dev, &idx))
@@ -91,6 +97,18 @@ static void mct_cursor_work(struct work_struct *work)
 	else
 		mdev->funcs->cursor_hide(mdev);
 	drm_dev_exit(idx);
+
+	/* debugfs: how long a cursor change takes to reach the device */
+	ns = ktime_to_ns(ktime_sub(ktime_get(), since));
+	if (shape) {
+		mdev->stats.cur_shapes++;
+		mdev->stats.ns_cur_shape += ns;
+		mdev->stats.ns_cur_shape_max = max(mdev->stats.ns_cur_shape_max, ns);
+	} else if (on) {
+		mdev->stats.cur_moves++;
+		mdev->stats.ns_cur_move += ns;
+		mdev->stats.ns_cur_move_max = max(mdev->stats.ns_cur_move_max, ns);
+	}
 }
 
 static void mct_stop_updates(struct mct_device *mdev)
@@ -369,6 +387,11 @@ static void mct_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_
 		mdev->cur_y = new_state->crtc_y;
 	}
 	mdev->cur_on = on;
+	mdev->stats.cur_commits++;
+	if (mdev->cur_pending)
+		mdev->stats.cur_coalesced++;	/* the last one never went out */
+	else
+		mdev->cur_since = ktime_get();
 	mdev->cur_pending = true;
 	mutex_unlock(&mdev->cur_lock);
 	if (on)
@@ -674,11 +697,23 @@ static int mct_stats_show(struct seq_file *m, void *data)
 	seq_puts(m, " (max ");
 	mct_print_ms(m, mdev->stats.ns_commit_max, 1);
 	seq_puts(m, ") incl. cpu access setup\n");
+	seq_printf(m, "cursor           %llu commits, %llu replaced before sending\n",
+		   mdev->stats.cur_commits, mdev->stats.cur_coalesced);
+	seq_puts(m, "ms per cursor move  ");
+	mct_print_ms(m, mdev->stats.ns_cur_move, max_t(u64, mdev->stats.cur_moves, 1));
+	seq_puts(m, " (max ");
+	mct_print_ms(m, mdev->stats.ns_cur_move_max, 1);
+	seq_printf(m, ") over %llu moves, commit to device\n", mdev->stats.cur_moves);
+	seq_puts(m, "ms per cursor shape ");
+	mct_print_ms(m, mdev->stats.ns_cur_shape, max_t(u64, mdev->stats.cur_shapes, 1));
+	seq_puts(m, " (max ");
+	mct_print_ms(m, mdev->stats.ns_cur_shape_max, 1);
+	seq_printf(m, ") over %llu new images\n", mdev->stats.cur_shapes);
 	return 0;
 }
 
 /* ------------------------------------------------------------------ */
-/* sysfs: /sys/bus/usb/devices/<interface>/mct/ (docs/driver/companion-app.md) */
+/* sysfs: /sys/bus/usb/devices/<interface>/mct/ (docs/driver/ABI-sysfs-mct.txt) */
 
 /*
  * NULL once the interface is unbound (the files go away a little later

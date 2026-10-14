@@ -77,7 +77,7 @@ MODULE_PARM_DESC(audio_lead_ms, "HDMI audio: how far ahead of playback the adapt
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	29
-#define DRIVER_PATCH	8
+#define DRIVER_PATCH	9
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -2204,7 +2204,7 @@ static void t6_stats(struct mct_device *mdev, struct seq_file *m)
 }
 
 /* ------------------------------------------------------------------ */
-/* sysfs (docs/driver/companion-app.md)				      */
+/* sysfs (docs/driver/ABI-sysfs-mct.txt)				      */
 
 /* NULL once the interface is unbound, see mct_from_dev() */
 static struct mct_t6 *t6_from_dev(struct device *dev)

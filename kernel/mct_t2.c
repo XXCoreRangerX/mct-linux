@@ -67,7 +67,7 @@ MODULE_PARM_DESC(half_motion, "Experimental, off by default. Default for new dev
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	36
+#define DRIVER_PATCH	37
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -837,7 +837,7 @@ static void t2_set_power(struct mct_t2 *t2, bool *flag, bool v)
 /* ------------------------------------------------------------------ */
 /* device init							      */
 
-/* 8051 pacing, validated from a cold chip (docs/reference/init-sequence.md) */
+/* 8051 pacing, validated from a cold chip (docs/reference/t2-init-sequence.md) */
 static unsigned int t2_pace_us(u8 ep, const u8 *data)
 {
 	if (ep == T2_EP_FB)
@@ -1614,7 +1614,7 @@ static const struct drm_driver t2_drm_driver = {
 	MCT_COMPAT_DRIVER_OPS
 };
 
-/* sysfs (docs/driver/companion-app.md) */
+/* sysfs (docs/driver/ABI-sysfs-mct.txt) */
 
 /* NULL once the interface is unbound, see mct_from_dev() */
 static struct mct_t2 *t2_from_dev(struct device *dev)

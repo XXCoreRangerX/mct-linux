@@ -22,6 +22,9 @@ come the chip's lines, then the common commit-side lines.
 | `rows changed` | rows copied per commit after comparing with the previous image |
 | `ms per fb copy` | framebuffer to shadow copy per commit (and the maximum); high values mean the framebuffer is in GPU memory |
 | `ms per commit` | the same including CPU access setup |
+| `cursor` | cursor commits, and how many were replaced by a newer one before they went out (since mct_t6 0.29.9 / mct_t2 0.3.37) |
+| `ms per cursor move` | from the cursor commit to the end of its USB transfer, for position changes (and the maximum); `tools/cursor_latency.sh` reads it per test phase |
+| `ms per cursor shape` | the same for new cursor images (an upload) |
 
 ## Trigger 6 (`mct_t6_stats`)
 
@@ -36,6 +39,7 @@ come the chip's lines, then the common commit-side lines.
 | `motion -> NV12` | how often auto mode switched to NV12 for large changes |
 | `events` | interrupt events: frame done, monitor change, redraw request, other; endpoint errors and the last error code; `polling` if the events stopped and the connector is polled instead |
 | `recoveries` | transfer errors that needed the cancel request (each restarts the 5600, ~3 s without picture) |
+| `audio` | only with a sound card (HDMI audio): playing or idle, the lead in ms, stream starts, data packets, silence fills (underruns), audio events and the last DMA pointer they reported |
 | `usb MB/s while busy` | throughput while transfers were queued |
 
 ### Test hook: `mct_t6_inject`
@@ -58,6 +62,7 @@ goes dark for a few seconds each time.
 | Line | Meaning |
 |---|---|
 | `updates` | frames sent |
+| `half-res updates` | updates with tiles sent at half resolution (`motion=half`) |
 | `lossy updates` | updates sent with a lossy tolerance, by tolerance |
 | `rects` | rectangles sent |
 | `pixels sent` | pixels encoded and sent (and in full frames) |
