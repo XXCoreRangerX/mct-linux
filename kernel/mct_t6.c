@@ -77,7 +77,7 @@ MODULE_PARM_DESC(audio_lead_ms, "HDMI audio: how far ahead of playback the adapt
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	29
-#define DRIVER_PATCH	10
+#define DRIVER_PATCH	11
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -282,6 +282,7 @@ struct t6_urb {
 	struct mct_t6 *t6;
 	struct urb *urb;
 	u8 *buf;			/* T6_FRAG bytes, DMA coherent */
+	ktime_t since;			/* a frame's flip: its first commit, else 0 */
 	struct list_head node;		/* in the free list while idle */
 };
 
@@ -349,6 +350,7 @@ struct mct_t6 {
 	atomic_t no_cancel;		/* ... and skip the cancel request */
 	struct mutex mode_lock;		/* mode_entry, enabled */
 	struct t6_mode mode_entry;	/* the mode set at the last enable */
+	ktime_t frame_since;		/* first commit of the frame being sent; io_lock */
 	bool enabled;			/* the output is on with mode_entry */
 
 	struct {
@@ -372,6 +374,13 @@ struct mct_t6 {
 
 	struct {			/* debugfs statistics */
 		u64 updates, bytes, ns_conv, ns_usb;
+		/*
+		 * Frame latency from the first commit of a frame: until the worker
+		 * starts, and until its flip transfer has completed (on the
+		 * device). Under urb_lock (the second is booked at completion).
+		 */
+		u64 frames_timed, ns_wait, ns_wait_max;
+		u64 frames_done, ns_frame, ns_frame_max;
 		u64 rows, bands;		/* image rows and bands sent */
 		u64 to_420;			/* switches to 4:2:0 for motion */
 		u64 ev_done, ev_change, ev_redraw, ev_other;	/* interrupt events */
@@ -458,6 +467,14 @@ static void t6_urb_complete(struct urb *urb)
 	    urb->status != -ESHUTDOWN)
 		atomic_set(&t6->urb_err, urb->status);
 	spin_lock_irqsave(&t6->urb_lock, flags);
+	if (u->since && !urb->status) {
+		u64 ns = ktime_to_ns(ktime_sub(ktime_get(), u->since));
+
+		t6->stats.frames_done++;
+		t6->stats.ns_frame += ns;
+		t6->stats.ns_frame_max = max(t6->stats.ns_frame_max, ns);
+	}
+	u->since = 0;
 	list_add_tail(&u->node, &t6->urb_free);
 	spin_unlock_irqrestore(&t6->urb_lock, flags);
 	wake_up(&t6->urb_wait);
@@ -493,6 +510,7 @@ static int t6_urb_send(struct mct_t6 *t6, struct t6_urb *u, int len)
 	ret = usb_submit_urb(u->urb, GFP_KERNEL);
 	if (ret) {
 		usb_unanchor_urb(u->urb);
+		u->since = 0;
 		spin_lock_irq(&t6->urb_lock);
 		list_add_tail(&u->node, &t6->urb_free);
 		spin_unlock_irq(&t6->urb_lock);
@@ -509,6 +527,18 @@ static int t6_bulk(struct mct_t6 *t6, const void *data, int len)
 	if (!u)
 		return -ETIMEDOUT;
 	memcpy(u->buf, data, len);
+	return t6_urb_send(t6, u, len);
+}
+
+/* t6_bulk for a frame's last transfer: its completion books the latency */
+static int t6_bulk_frame_end(struct mct_t6 *t6, const void *data, int len, ktime_t since)
+{
+	struct t6_urb *u = t6_urb_get(t6);
+
+	if (!u)
+		return -ETIMEDOUT;
+	memcpy(u->buf, data, len);
+	u->since = since;
 	return t6_urb_send(t6, u, len);
 }
 
@@ -1048,7 +1078,7 @@ static int t6_flip(struct mct_t6 *t6, int k)
 
 	ret = t6_bulk(t6, &f.s, sizeof(f.s));
 	if (!ret)
-		ret = t6_bulk(t6, &f.v, sizeof(f.v));
+		ret = t6_bulk_frame_end(t6, &f.v, sizeof(f.v), t6->frame_since);
 	t6->stats.bytes += sizeof(f);
 	return ret;
 }
@@ -1241,6 +1271,18 @@ static void t6_update(struct mct_device *mdev)
 	}
 	t6->base.dirty = false;
 	t0 = ktime_get();
+	/* the first commit of this frame: for the latency statistics */
+	t6->frame_since = t6->base.dirty_since;
+	t6->base.dirty_since = 0;
+	if (t6->frame_since) {
+		u64 ns = ktime_to_ns(ktime_sub(t0, t6->frame_since));
+
+		spin_lock_irq(&t6->urb_lock);
+		t6->stats.frames_timed++;
+		t6->stats.ns_wait += ns;
+		t6->stats.ns_wait_max = max(t6->stats.ns_wait_max, ns);
+		spin_unlock_irq(&t6->urb_lock);
+	}
 
 	/* a failed transfer may have left the device mid-session */
 	ret = atomic_xchg(&t6->urb_err, 0);
@@ -2205,6 +2247,7 @@ static void t6_stats(struct mct_device *mdev, struct seq_file *m)
 	struct mct_t6 *t6 = to_t6(mdev);
 	u64 ms = max_t(u64, ktime_ms_delta(ktime_get(), mdev->stats.since), 1);
 	u64 n = max_t(u64, t6->stats.updates, 1);
+	u64 wait, wait_max, timed, frame, frame_max, done;
 
 	seq_printf(m, "mode             %dx%d@%d (output %d), %s\n", mdev->width, mdev->height,
 		   mdev->refresh, t6->output, t6->lay.planes ? t6_kind_name[t6->lay.kind] : "-");
@@ -2223,6 +2266,22 @@ static void t6_stats(struct mct_device *mdev, struct seq_file *m)
 		   div64_u64(t6->stats.ns_usb, n * 1000000),
 		   div64_u64(t6->stats.ns_usb, n * 10000) % 100);
 	seq_printf(m, "motion -> NV12   %llu times\n", t6->stats.to_420);
+	spin_lock_irq(&t6->urb_lock);
+	wait = t6->stats.ns_wait;
+	wait_max = t6->stats.ns_wait_max;
+	timed = max_t(u64, t6->stats.frames_timed, 1);
+	frame = t6->stats.ns_frame;
+	frame_max = t6->stats.ns_frame_max;
+	done = t6->stats.frames_done;
+	spin_unlock_irq(&t6->urb_lock);
+	seq_printf(m, "frame to worker  %llu.%02llu ms (max %llu.%02llu) over %llu frames, from the first commit\n",
+		   div64_u64(wait, timed * 1000000), div64_u64(wait, timed * 10000) % 100,
+		   div64_u64(wait_max, 1000000), div64_u64(wait_max, 10000) % 100,
+		   t6->stats.frames_timed);
+	seq_printf(m, "frame to device  %llu.%02llu ms (max %llu.%02llu) over %llu frames, first commit to the flip's transfer done\n",
+		   div64_u64(frame, max_t(u64, done, 1) * 1000000),
+		   div64_u64(frame, max_t(u64, done, 1) * 10000) % 100,
+		   div64_u64(frame_max, 1000000), div64_u64(frame_max, 10000) % 100, done);
 	seq_printf(m, "events           %llu frame done, %llu monitor change, %llu redraw, %llu other, %llu errors (last %d)%s\n",
 		   t6->stats.ev_done, t6->stats.ev_change, t6->stats.ev_redraw,
 		   t6->stats.ev_other, t6->stats.ev_errors, t6->ev_err,

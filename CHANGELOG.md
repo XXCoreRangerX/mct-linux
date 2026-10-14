@@ -4,6 +4,13 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
+## Unreleased
+
+- T6 frame latency in debugfs: from a frame's first commit until the
+  worker starts, and until its flip transfer has completed on the adapter;
+  `tools/frame_latency.sh` measures it while something runs (mct_t6
+  0.29.11).
+
 ## 0.6.1 (2026-10-14)
 
 Driver versions: mct_t6 0.29.10, mct_t2 0.3.37.

@@ -26,6 +26,8 @@ come the chip's lines, then the common commit-side lines.
 | `ms per cursor move` | from the cursor commit to the end of its USB transfer, for position changes (and the maximum); `tools/cursor_latency.sh` reads it per test phase |
 | `ms per cursor shape` | the same for new cursor images (an upload, or on the T6 a slot select for a shape it still holds) |
 | `cursor images` | (T6) cursor shapes shown from the slot cache vs. uploaded (since mct_t6 0.29.10) |
+| `frame to worker` | (T6) from the first commit of a frame until the worker starts sending it (and the maximum), since mct_t6 0.29.11 |
+| `frame to device` | (T6) from the first commit of a frame until its flip transfer has completed, i.e. the frame is on the adapter; `tools/frame_latency.sh` reads both per test |
 
 ## Trigger 6 (`mct_t6_stats`)
 
