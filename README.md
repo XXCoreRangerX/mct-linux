@@ -61,6 +61,40 @@ of the vendor drivers for interoperability, and testing on real hardware.
 | ❌ Linux older than 6.12 | |
 | ✅ Desktop app and command line tool | MCT Display Manager and `mctctl`: settings per display, saved and restored, live status, device details |
 
+## Compared with the vendor drivers
+
+MCT's (and Wacom's) Windows and macOS drivers for the same devices, as far
+as they were analysed; "not measured" means nobody has timed it.
+
+**Trigger 6** (j5create JUA254)
+
+| | mct | Vendor drivers (Windows / macOS) |
+|---|---|---|
+| Modes | from the monitor's EDID: 1080p up to 144 Hz, 720p up to 240 Hz, 3440x1440@60, 4K30 | from the monitor's EDID, 60 Hz |
+| Picture | exact RGB or YUV 4:4:4 at rest, NV12 during large changes; partial updates as raw changed rows | JPEG (quality 95), partial updates as JPEG rectangles; Windows refreshes losslessly at rest |
+| Frame latency | 9.4 ms from the commit to the adapter for a fullscreen 1080p video (`tools/frame_latency.sh`) | not measured; the adapter's JPEG decode alone took 7.6-11 ms per 1360x768 frame in a Windows capture |
+| Cursor move | 0.12-0.4 ms from the commit to the adapter (`tools/cursor_latency.sh`) | hardware cursor, not measured |
+| Cursor shape change | ~0.5 ms (recent shapes kept on the adapter) | hardware cursor, not measured |
+| HDMI audio | ✅ 48 kHz stereo, volume | ✅ |
+| Gamma / night light | ✅ in software | ❌ on this adapter (Windows uses hardware gamma tables, which need a newer chip) |
+| Second output (docks) | ❌ | ✅ |
+| USB 2 links | ⚠️ works, slower for full-screen motion | ✅ JPEG keeps it fast |
+
+**Trigger II** (Wacom DTU-1031X)
+
+| | mct | Vendor drivers (Windows / macOS) |
+|---|---|---|
+| Picture | lossless by default (lossy only if you turn it on), tear-free: updates go to the hidden buffer, then a flip; only changed pixels are sent | slightly lossy: the Windows encoder always merges values within ±4 into runs; partial updates go straight into the buffer on screen |
+| Cursor move | ~0.04 ms from the commit to the tablet | hardware cursor, not measured |
+| Cursor shape change | ~1.1 ms | not measured |
+| Backlight (the only display setting Wacom offers) | ✅ standard backlight device | ✅ |
+| Recovery from a confused chip | ✅ automatic | not known |
+
+The analysis behind this is in
+[t6-vendor-comparison.md](docs/research/t6-vendor-comparison.md),
+[t6-vendor-review.md](docs/research/t6-vendor-review.md) and
+[t2-vendor-driver-analysis.md](docs/research/t2-vendor-driver-analysis.md).
+
 ## Features
 
 **Both chips**

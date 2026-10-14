@@ -4,16 +4,30 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
-## Unreleased
+## 0.7.0 (2026-10-14)
 
-- T6 frame latency in debugfs: from a frame's first commit until the
-  worker starts, and until its flip transfer has completed on the adapter;
-  `tools/frame_latency.sh` measures it while something runs (mct_t6
-  0.29.11).
-- T2: niri can use the tablet's hardware cursor. The smallest framebuffer
-  the driver accepted was the panel size, so niri's 64x64 cursor buffer was
-  refused and the cursor was drawn into the picture (a frame update per
-  move); found in a VM with the tablet passed through (mct_t2 0.3.38).
+Driver versions: mct_t6 0.29.11, mct_t2 0.3.38.
+
+**A hardware cursor on the tablet**
+- Compositors can use the DTU-1031X's hardware cursor. The smallest
+  framebuffer the driver accepted was the panel size (1024x600), so a
+  compositor's 64x64 cursor buffer was refused and niri drew the cursor
+  into the picture: every move was a frame update of 16-26 ms over the
+  tablet's USB 2. Now a move reaches the tablet in ~0.04 ms and a shape
+  change in ~1.1 ms (measured from the commit with
+  `tools/cursor_latency.sh t2`). Found in a VM with the tablet passed
+  through and niri's trace logs.
+
+**Frame latency on the Trigger 6**
+- debugfs shows, from a frame's first commit, how long until the driver
+  starts sending it and until its last transfer has completed on the
+  adapter; `tools/frame_latency.sh` measures it while something runs. A
+  fullscreen video at 1080p: 9.4 ms from commit to adapter, almost all of
+  it the USB transfer of the frame (~3 MB).
+
+**README**
+- A comparison with the vendor drivers for both devices, with the measured
+  cursor and frame latencies.
 
 ## 0.6.1 (2026-10-14)
 
