@@ -393,3 +393,14 @@ rendering path of our niri patch, which for some devices renders on the
 primary GPU and copies, possibly with the cursor baked in. To find out:
 run niri once with `RUST_LOG=smithay::backend::drm=trace` (needs a session
 restart, or a VM with the tablet passed through).
+
+EDIT (2026-10-14): found in a VM with the tablet passed through (lab
+`captures/scout/t2-cursor-plane-vm-2026-10-14.md`; niri rebuilt with trace
+logs, which release builds strip). The suspect was wrong: our driver set
+the smallest framebuffer to the panel size (`mct_t2.c` `.min_w = T2_WIDTH,
+.min_h = T2_HEIGHT` -> `mode_config.min_width/height` = 1024x600), so DRM
+refused niri's 64x64 cursor buffer (`drm_framebuffer.c`, "bad framebuffer
+width"); smithay logs that at debug level ("failed to export framebuffer
+for cursor plane") and draws the cursor into the picture, before any test
+commit. With 64x64 (as the T6 has) niri assigned the cursor to the plane
+and the driver got cursor commits. Fixed in mct_t2 0.3.38.

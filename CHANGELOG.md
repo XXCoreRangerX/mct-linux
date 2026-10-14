@@ -10,6 +10,10 @@ drm_info and in the kernel log at probe).
   worker starts, and until its flip transfer has completed on the adapter;
   `tools/frame_latency.sh` measures it while something runs (mct_t6
   0.29.11).
+- T2: niri can use the tablet's hardware cursor. The smallest framebuffer
+  the driver accepted was the panel size, so niri's 64x64 cursor buffer was
+  refused and the cursor was drawn into the picture (a frame update per
+  move); found in a VM with the tablet passed through (mct_t2 0.3.38).
 
 ## 0.6.1 (2026-10-14)
 

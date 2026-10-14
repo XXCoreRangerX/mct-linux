@@ -67,7 +67,7 @@ MODULE_PARM_DESC(half_motion, "Experimental, off by default. Default for new dev
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	37
+#define DRIVER_PATCH	38
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -1788,8 +1788,15 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 {
 	static const struct mct_config cfg = {
 		.funcs = &t2_funcs,
-		.min_w = T2_WIDTH,
-		.min_h = T2_HEIGHT,
+		/*
+		 * The smallest framebuffer: the cursor's (64x64), not the panel's.
+		 * DRM refuses framebuffers below this, and with 1024x600 here
+		 * niri's 64x64 cursor buffer was refused, so it drew the cursor
+		 * into the picture (a frame update per move). Full-screen images
+		 * are still checked against the mode in atomic_check.
+		 */
+		.min_w = T2_CUR,
+		.min_h = T2_CUR,
 		.max_w = T2_WIDTH,
 		.max_h = T2_HEIGHT,
 		.connector_type = DRM_MODE_CONNECTOR_USB,
