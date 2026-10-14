@@ -10,7 +10,7 @@ The Trigger II protocol is in [protocol-t2.md](../reference/protocol-t2.md),
 the history of the experiments in
 [t2-lab-notebook.md](../history/t2-lab-notebook.md).
 
-> **Current state (mct_t2 0.3.36):** the planes, CRTC, damage handling and
+> **Current state (mct_t2 0.3.38):** the planes, CRTC, damage handling and
 > workers come from the shared core ([shared-core.md](shared-core.md),
 > `kernel/mct_drv.h`); `mct_t2.c` keeps the protocol, init, RLE and lossy
 > encoder, resync, backlight, cursor format and ID ROM. The init is the
