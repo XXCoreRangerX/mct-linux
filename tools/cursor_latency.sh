@@ -13,6 +13,11 @@ chip=${1:-t6}
 secs=${2:-10}
 f=$(ls /sys/kernel/debug/dri/*/mct_${chip}_stats 2>/dev/null | head -1)
 [ -n "$f" ] || { echo "no mct_${chip}_stats in debugfs (driver loaded? root?)" >&2; exit 1; }
+grep -q "^ms per cursor move" "$f" || {
+	echo "the loaded driver has no cursor statistics (needs mct_t6 0.29.9 / mct_t2 0.3.37;" >&2
+	echo "loaded: $(cat /sys/bus/usb/devices/*/mct/driver_version 2>/dev/null | tr '\n' ' '))" >&2
+	exit 1
+}
 
 # "ms per cursor move  A (max B) over N moves" -> "A N"
 snap() {
