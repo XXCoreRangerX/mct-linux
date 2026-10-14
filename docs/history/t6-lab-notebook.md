@@ -1214,3 +1214,20 @@ phase was skipped):
 
 157 shapes came from the slot cache and 4 were uploaded (each shape's
 first appearance, the 20 ms maximum). Slots 2-4 work.
+
+**Frame latency (mct_t6 0.29.11, `tools/frame_latency.sh`, LG at 1080p120,
+fullscreen video at 50 fps, 20 s).** 1001 updates, none replaced:
+
+| From the frame's first commit | Time |
+|---|---|
+| until the worker starts | 0.45 ms |
+| conversion (average since load) | 0.95 ms |
+| until the last transfer is queued (USB queueing, average since load) | 2.77 ms |
+| until the flip's transfer has completed (frame on the adapter) | **9.42 ms** |
+
+Since load: 12.5 GB in 11 560 updates (~1.1 MB per update, 460 of 1080
+rows on average). During the video the auto format sends NV12, ~3.1 MB for
+a near-full 1080p frame, ~8.9 ms at the adapter's ~350 MB/s: the frame
+latency is almost all USB transfer. What's left to gain without loss is
+the ~1 ms of conversion, by converting band by band and sending each band
+at once (overlap); less data would need JPEG (lossy, and slower to decode).
