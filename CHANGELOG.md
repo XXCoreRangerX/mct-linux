@@ -12,6 +12,9 @@ drm_info and in the kernel log at probe).
 - debugfs: cursor latency (commit to device, moves and new images) and how
   many cursor updates were replaced before they went out; measured with
   `tools/cursor_latency.sh` (mct_t6 0.29.9, mct_t2 0.3.37).
+- T6: recent cursor shapes stay in the adapter's cursor slots, so going
+  back to one (arrow, text beam, hand) is a single small request instead
+  of a new upload of up to 64 KiB (mct_t6 0.29.10).
 - Docs: the roadmap lists what's open per chip, parked or dropped; finished
   items moved to `docs/history/roadmap-done.md`. A Trigger II lab notebook
   (`docs/history/t2-lab-notebook.md`) holds the dated experiments that were

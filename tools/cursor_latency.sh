@@ -63,4 +63,4 @@ for p in "${phases[@]}"; do
 done
 echo
 echo "max values since the driver loaded:"
-grep "^ms per cursor" "$f"
+grep "^ms per cursor\|^cursor images" "$f"

@@ -24,7 +24,8 @@ come the chip's lines, then the common commit-side lines.
 | `ms per commit` | the same including CPU access setup |
 | `cursor` | cursor commits, and how many were replaced by a newer one before they went out (since mct_t6 0.29.9 / mct_t2 0.3.37) |
 | `ms per cursor move` | from the cursor commit to the end of its USB transfer, for position changes (and the maximum); `tools/cursor_latency.sh` reads it per test phase |
-| `ms per cursor shape` | the same for new cursor images (an upload) |
+| `ms per cursor shape` | the same for new cursor images (an upload, or on the T6 a slot select for a shape it still holds) |
+| `cursor images` | (T6) cursor shapes shown from the slot cache vs. uploaded (since mct_t6 0.29.10) |
 
 ## Trigger 6 (`mct_t6_stats`)
 

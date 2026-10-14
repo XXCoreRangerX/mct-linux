@@ -145,7 +145,12 @@ the monitor goes, with ALSA change notifications.
 
 The core hands over the cursor as pixels and a screen position. The backend
 uploads the smallest of 64, 96 or 128 px that holds everything visible, in
-4096-byte chunks, into the cursor slot not on screen, then selects it.
+4096-byte chunks, into a cursor slot not on screen, then selects it. Since
+0.29.10 it keeps a copy of what each of its 5 slots holds: a shape seen
+before (arrow, text beam, hand) is shown by selecting its slot, one small
+request instead of an upload of up to 64 KiB (~11 ms, measured
+2026-10-14). New shapes go into the least recently used slot; a mode set
+or a redraw request forgets the slots.
 Negative positions are sent as v - 1. A 128 px image is sent up to 0x10000
 bytes (16-bit offset).
 

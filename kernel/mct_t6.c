@@ -77,7 +77,7 @@ MODULE_PARM_DESC(audio_lead_ms, "HDMI audio: how far ahead of playback the adapt
 #define DRIVER_DESC	"MCT Trigger 6 USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	29
-#define DRIVER_PATCH	9
+#define DRIVER_PATCH	10
 
 #define T6_EP_OUT	0x02
 #define T6_EVENT_LEN	64		/* EP 0x83 interrupt packets */
@@ -110,6 +110,7 @@ MODULE_PARM_DESC(audio_lead_ms, "HDMI audio: how far ahead of playback the adapt
  */
 #define T6_CUR		128
 #define T6_CUR_BYTES	(8 + T6_CUR * T6_CUR * 4)
+#define T6_CUR_SLOTS	5		/* cursor slots per output (firmware: 10 shared) */
 #define T6_CUR_MAX_SEND	0x10000
 
 #define T6_MAX_MODES	30		/* 0x89 table: 512 + 448 bytes */
@@ -354,11 +355,19 @@ struct mct_t6 {
 		struct mutex lock;	/* cursor state and its control requests */
 		u8 *ctrl;		/* DMA-able buffer for its control requests */
 		u8 *img;		/* header + image being built */
-		u8 *shown;		/* last uploaded */
-		int bytes, shown_bytes;	/* of the two images */
-		int slot;		/* 0 or 1: which of our two slots is in use */
+		int bytes;		/* of img */
+		/*
+		 * The images in the device's slots, so a shape seen before
+		 * (arrow, text beam, hand) is shown by selecting its slot
+		 * instead of uploading up to 64 KiB again.
+		 */
+		u8 *cache[T6_CUR_SLOTS];
+		int cache_bytes[T6_CUR_SLOTS];	/* 0: slot holds nothing known */
+		u64 cache_used[T6_CUR_SLOTS], tick;
+		int slot;		/* the slot selected */
 		int x, y;		/* last position sent */
-		bool uploaded, visible;
+		bool visible;
+		u64 hits, uploads;	/* statistics */
 	} cur;
 
 	struct {			/* debugfs statistics */
@@ -1338,30 +1347,59 @@ static int t6_cursor_show(struct mct_t6 *t6, bool show)
 	return 0;
 }
 
-/*
- * Image in chunks (wIndex = byte offset) into the other slot, then select
- * that slot; leaves the cursor visible.
- */
-static int t6_cursor_upload(struct mct_t6 *t6)
+/* forget what the device's slots hold (mode set, redraw request) */
+static void t6_cursor_forget(struct mct_t6 *t6)
 {
-	int next = !t6->cur.slot, slot = t6_cursor_slot(t6, next);
-	int off, n, ret = 0;
+	memset(t6->cur.cache_bytes, 0, sizeof(t6->cur.cache_bytes));
+}
 
+/* select slot i and show the cursor */
+static int t6_cursor_select(struct mct_t6 *t6, int i)
+{
+	int ret = t6_cur_ctrl_out(t6, T6_REQ_CUR_SHOW(t6->output), t6_cursor_slot(t6, i), 1, 0);
+
+	if (ret < 0)
+		return ret;
+	t6->cur.slot = i;
+	t6->cur.cache_used[i] = ++t6->cur.tick;
+	t6->cur.visible = true;
+	return 0;
+}
+
+/*
+ * Show cur.img: select the slot that already holds it, or upload it in
+ * chunks (wIndex = byte offset) into the least recently used slot other
+ * than the one on screen, then select that. Leaves the cursor visible.
+ */
+static int t6_cursor_image(struct mct_t6 *t6)
+{
+	int i, lru = -1, slot, off, n, ret = 0;
+
+	for (i = 0; i < T6_CUR_SLOTS; i++) {
+		if (t6->cur.cache_bytes[i] == t6->cur.bytes &&
+		    !memcmp(t6->cur.cache[i], t6->cur.img, t6->cur.bytes)) {
+			if (i == t6->cur.slot && t6->cur.visible)
+				return 0;
+			t6->cur.hits++;
+			return t6_cursor_select(t6, i);
+		}
+		if (i != t6->cur.slot &&
+		    (lru < 0 || t6->cur.cache_used[i] < t6->cur.cache_used[lru]))
+			lru = i;
+	}
+	slot = t6_cursor_slot(t6, lru);
+	t6->cur.cache_bytes[lru] = 0;		/* overwritten from here on */
 	for (off = 0; off < min(t6->cur.bytes, T6_CUR_MAX_SEND) && ret >= 0; off += n) {
 		n = min3(t6->cur.bytes - off, T6_CUR_MAX_SEND - off, T6_CTRL_BUF);
 		memcpy(t6->cur.ctrl, t6->cur.img + off, n);
 		ret = t6_cur_ctrl_out(t6, T6_REQ_CUR_IMG(t6->output), slot, off, n);
 	}
-	if (ret >= 0)
-		ret = t6_cur_ctrl_out(t6, T6_REQ_CUR_SHOW(t6->output), slot, 1, 0);
 	if (ret < 0)
 		return ret;
-	memcpy(t6->cur.shown, t6->cur.img, t6->cur.bytes);
-	t6->cur.shown_bytes = t6->cur.bytes;
-	t6->cur.slot = next;
-	t6->cur.uploaded = true;
-	t6->cur.visible = true;
-	return 0;
+	memcpy(t6->cur.cache[lru], t6->cur.img, t6->cur.bytes);
+	t6->cur.cache_bytes[lru] = t6->cur.bytes;
+	t6->cur.uploads++;
+	return t6_cursor_select(t6, lru);
 }
 
 /* top left of the image; negative values are sent as v - 1, as the vendor does */
@@ -1413,11 +1451,7 @@ static void t6_cursor_set(struct mct_device *mdev, const u8 *bgra, int x, int y)
 	t6->cur.bytes = 8 + size * size * 4;
 
 	t6_cursor_move(t6, x, y);
-	if (!t6->cur.uploaded || t6->cur.bytes != t6->cur.shown_bytes ||
-	    memcmp(t6->cur.img, t6->cur.shown, t6->cur.bytes))
-		if (t6_cursor_upload(t6))
-			goto out;
-	t6_cursor_show(t6, true);
+	t6_cursor_image(t6);
 out:
 	mutex_unlock(&t6->cur.lock);
 }
@@ -1481,7 +1515,7 @@ static int t6_enable(struct mct_device *mdev, const struct drm_display_mode *mod
 	t6->enabled = true;
 	mutex_unlock(&t6->mode_lock);
 	mutex_lock(&t6->cur.lock);
-	t6->cur.uploaded = false;	/* upload the image again after a mode set */
+	t6_cursor_forget(t6);		/* upload the image again after a mode set */
 	t6->cur.visible = false;
 	mutex_unlock(&t6->cur.lock);
 	mutex_lock(&mdev->lock);
@@ -2051,9 +2085,12 @@ static void t6_redraw_work(struct work_struct *work)
 	mct_kick(&t6->base);
 	mutex_lock(&t6->cur.lock);
 	/* the slots may be lost too: upload again, now or when it shows next */
-	t6->cur.uploaded = false;
-	if (t6->cur.visible && !t6_cursor_upload(t6))
-		t6_cursor_move(t6, t6->cur.x, t6->cur.y);
+	t6_cursor_forget(t6);
+	if (t6->cur.visible) {
+		t6->cur.visible = false;
+		if (!t6_cursor_image(t6))
+			t6_cursor_move(t6, t6->cur.x, t6->cur.y);
+	}
 	mutex_unlock(&t6->cur.lock);
 	drm_dev_exit(idx);
 }
@@ -2191,6 +2228,8 @@ static void t6_stats(struct mct_device *mdev, struct seq_file *m)
 		   t6->stats.ev_other, t6->stats.ev_errors, t6->ev_err,
 		   t6->hpd_events ? "" : ", polling");
 	seq_printf(m, "recoveries       %llu\n", t6->stats.recoveries);
+	seq_printf(m, "cursor images    %llu from the slot cache, %llu uploaded\n",
+		   t6->cur.hits, t6->cur.uploads);
 #ifdef MCT_T6_AUDIO
 	if (t6->aud.card)
 		seq_printf(m, "audio            %s, lead %u ms, %llu starts, %llu packets, %llu silence fills, %llu events (last DMA pointer %#x)\n",
@@ -3449,10 +3488,14 @@ static int t6_usb_probe(struct usb_interface *interface, const struct usb_device
 
 	t6->ctrl = drmm_kmalloc(dev, T6_CTRL_BUF, GFP_KERNEL);
 	t6->cur.img = drmm_kmalloc(dev, T6_CUR_BYTES, GFP_KERNEL);
-	t6->cur.shown = drmm_kmalloc(dev, T6_CUR_BYTES, GFP_KERNEL);
 	t6->cur.ctrl = drmm_kmalloc(dev, T6_CTRL_BUF, GFP_KERNEL);
-	if (!t6->ctrl || !t6->cur.img || !t6->cur.shown || !t6->cur.ctrl)
+	if (!t6->ctrl || !t6->cur.img || !t6->cur.ctrl)
 		return -ENOMEM;
+	for (i = 0; i < T6_CUR_SLOTS; i++) {
+		t6->cur.cache[i] = drmm_kmalloc(dev, T6_CUR_BYTES, GFP_KERNEL);
+		if (!t6->cur.cache[i])
+			return -ENOMEM;
+	}
 	ret = t6_alloc_urbs(t6, interface);
 	if (ret)
 		return ret;

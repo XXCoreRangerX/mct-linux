@@ -1175,3 +1175,30 @@ What's known for a driver now:
   much more at large sizes or for very detailed content;
 - no reset request: recovery has to avoid wedging (no ring wrap with the
   reset flag), or the device has to be power-cycled.
+
+## 2026-10-14
+
+**Cursor latency (mct_t6 0.29.9, `tools/cursor_latency.sh`, LG at 1080p144).**
+With the cursor's requests off `io_lock` (0.29.8), time from the cursor
+commit to the end of its USB transfer, 10 s per phase:
+
+| Phase | Commits | Replaced | Moves | Move average | New images | Image average |
+|---|---|---|---|---|---|---|
+| still desktop | 1421 | 0 | 1419 | 0.12 ms | 2 | 12.9 ms |
+| fullscreen video | 1380 | 0 | 1370 | 0.24 ms | 10 | 3.0 ms |
+| dragging a window | 1368 | 0 | 1360 | 0.38 ms | 2 | 10.8 ms |
+| changing shapes | 1407 | 16 | 1264 | 0.56 ms | 127 | 11.3 ms |
+
+Maximum since load: 10.3 ms for a move, 20.6 ms for an image. Moves come
+at the refresh rate (~140/s) and take well under a millisecond even with
+frames going out. New images are the slow part: a full upload of up to
+64 KiB in 4 KiB control transfers, and moves queued behind it are what
+got replaced. Next: keep recent shapes in the adapter's spare cursor slots
+(5 per output per the firmware), so a known shape costs one request.
+
+**Cursor slot cache (mct_t6 0.29.10, to test).** The driver keeps a copy
+of what each of its 5 cursor slots holds. A shape already in a slot is
+shown with one select request; a new one is uploaded into the least
+recently used slot that isn't on screen. Slots 2-4 per output weren't used
+before: the firmware's dispatcher says 10 slots shared by both outputs
+(lab feature-gaps analysis).
