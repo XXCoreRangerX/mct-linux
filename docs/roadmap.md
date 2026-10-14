@@ -54,6 +54,12 @@ Never send: T2 `0x1a`, `0x1c`; T6 `0x01`, `0x13`, `0x30`, `0x15`, `0x33`,
 
 ### Trigger II (the tablet)
 
+- **niri draws the tablet's cursor itself** instead of using its hardware
+  cursor plane (2026-10-14, [lab notebook](history/t2-lab-notebook.md#2026-10-14)):
+  each move is a frame update (16-26 ms) instead of 0.1 ms. The cause is
+  inside niri/smithay; needs one niri start with trace logs (session
+  restart or a VM). The biggest cursor gain left on the T2.
+
 - **Rainbow lines** (analog sampling phase or a DDR/DVO clock phase, ~10-25%
   of inits): look for an auto-adjust/phase command for the RTD2280 scaler,
   reachable through the pen HID side (Wacom's driver has none,

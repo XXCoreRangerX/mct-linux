@@ -375,3 +375,21 @@ Still untested:
   `fc59`, `fe60-89`, `fe70`), which could make scrolling a short command
   instead of resending the rows; the riskiest, since a wrong command may hang
   the chip until the tablet is power-cycled.
+
+## 2026-10-14
+
+**niri doesn't use the tablet's hardware cursor.** `tools/cursor_latency.sh
+t2` counted 0 cursor commits with the mouse on the tablet (mct_t2 0.3.37),
+and with `drm.debug=0x10` every commit to the tablet touched only plane 0
+(the picture): niri never even test-commits the cursor plane, so it draws
+the cursor into the picture. Each move then costs a frame update (16-26 ms
+over USB 2) instead of a 0.1 ms register write. The driver side looks
+right: the cursor plane (64x64, ARGB8888 linear, CRTC 0) is offered, and
+the same core code is used by niri on the T6. Ruled out: cursor size
+(Bibata 24 px at scale 1), output scale/transform, niri's flags (cursor
+plane allowed). The skip happens in smithay's DrmCompositor before any
+test commit (only trace-level logs there). Suspect: the display-only
+rendering path of our niri patch, which for some devices renders on the
+primary GPU and copies, possibly with the cursor baked in. To find out:
+run niri once with `RUST_LOG=smithay::backend::drm=trace` (needs a session
+restart, or a VM with the tablet passed through).
