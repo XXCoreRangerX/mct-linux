@@ -50,8 +50,8 @@ of the vendor drivers for interoperability, and testing on real hardware.
 | Text console | ✅ | ✅ |
 | USB link | ✅ USB 3; ⚠️ USB 2 works with modes up to 2048 wide and slower motion | ✅ USB 2 (by design) |
 | Pen | ➖ | ✅ in-kernel wacom driver |
-| Other devices with the chip | ⚠️ `0711:5601` single-output adapters should work, untested | ❌ other Trigger II devices need their own init (see the note above) |
-| Known hardware issues | | ⚠️ faint vertical lines on some starts; a reload or replug fixes it ([known issues](#known-issues)) |
+| Other devices with the chip | ⚠️ `0711:5601` should work; other adapters, docks and the Wacom DTU-1031AX are recognised but untested, opt-in with `mct.untested_ids=1` ([supported devices](#supported-devices)) | ⚠️ two more DTU-1031X IDs (`0711:5201`, `520f`), untested; ❌ other Trigger II devices need their own init (see the note above) |
+| Known hardware issues | ✅ none known | ⚠️ faint vertical lines on some starts; a reload or replug fixes it ([known issues](#known-issues)) |
 
 | General | |
 |---|---|
