@@ -3,7 +3,7 @@
 { lib, stdenv, kernel }:
 stdenv.mkDerivation {
   pname = "mct";
-  version = "0.6.0-${kernel.version}";
+  version = "0.6.1-${kernel.version}";
   src = ../kernel;
   nativeBuildInputs = kernel.moduleBuildDependencies;
   # toolchain flags only; drop the in-tree O=/--eval flags

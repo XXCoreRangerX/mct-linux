@@ -37,7 +37,7 @@ of the vendor drivers for interoperability, and testing on real hardware.
 | Pixel formats | ✅ RGB24, RGB32, YUV 4:4:4, NV12; automatic or fixed | ✅ RGB24, sent run-length encoded |
 | Picture quality | ✅ lossless at rest; NV12 during large motion (automatic) | ✅ lossless by default; optional lossy mode during heavy motion |
 | Tear-free updates, only changed areas sent | ✅ | ✅ |
-| Hardware cursor | ✅ up to 128 px | ✅ 64 px |
+| Hardware cursor | ✅ up to 128 px; moves reach the adapter in under 0.5 ms, recent shapes are kept on the adapter (0.5 ms to switch) | ✅ 64 px; the chip clips it at the screen edges |
 | Gamma (night light) | ✅ in software | ✅ in software |
 | Brightness | ➖ the monitor's own controls | ✅ standard backlight interface |
 | Hardware rotation | ❌ the compositor rotates | ❌ the compositor rotates |
@@ -80,7 +80,18 @@ of the vendor drivers for interoperability, and testing on real hardware.
 - monitor hotplug (debounced), recovery from USB transfer errors, USB 2
   links (modes up to 2048 wide); a fallback for monitors without a usable
   EDID (not yet tried on hardware)
-- hardware cursor up to 128 px
+- hardware cursor up to 128 px, separate from the picture: a move reaches
+  the adapter **0.12-0.4 ms** after the compositor's commit, also during
+  fullscreen video and window drags, and a shape change (arrow, text beam,
+  hand) **~0.5 ms** once the shape has been seen (measured on a JUA254 at
+  1080p144 with `tools/cursor_latency.sh`; numbers in the
+  [lab notebook](docs/history/t6-lab-notebook.md#2026-10-14)). That's the
+  time the driver adds; the monitor shows it at its next refresh (up to
+  6.9 ms at 144 Hz), as with a graphics card's own outputs. For
+  comparison, a driver without a hardware cursor (e.g. trigger6, see
+  [other drivers](docs/research/t6-other-drivers.md)) draws the cursor into
+  the picture, so it moves with the frames (~10 ms for a 1080p frame over
+  USB 3)
 - software gamma (the adapter has no gamma tables)
 
 **Trigger II (DTU-1031X)**

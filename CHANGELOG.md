@@ -4,23 +4,35 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
-## Unreleased
+## 0.6.1 (2026-10-14)
 
-- T6: the cursor no longer waits for a frame being sent; its requests go
-  over the control endpoint with their own buffer and lock, so it stays
-  smooth during large updates (mct_t6 0.29.8).
-- debugfs: cursor latency (commit to device, moves and new images) and how
-  many cursor updates were replaced before they went out; measured with
-  `tools/cursor_latency.sh` (mct_t6 0.29.9, mct_t2 0.3.37).
-- T6: recent cursor shapes stay in the adapter's cursor slots, so going
-  back to one (arrow, text beam, hand) is a single small request instead
-  of a new upload of up to 64 KiB (mct_t6 0.29.10).
-- Docs: the roadmap lists what's open per chip, parked or dropped; finished
-  items moved to `docs/history/roadmap-done.md`. A Trigger II lab notebook
-  (`docs/history/t2-lab-notebook.md`) holds the dated experiments that were
-  in `t2-driver.md` and `protocol-t2.md`. New: `docs/research/t2-other-drivers.md`.
-  T6 JPEG: work in progress, put aside (USB 2 isn't being tested).
-  Renamed, so the chip comes first: `reference/init-sequence.md` ->
+Driver versions: mct_t6 0.29.10, mct_t2 0.3.37.
+
+**A faster cursor on the Trigger 6**
+- Cursor moves no longer wait for a frame being sent: they go over USB's
+  control channel with their own buffer and lock. Measured from the
+  compositor's commit to the adapter: 0.12-0.4 ms per move, also during
+  video and window drags, a small fraction of one refresh at 144 Hz
+  (6.9 ms).
+- Recent cursor shapes stay in the adapter's cursor slots, so going back to
+  one (arrow, text beam, hand) is a single small request instead of a new
+  upload of up to 64 KiB: 0.5 ms instead of ~11 ms per shape change.
+- debugfs shows the cursor's latency (moves and new images), how many
+  updates were replaced before they went out, and the slot cache's hits;
+  `tools/cursor_latency.sh` measures it per test phase (both chips).
+
+**Docs**
+- The roadmap lists what's open per chip, parked or dropped; finished
+  items moved to `docs/history/roadmap-done.md`.
+- A Trigger II lab notebook (`docs/history/t2-lab-notebook.md`) holds the
+  dated experiments that were in `t2-driver.md` and `protocol-t2.md`.
+- Other drivers per chip: `docs/research/t6-other-drivers.md` and a new
+  `docs/research/t2-other-drivers.md`.
+- Outdated statements fixed across the driver, protocol and comparison
+  docs; one sysfs reference (`docs/driver/ABI-sysfs-mct.txt`); the docs
+  index lists every page; README: tested modes and other devices up to
+  date. T6 JPEG: work in progress, put aside (USB 2 isn't being tested).
+- Renamed, so the chip comes first: `reference/init-sequence.md` ->
   `t2-init-sequence.md`, `reference/device-dtu1031x.md` ->
   `t2-device-dtu1031x.md`, `research/driver-analysis.md` ->
   `t2-vendor-driver-analysis.md`, `research/optimization-ideas.md` ->
@@ -31,6 +43,9 @@ drm_info and in the kernel log at probe).
   and `t6-comparison.md` -> `research/t6-vendor-comparison.md`,
   `driver/display-driver.md` -> `driver/wacom-t2d.md`,
   `research/capture.md` -> `research/usb-capture-setup.md`.
+
+**Release workflow**
+- One run per tag (the v0.6.0 tag push started two).
 
 ## 0.6.0 (2026-10-13)
 
