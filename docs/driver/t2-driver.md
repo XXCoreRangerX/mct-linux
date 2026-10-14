@@ -18,7 +18,9 @@ the history of the experiments in
 > ("Update strategy (driver 0.3.6)"). In since then: the counters (0.3.18),
 > an adaptive (0.3.19) and per-channel (0.3.23) lossy tolerance, software
 > gamma (0.3.23), cursor clipping by the chip (0.3.34), two more USB IDs
-> (0.3.35) and the ID ROM read (0.3.36); half-resolution motion (0.3.24) is
+> (0.3.35), the ID ROM read (0.3.36), cursor latency statistics (0.3.37) and a
+> 64x64 minimum framebuffer so niri uses the hardware cursor (0.3.38);
+> half-resolution motion (0.3.24) is
 > experimental and off. The sections below follow the versions in order;
 > parts marked superseded describe earlier versions. Open work is in
 > [roadmap.md](../roadmap.md).
@@ -187,6 +189,12 @@ runs. Tested on the tablet 2026-10-12 (night light): works.
   edge are clipped by the chip (`fe44`/`fe45`, `fe36` `4f`/`47`, since 0.3.34);
   before, they got a shifted image, re-uploaded on every move there.
   Much smoother than composited cursors, and less USB traffic.
+  Until 0.3.38 the driver's smallest framebuffer was the panel size
+  (1024x600, `mode_config.min_width/height`), so DRM refused a compositor's
+  64x64 cursor buffer and niri drew the cursor into the picture (a frame
+  update per move, 16-26 ms). Since 0.3.38 it's 64x64, as on the T6.
+  Measured on the host: moves 0.04 ms from commit to device, shape changes
+  ~1.1 ms (`tools/cursor_latency.sh t2`).
 - **Panel power / DPMS**: CRTC disable writes `fcf6=0` (backlight off), enable
   writes `fcf6=1`. niri's `power-off-monitors` turns the tablet off like the other
   monitors, and it comes back instantly.
