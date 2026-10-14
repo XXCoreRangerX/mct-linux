@@ -41,7 +41,7 @@ of the vendor drivers for interoperability, and testing on real hardware.
 | Gamma (night light) | ✅ in software | ✅ in software |
 | Brightness | ➖ the monitor's own controls | ✅ standard backlight interface |
 | Hardware rotation | ❌ the compositor rotates | ❌ the compositor rotates |
-| JPEG mode | 🚧 work in progress: works in a test tool, not in the driver; only worth it on USB 2 ([what's known](docs/research/t6-jpeg.md)) | ➖ the chip has none |
+| JPEG mode | 🚧 work in progress, put aside (USB 2 isn't being tested): works in a test tool, not in the driver; only worth it on USB 2 ([what's known](docs/research/t6-jpeg.md)) | ➖ the chip has none |
 | Second output | ❌ dual-head adapters and docks | ➖ |
 | Audio | ✅ HDMI audio as an ALSA sound card (48 kHz stereo) while the display is on; needs 112 px of horizontal blanking, which the driver's modes keep where they can | ➖ |
 | **Devices and connection** | | |
@@ -207,7 +207,7 @@ without a reboot).
 
 Every device has its own settings, in
 `/sys/bus/usb/devices/<interface>/mct/`, with read-only information next to
-them ([all files](docs/driver/companion-app.md)):
+them ([all files](docs/driver/ABI-sysfs-mct.txt)):
 
 | File | Chip | Values |
 |---|---|---|
@@ -298,7 +298,7 @@ file:
   limits and the measurements behind them, the DTU-1031X's hardware
 - [`docs/driver/`](docs/driver): how the driver works, its sysfs and
   debugfs files, the companion app
-- [`docs/research/`](docs/research): the vendor drivers, JPEG on the T6 (work in progress)
+- [`docs/research/`](docs/research): the vendor drivers, JPEG on the T6 (work in progress, put aside)
 - [`docs/history/`](docs/history): the lab notebooks
 - [`docs/roadmap.md`](docs/roadmap.md): where things stand
 
@@ -334,9 +334,13 @@ ones that failed.
 - MCT's own Linux driver, [triggerdm](https://github.com/mcttrigger/triggerdm)
   (an EVDI daemon, GPL-2.0-or-later), and its Ubuntu version were read for
   protocol facts; no code was taken.
+- [rhgndf/trigger2](https://github.com/rhgndf/trigger2), a Linux driver
+  for the Trigger II in j5create dongles, is where the T2 protocol notes
+  got the timing registers and the PLL formula from.
 
 How mct compares with these drivers:
-[docs/research/other-linux-drivers.md](docs/research/other-linux-drivers.md).
+[Trigger 6](docs/research/t6-other-drivers.md),
+[Trigger II](docs/research/t2-other-drivers.md).
 
 The DRM side is built like the in-kernel USB display drivers udl and gud
 (GEM shmem buffers, a shadow plane, damage clips, a worker that never blocks

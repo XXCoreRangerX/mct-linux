@@ -41,10 +41,10 @@ static const struct usb_device_id mct_id_table[] = {
 	 * Untested T6 devices, driven only with mct.untested_ids=1: the
 	 * firmware image sets the PID (it changes with reflashing), so these
 	 * are IDs seen in MCT's firmware images, the Linux Hardware Database
-	 * and other drivers (docs/roadmap.md): j5create, StarTech, Mobile
-	 * Pixels (560b), Insignia/Platinum (19ff:560b-560e), HP Engage
-	 * (03f0:0182), the Wacom DTU-1031AX (0711:5609, and its own Wacom ID
-	 * on the vendor interface).
+	 * and other drivers (docs/history/roadmap-done.md): j5create,
+	 * StarTech, Mobile Pixels (560b), Insignia/Platinum (19ff:560b-560e),
+	 * HP Engage (03f0:0182), the Wacom DTU-1031AX (0711:5609, and its own
+	 * Wacom ID on the vendor interface).
 	 */
 	{ USB_DEVICE_AND_INTERFACE_INFO(0x0711, 0x5602, 0xff, 0x00, 0x00),
 	  MCT_BACKEND(mct_t6_backend) },

@@ -1,6 +1,6 @@
 # JPEG on the Trigger 6 (work in progress)
 
-> **Research, ongoing** (2026-10-13): what is known about the T6's JPEG decoder from userspace tests on a j5create JUA254 (`0711:5600`, firmware 17091401). JPEG is not in the driver; this page says why and what it would take.
+> **Research, ongoing** (2026-10-13): what is known about the T6's JPEG decoder from userspace tests on a j5create JUA254 (`0711:5600`, firmware 17091401). Work in progress, put aside (USB 2 isn't being tested). JPEG is not in the driver; this page says why and what it would take.
 
 ## Why JPEG at all
 
@@ -47,7 +47,7 @@ large each frame may get, falling back to raw frames above it.
 
 ## Status and next steps
 
-**Put aside for now** (USB 2 isn't the setup being tested). If it is picked
+**Work in progress, put aside** (USB 2 isn't being tested). If it is picked
 up again:
 
 1. Measure the same over a USB 2 port.
@@ -57,4 +57,5 @@ up again:
 3. Build it for USB 2 links only, with the transport rules above.
 
 The test runs and their logs are summarised in the lab notebook
-([t6-lab-notebook.md](../history/t6-lab-notebook.md), "JPEG path").
+([t6-lab-notebook.md](../history/t6-lab-notebook.md#2026-10-13), "JPEG path,
+phase 0" and the rounds after it).

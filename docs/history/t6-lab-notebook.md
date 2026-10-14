@@ -795,6 +795,8 @@ hrtimer) vs 120.00 on 7.2; `modetest -v` page flips 119.5-120.4 Hz vs
 service): feed them `sleep 30 |`. QEMU resets the device when it lets go
 of it (each VM exit): the T6 came back on the host every time.
 
+## 2026-10-12
+
 **720p240 (2026-10-12).** 1280x720 at 240 Hz (279.94 MHz, reduced
 blanking) tested by the user on the LG 27GN750: works well.
 
@@ -990,6 +992,8 @@ mct_t6 0.29.3 adds "PCM Playback Volume" and "PCM Playback Switch". It
 reads the current value at probe and does not force 31. Not yet sent to
 the 5600: test with `amixer -c JUA254H`, comparing 31, 15 and 0 against
 a tone.
+
+## 2026-10-13
 
 **Research round 2 (2026-10-13), Wacom and T2 devices** (lab
 `captures/t2-research/wacom-and-t2-devices.md`).

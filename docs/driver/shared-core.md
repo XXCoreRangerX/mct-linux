@@ -57,6 +57,31 @@ and appletbdrm):
 - **USB buffers** are kmalloc'd bounce buffers or coherent URB buffers,
   never vmalloc'd memory.
 
+## mct_t2 and mct_t6
+
+(Moved from [t6-vendor-comparison.md](../research/t6-vendor-comparison.md) on
+2026-10-14 and kept current here: mct_t6 0.29.8, mct_t2 0.3.36.)
+
+Same skeleton: a DRM/KMS driver with a primary and a cursor plane, a CRTC
+paced by the vblank timer helpers, shmem GEM objects with a shadow copy, a
+worker that sends updates (the newest image wins), partial updates, a
+hardware cursor, debugfs statistics, suspend/resume. mct_t6 was written in
+mct_t2's mould; the code was separate at first (at mct_t6 0.17.1: mct_t2.c
+~1360 lines, mct_t6.c ~2180); since then both sit on the shared DRM core
+described above.
+
+| | mct_t2 (Wacom DTU-1031X) | mct_t6 (T6 USB Station) |
+|---|---|---|
+| Link | USB 2, ~38 MB/s | USB 3, ~330-400 MB/s (USB 2 works, with smaller writes and modes up to 2048 wide) |
+| Picture data | own lossless planar RLE; required at that bandwidth | raw pixels (RGB, YUV 4:4:4, NV12); no compression needed |
+| Display | fixed 1024x600 panel, scanned rotated by 180 degrees | any HDMI monitor: EDID, mode table, computed modes up to 1080p144 / 720p240, 3440x1440@60 and 3840x2160@30 |
+| Bring-up | 78-step register init, reverse engineered from captures | none; the firmware brings the chip up, a few requests set the mode |
+| Buffers | two, explicit flip command | three, flip implied by each frame header |
+| Partial updates | rectangles in 1024-pixel units, compressed | row bands limited to the changed columns, raw; two writes per band for 4:4:4 |
+| Cursor | register lists on a second endpoint; the chip clips it at the edges | control requests, 5 slots per output, alternating slots |
+| Extras | backlight through the pen's HID function, recovery from a parser stuck mid-frame, optional lossy mode, software gamma, the ID ROM read; experimental half-resolution motion | format choice incl. adaptive mode, hotplug events, software gamma, queued USB transfers, exact row diffing, HDMI audio (ALSA) |
+| Hard parts | protocol and init reverse engineering, desync recovery | buffer addressing, the chip's scanout limits, CPU reads of GPU memory |
+
 ## The design as written before
 
 (Proposed names differ from the code; the T6 rotation in the table below

@@ -15,6 +15,9 @@ usbmon captures. The 2026-10-12 analyses are in the lab
 
 Marks: **verified** = tested on the tablet; **captured** = seen in Windows
 traffic; **code** = read from the vendor drivers, not tested on the tablet.
+The step-by-step probe logs (`tools/t2_probe.py`, 2026-10-12 and 2026-10-13)
+are in [t2-lab-notebook.md](../history/t2-lab-notebook.md); the facts here
+carry their date and probe step.
 
 Commands go to EP `0x03` (registers and mode setup) or `0x02` (framebuffer
 pipe: `0x11`-`0x16`, executed in order with the frames); replies on EP `0x81`.
@@ -35,15 +38,15 @@ reply, read `0x81` before the next OUT or the firmware stalls. Pace ~50 ms.
 | `0x14` | `14 <len16> (reg val)*` (27 B in the init) | none | fb-bank pairs: `66/67` y, `68/69` x, `6a/6b` h, `6c/6d` w (a window), `65` SEL, then `6e 01, 60 01, 6e 01`: **display enable** (captured, field names inferred from code) |
 | `0x16` | `16 <len16=0x20> <32 B pairs>` (35 B) | none | **timing packet**: regs `0x20-0x2f` = width/height-derived + mode params (full template in init doc) |
 | `0x22` | 62 B | none | second mode packet (regs incl. `0xfc`-area mirrors); template TBD from driver |
-| `0x0a` | `0a` + 768 zeros (769 B) | none | a 256x3 lookup table (B, G, R entries) acting on **all output** when non-zero (verified 2026-10-12: a palette loaded for an 8-bit test recoloured the 24-bit picture too); all zeros, as Windows sends, leaves the picture unchanged. The legacy driver pairs it with the 8-bit format. **Not usable as hardware gamma** (2026-10-13): identity, red-only and gamma 2.2 tables changed nothing visible, and afterwards later frames came out wrong until the next init, even after the zeros were loaded back. Never send anything but the init's zeros |
+| `0x0a` | `0a` + 768 zeros (769 B) | none | a 256x3 lookup table (B, G, R entries) acting on **all output** when non-zero (verified 2026-10-12: a palette loaded for an 8-bit test recoloured the 24-bit picture too); all zeros, as Windows sends, leaves the picture unchanged. The legacy driver pairs it with the 8-bit format. **Not usable as hardware gamma** (2026-10-13, probe step q): identity, red-only and gamma 2.2 tables changed nothing visible, and afterwards later frames came out wrong until the next init, even after the zeros were loaded back. Never send anything but the init's zeros |
 | `0x1b` | `1b8000a000800000` (8 B) | 512 zeros (idle) | I2C read, bus 0 (`EP3CMD_READ_I2C_2` in the macOS driver): `cmd 80 00 <addr> <offset> <len16> 00`; bus 0 is not wired on this tablet |
 | `0x1d` | `1d8000ae00000100` (8 B) | 512 B | I2C read, bus 1 (`EP3CMD_READ_I2C_EX`): the **ID ROM** at `0xae`: `55aa00ff...`, `07115200`, `MCT`, `DTU-1031X`, **EDID at +0x80** (layout below) |
 | `0x1a` | `1a 80 00 <addr> <reg> <len16> fa` + data | none | I2C **write**, bus 0 (macOS driver, for HDMI transmitters at `0x72`); not for this tablet |
 | `0x1c` | | | by analogy I2C write on bus 1, **where the ID ROM lives: never send** |
 | `0x28` | `28 <a> <b> 00` (4 B) | none | write MC8032 port 1, the counterpart of `0x29` (code; never sent by Windows) |
 | `0x29` | `29000000` (4 B) | 512 B, first byte used | `CT2Hal::ReadMC8032P1`; live reply starts `0f 00...` |
-| `0x90` | `90 <reg> <len16> <data>`: `90 040400 00061a80` (8 B), `90 030100 00` / `90 080100 02` (5 B) | none | write a register of the on-chip MC8032 firmware (macOS driver). Register 4 = `REG8032_EP2_TIMEOUT` (big-endian; Windows sets 0x1000 around the init and then 400000, the macOS driver 0x7fffffff; unit unknown) |
-| `0x91` | `91 <arg1> <arg16>` (4 B) | 512 B | ID-ROM query; driver uses `91 00 0200` -> reply starts `03 02 00 00...` |
+| `0x90` | `90 <reg> <len16> <data>`: `90 040400 00061a80` (8 B), `90 030100 00` / `90 080100 02` (5 B) | none | write a register of the on-chip MC8032 firmware (macOS driver). Register 4 = `REG8032_EP2_TIMEOUT` (big-endian; Windows sets 0x1000 around the init and then 400000, the macOS driver 0x7fffffff). About 75 µs per unit: with `0x1000` the chip ended a `0x13` cut off halfway by itself after 307 ms, so the init's `0x61a80` is about 30 s. That doesn't resync the parser: the stream was out of step afterwards, so it is no recovery (verified 2026-10-13, probe step w) |
+| `0x91` | `91 <arg1> <arg16>` (4 B) | 512 B | ID-ROM query; driver uses `91 00 0200` -> reply starts `03 02 00 00...`. Also reads the MC8032 registers `0x90` writes: register 4 (4 bytes, big-endian) read `0x61a80` after the init (verified 2026-10-13, probe step w) |
 
 ### Detecting an interrupted framebuffer payload (verified 2026-09-25)
 
@@ -80,7 +83,7 @@ known independently readable parser-status register.
 | `0x13` | 36 B | `IndirRldCmd` | RLE decode, then a stretch into the target: the frame update |
 | `0x14` | 48 B | firmware memory blit | VRAM-to-VRAM blit (code; legacy driver only, never sent by Windows 11) |
 | `0x15` | 2 + 3n B | register batch | `(bank reg val)` triplets in order with the frames: the flip |
-| `0x16` | 3 + 2n B | | in-band register list for one bank: `16 <bank> <n> (reg val)*`, e.g. `16 fc 06 b4 11 b1 .. b2 .. b3 .. b4 15 b4 11` (rhgndf/trigger2); Windows uses the one-pair form `16 fc 01 b4 SEL` for 1366/1400-wide modes |
+| `0x16` | 3 + 2n B | | in-band register list for one bank: `16 <bank> <n> (reg val)*`, e.g. `16 fc 06 b4 11 b1 .. b2 .. b3 .. b4 15 b4 11` (rhgndf/trigger2); Windows uses the one-pair form `16 fc 01 b4 SEL` for 1366/1400-wide modes. A flip sent this way (`16 fb 01 65 <sel>` and `16 fc 06 b4 11 b1 .. b2 .. b3 .. b4 15 b4 11`) works (verified 2026-10-13, probe step v) |
 
 The current Windows driver sends only `0x11`, `0x12`, `0x13` and `0x15`, and
 only in the forms below. The other forms are known from code only.
@@ -128,8 +131,8 @@ only in the forms below. The other forms are known from code only.
   buffer A and B (`1024 600 1024 600 4000 4000 00 1c2000`), and a 32x1 write
   at VRAM 0 (`0020 0001 0020 0001 4000 4000 00 000060`), between
   `90 040400 00001000` and `90 040400 00061a80`.
-- 24-bit payload is **B, G, R** per pixel (code: `EncodeRgbDTR`), unlike the
-  RLE planes, which are R, G, B.
+- 24-bit payload is **B, G, R** per pixel (code: `EncodeRgbDTR`; verified
+  2026-10-12), unlike the RLE planes, which are R, G, B.
 - The payload is source w\*h\*bytes per pixel of the format (code).
 - Earlier tests "ignored" fills with `0x1000` in the scale fields: that
   claimed a 4x stretch of a quarter-size source, so the payload size no
@@ -145,7 +148,7 @@ Decoded linearly to `addr`. The cursor upload is the only use (captured):
 `12 00000000 004000 004000 00 01 25`, i.e. 16384 bytes stored uncompressed
 (escape `00`, mode `01`, flags `0x20 | 0x04 | 0x01`).
 
-### Source formats (code; RGB565 and YUV 4:2:2 verified 2026-10-12)
+### Source formats (code; verified 2026-10-12 except the 8-bit palette)
 
 The legacy driver maps the desktop depth to a format byte per command; the
 chip converts while writing, VRAM stays 24-bit:
@@ -167,13 +170,33 @@ vendor's YUV conversion is BT.601 limited range (Y = (66R + 129G + 25B +
 8-bit palette table (`0x0a`) holds 256 entries of B, G, R; 8-bit sources
 use format byte `00` like 24-bit, told apart only by the length (code).
 `tools/t2_probe.py` steps l, m, n and p test 32-bit, YUV 4:2:2 and 4:1:1
-through `0x11` and the palette.
+through `0x11` and the palette. Verified 2026-10-12: RGB565 and YUV 4:2:2 RLE
+(`0x13`, format `8a`, mode 6) give the expected colours, and so do 32-bit
+BGRX, YUV 4:2:2 (YUY2) and packed 4:1:1 through `0x11`. The 8-bit palette
+did not work as expected: the `0x0a` table recoloured the 24-bit picture
+too (see `0x0a` above), and how an 8-bit source is selected is not
+understood.
 
 ### Scaling (code; 2x upscale verified 2026-10-12)
 
 `scale = source / target` in 2.14 fixed point: `0x4000` = 1.0, `0x2000` = a
 2x upscale, `0x1000` = 4x. With source smaller than target the chip
 stretches; the payload is the source size.
+
+- 2x with `0x11` and with `0x13` (64x32 source into 128x64; for `0x13`
+  source = target address, raw length = source pixels x 3): verified
+  2026-10-12.
+- `0x13` can decode to a separate address (`0x3a0000`) and stretch from
+  there 1:1 (verified 2026-10-12).
+- A partial 2x into a box inside a plain band leaves the neighbours
+  untouched, decoded in place or from scratch VRAM (verified 2026-10-12,
+  probe steps j and k). The scaler doesn't read past the source at the top
+  and bottom (2026-10-13, probe step y).
+- A full-screen 2x from `0x560000` works (verified 2026-10-13, probe step
+  r). There is no "scaler done" signal: of 58 registers read in a tight
+  loop for ~40 ms after each payload, only `fc57` changed, and it changes at
+  rest too. The first read answers 1.2 ms after the payload (1.6 ms for a
+  1:1 frame).
 
 ### Transfer framing (important: this caused the "lit but blank" screen)
 
@@ -193,7 +216,8 @@ cannot see them. The drivers here send 19968-byte transfers, which work. A
 whole 837 KB frame sent as one transfer from Linux showed sparse corrupted
 pixels near the end of the frame (2026-09-24); with the above, the cause is
 more likely on the host side than a chip limit (inferred). Larger transfers
-gain only ~3% (see throughput below).
+gain only ~3% (see throughput below). 512 KiB payload transfers work, like
+Windows' (a full frame as 524288 + 524288 + 33824 B; verified 2026-10-12).
 
 ### `0x15` register batch / buffer flip (EP `0x02`, 23 B)
 
@@ -221,7 +245,10 @@ gain only ~3% (see throughput below).
 | `0x390000` | RLD buffer: where `0x13` stages the compressed stream (up to `0x552000` for a worst-case full frame) | |
 | `0x560000` | mct_t2's half-resolution sources (up to `0x5d0800`) | |
 
-The total video memory size is not known.
+16 MiB in all: the ID ROM says so (byte `0x09`), and `0x13` staged at
+`0xD37000` (the macOS driver's address) with sources at `0xE00000` and
+`0x800000 + x` drew where expected, with no wrap at 8 MiB (verified
+2026-10-13, probe step s).
 
 The flip latches the scanout address; the full layout of the `0x13` header,
 including the exact values the tablet accepts, is in the `0x13` section
@@ -313,8 +340,8 @@ value, `01` here), as a single register write on EP3, `02 00 01 fc f6 VV`.
 
 Tried without effect: `fb60` (also via `0x14 60=00`), `fe36`, `fe57`, `fe70`, `feb0`.
 
-The macOS driver's power sets (code, untested on this tablet; `fcb0` and
-`fc6f` bit 2 were never tried here):
+The macOS driver's power sets (code; its monitor off / on pair was tested
+on 2026-10-13, below):
 
 | Function | Writes (EP3 `0x02`) |
 |---|---|
@@ -324,6 +351,14 @@ The macOS driver's power sets (code, untested on this tablet; `fcb0` and
 
 A freshly plugged tablet idles at `fc4b=08 fc4d=80 fc4f=80`, the power-down
 values; the init writes `fc4b=02`.
+
+Its monitor off turns the backlight fully off, but its on brings back a
+wrong picture (`fb60` stays `00`), and with `fb60=01` restored too no
+picture at all, with the video engine stalled until the next init
+(2026-10-13, probe steps t and z1b). The macOS driver sends the pair only
+around a mode set (off as the first job, on as the last), so it resets the
+display pipeline for a mode set; it isn't a screen switch. `fcf6 = 00/01`
+stays the clean way to switch the panel off and on.
 
 ## Timing and PLL (rhgndf/trigger2, checked against this tablet)
 
@@ -358,7 +393,9 @@ values; the init writes `fc4b=02`.
 
 So the orientation and the EDID the drivers here hard-code for the
 DTU-1031X are stated in its ROM. The macOS driver stages `0x13` streams at
-`0xD37000`, which fits 16 MiB of video memory (untested here).
+`0xD37000`, which fits 16 MiB of video memory (verified 2026-10-13, probe
+step s). Driving the ROM's "light" GPIO (`feb1` bit 6) low had no visible
+effect: it isn't the backlight on this board (2026-10-13, probe step x).
 
 ## Second address set (rhgndf/trigger2; untested)
 
@@ -388,7 +425,7 @@ Other Wacom driver traffic seen at startup: feature `0x83` (`83 02 00`) x3,
 `0x02` (`02 02`, mode), GET `0x0c` (serial), GET `0x10` (status), and a series of
 `0x40` exchanges, some carrying random-looking 64-byte blocks: the pen data
 encryption handshake (RSA-wrapped AES key, see
-[wacom-display-settings.md](../research/wacom-display-settings.md)). None of it is needed
+[t2-wacom-display-settings.md](../research/t2-wacom-display-settings.md)). None of it is needed
 for brightness.
 
 ## I2C masters (verified live 2026-09-24, `tools/t2i2c.py`)
@@ -446,136 +483,27 @@ The T2 has a 64x64 ARGB cursor overlay, drawn by the chip on top of scanout.
   The chip clips boxes that run past the far edges (x > 960 / y > 536).
 - `0x44` / `0x45` shrink the drawn box from the **far** end (e.g. `0x44 = 32` ->
   only image columns 0-31 are drawn). This is not an image offset. The
-  macOS driver uses them as clip offsets for a cursor hanging off the
-  top/left edge, with `fe36 = 0x4f` (x <= 0) or `0x47` (y <= 0) instead of
-  `0x07`; with its 180 degree compensation that is probably our far end
-  (code, untested).
+  macOS driver uses them as clip offsets for a box hanging off the device's
+  top/left edge (the visible right/bottom edge), with `fe36 = 0x4f`
+  (x <= 0) or `0x47` (y <= 0) instead of `0x07` (see the last bullet).
 - `fe30-fe33` = the cursor image's VRAM address >> 2 (macOS driver): other
   shapes can be kept in VRAM and switched by address (a second shape at
-  `0x4000` showed garbage in 2026-10-13 tests; not understood).
+  `0x4000` showed garbage on 2026-10-13, probe step u1, although `fe30-33`
+  read back as sent; the address unit or the upload is not understood).
 - `0x36`: `07` = cursor shown, `04` = hidden (verified by blinking). Windows
   writes `24` then `04` around some shape changes.
 - A cursor hanging off the visible right/bottom edge (negative device
   coordinates) is clipped by the chip: position 0, `fe44`/`fe45` = the
   overhang in x/y, `fe36` = `4f` when x <= 0, else `47` when y <= 0, else
-  `07` (macOS driver, verified 2026-10-13; mct_t2 since 0.3.34). Before,
+  `07` (macOS driver, verified 2026-10-13, probe steps u3-u5; mct_t2 since
+  0.3.34). Before,
   mct_t2 uploaded a copy shifted by the overhang.
 
-## Tested on the tablet 2026-10-12 (`tools/t2_probe.py`)
+## The blit engine (code, 2026-10-12; lab `captures/t2-research/blit-engine.md`)
 
-Each one drawn in the hidden buffer next to a reference box drawn the known
-way, then shown with a flip; the user saw the expected picture every time,
-and the chip answered a register read right after every command (log in
-the lab: `captures/t2_probe-20261012-142605.log`). Verified:
+Not tested on the tablet: the riskiest step, since a wrong command may hang
+the chip until the tablet is power-cycled.
 
-- **512 KiB payload transfers** (a 1,082,400 B full frame as 524288 +
-  524288 + 33824 B), like Windows.
-- **`0x11` raw RGB24**, payload B, G, R.
-- **2x hardware upscale** with `0x11` (64x32 source, 128x64 target, scale
-  `0x2000`, payload = source size) and with `0x13` (same, source = target
-  address, raw length = source pixels x 3).
-- **RGB565 through `0x11`** (format `04`, 2 bytes per pixel, little-endian
-  5-6-5): colours as expected.
-- **`0x13` decoding to a separate address** (`0x3a0000`), stretched 1:1 into
-  the framebuffer.
-- **Partial 2x upscale without touching the neighbours** (steps j and k,
-  2026-10-12): a 64x32 source scaled into a 128x64 box inside a plain grey
-  band, decoded in place (source = target) and from scratch VRAM: the band
-  stayed clean in both cases.
-- **YUV 4:2:2 RLE through `0x13`** (format `8a`, mode 6, Y/U/V planes of
-  1536/768/768 per 3 KiB unit): flat colour bands as expected.
-
-Also on 2026-10-12 (steps l, m, n, p; log
-`captures/t2_probe-20261012-165352.log`):
-
-- **`0x11` 32-bit BGRX** (format `0e`, 4 bytes per pixel, X = 0): correct.
-- **`0x11` YUV 4:2:2 YUY2** (format `8a`) and **packed 4:1:1** (format
-  `96`, `Y0 U V Y1 Y2 Y3`): correct colours, shades as expected for YUV.
-- **8-bit palette: not as expected.** With the `0x0a` table loaded (B, G, R
-  entries; a few colours, the rest zero) the **24-bit** background and
-  reference box changed colour too (purple background, the box reduced to
-  two flat blocks), the 8-bit `0x11` box was wrong, and a strip of
-  black/white/grey lines ~12 px high ran across the top. Restoring the 768
-  zero bytes brought the normal picture back; the chip kept answering. So
-  `0x0a` is an output lookup table that acts on everything; an all-zero
-  table (what Windows loads) apparently means "off". Untested: whether an
-  identity or gamma ramp gives a usable hardware gamma (instead of the
-  software gamma), the channel order, and how the 8-bit source is really
-  selected (format `00` with a w*h length was read as something else).
-
-### Tested on the tablet 2026-10-13 (logs `captures/t2_probe-20261013-141457.log`, `-142450.log`)
-
-- **`0x0a` as hardware gamma (q): no.** Identity, red-only and gamma 2.2
-  tables showed no visible change. Afterwards the chip was in a bad state:
-  a later full-screen 2x and plain 1:1 pictures came out wrong (reddish,
-  washed-out background, boxes doubled, a white/red line across), even
-  though the zero table had been loaded back. A re-init cleared it. The
-  same steps run again without q were all correct.
-- **Full-screen 2x from scratch VRAM (r): works.** 512x300 decoded at
-  `0x560000` (mct_t2's half-mode source) and scaled to 1024x600 into the
-  hidden buffer, three times, with a 1:1 run in between: the expected
-  picture. **No "scaler done" signal**: of 58 registers read in a tight
-  loop for ~40 ms after each payload (`fe70`, `fc59`, `fc34`, `fe57`,
-  `fe36`, `fe71/72`, `fc50-5d`, `fe60-67`, `fe78-7b`, `fe80-89`,
-  `fb60-6e`), only `fc57` changed, and it changes at rest too. The first
-  read answers 1.2 ms after the payload (1.6 ms for a 1:1 frame).
-- **16 MiB of VRAM (s): yes.** `0x13` staged at `0xD37000` (the Mac
-  driver's address), sources at `0xE00000` and `0x800000 + x`: all drawn
-  where expected, with no wrap at 8 MiB.
-- **Mac "monitor off" (t1: `fb60=00 fcb0=04 fcb0=20`): the backlight goes
-  fully off.** Its "on" (`fcb0=04 fcb0=09`) brings back a wrong picture:
-  buffer A's colour and a garbage band ~20 px high at the bottom, because
-  `fb60` stays `00` (the skipped check t1c would have restored it to `01`).
-  A re-init fixes it. `fcf6 = 00/01` (below) already gives a clean
-  off/on, so this adds nothing for now.
-- **Mac "monitor on" with `fb60=01` restored too (z1b, log
-  `captures/t2_probe-20261013-150137.log`): backlight on, no picture**, and
-  the video engine stalled: each 16 KiB `0x12` cursor upload afterwards
-  took ~30 s instead of milliseconds, and `fc6f` read back `00` after `30`
-  was written. Only the init recovered it. The probe applied it wrongly:
-  the Mac driver calls monitorPowerOnOff (`FUN_100030350`) only inside its
-  mode-setting job queue (`MCTT2Device::addModeSettingJobsToQueue`: off as
-  the first job, on as the last, `FUN_1000763c4`), around the timing and
-  PLL jobs. So "off" resets the display pipeline for a mode set, and "on"
-  needs that mode set in between; it's not a screen switch. For screen
-  off/on, `fcf6 = 00/01` stays the clean way. The
-  second cursor slot's address unit (z2) couldn't be judged without a
-  picture; not worth more probing.
-- **EP2 timeout (w, log `captures/t2_probe-20261013-150844.log`):**
-  `0x91` reads MC8032 register 4 (4 bytes, big-endian; the init leaves
-  `0x61a80`). With `0x90` setting it to `0x1000`, a `0x13` cut off after
-  555 of 1111 payload bytes was ended by the chip itself after **307 ms**,
-  with no padding: about 75 µs per unit, so the init's `0x61a80` is about
-  **30 s**. That explains step z's ~30 s per command after the Mac
-  monitor-off: the chip took no payload and each command ended by
-  timeout. But after the timeout the stream was **out of step**: the next
-  complete `0x13` (with `0x61a80` set back) didn't draw where it should,
-  the flip back was missed, and the box turned up later in buffer A's
-  bottom-right corner. So a short timeout ends a stuck command but doesn't
-  resync the parser; the padding recovery stays needed.
-- **Cursor (u): edge clipping in hardware works** (u3-u5: negative x, y
-  and both via `fe44/fe45` and `fe36 = 4f/47`), so the driver's shifted
-  re-upload for cursors past the top/left edge could go. A **second shape
-  at `0x4000` (u1) showed blue garbage**, although `fe30-33` read back as
-  sent (`00 10 00 00` = `0x4000 >> 2`): the address unit or the upload is
-  not understood yet.
-- **In-band flip with `0x16` lists on EP2 (v): works**, both directions
-  (`16 fb 01 65 <sel>` and `16 fc 06 b4 11 b1 .. b2 .. b3 .. b4 15 b4 11`),
-  so register writes can go in order with the frame data.
-- **ID ROM "light" GPIO (x, `feb1` bit 6 low): no visible effect.** Not
-  the backlight on this board.
-
-Still untested:
-
-- ~~the `0x0a` table as hardware gamma (identity ramp first, then a curve)~~ (no, above)
-- ~~a "scaler done" signal (half mode's edge glitch, see t2-driver.md)~~ (none found, above)
-- the EP2 timeout (`0x90` register 4, probe step w)
-- the blit engine (`0x14`, or `0x15` register batches on `fc50-5d`, `fc34`,
-  `fc59`, `fe60-89`, `fe70`), which could make scrolling a short command
-  instead of resending the rows; the riskiest, since a wrong command may hang
-  the chip until the tablet is power-cycled.
-
-### The blit engine (code, 2026-10-12; lab `captures/t2-research/blit-engine.md`)
 
 - `0x14` (48 B, one transfer): `14 dst32 dst32 srcW srcH dstW dstH scaleX
   scaleY fmtflag 90 srcfmt plane src32 plane2_32 plane3_32 dst32 srcW srcH
@@ -599,11 +527,3 @@ Still untested:
   transfer method. So whether firmware `0x32` handles `0x14` at all is
   unknown. Startup resets seen: Windows 11 `fe70=80 fe57=a0 fe36=20`, 1 ms,
   `fe70=00 fe57=20 fe36=00`.
-
-## Gaps (resolved by the usbredir capture, kept for history)
-
-- `0x13` header tail (complen+magic, bytes 30-35), candidate: complen=rawlen,
-  magic `30 05 28`; **verify live on tablet**.
-- `0x22` tail (30/62 B) + `0x04` 43 B tail (11 B), skipped in first-light
-  trial; reconstruct from driver if the panel needs them.
-- RLE payload bytes, not needed if RGB-raw path works.

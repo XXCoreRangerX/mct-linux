@@ -1,6 +1,6 @@
 # Other Linux drivers for MCT Trigger 6 (2026-10-11)
 
-> **Research snapshot** (2026-10-11): the other projects as of that day, compared with mct 0.5.0 (mct_t6 0.27.0). Not updated afterwards.
+> **Research snapshot** (2026-10-11), with dated additions: the other Trigger 6 projects as of that day, compared with mct 0.5.0 (mct_t6 0.27.0). Later facts are marked EDIT or Added with their date. The Trigger II drivers are in [t2-other-drivers.md](t2-other-drivers.md).
 
 ## The projects
 
@@ -9,7 +9,7 @@
 | [mcttrigger/triggerdm](https://github.com/mcttrigger/triggerdm) | MCT's own Linux driver: a userspace daemon on EVDI + libusb + libjpeg-turbo, built for ChromeOS developer mode | GPL-2.0-or-later (headers and LICENSE) | on GitHub since 2024-08, last change 2026-10-07 |
 | MCT's Ubuntu package (`T6evdi`) | the same code base packaged for Ubuntu, from MCT's download page | no licence in the package; its headers say "All rights reserved" | the version read for [t6-vendor-review.md](t6-vendor-review.md) |
 | [ramifriedman/mct-t6-linux](https://github.com/ramifriedman/mct-t6-linux) ("trigger6") | a kernel DRM driver plus a Python userspace driver and GTK tools, for the StarTech USBC2HD4 (two T6 chips, four HDMI ports, `0711:5601`) | kernel GPL-2.0-only, tools MIT | "beta"; last push 2026-04-08 |
-| [rhgndf/trigger2](https://github.com/rhgndf/trigger2) | a GPL DRM driver for the Trigger II in j5create JUA230 dongles, by the author of the drm/trigger5 patch | GPL-2.0-only | added 2026-10-12: published 2026-09-25, last change 2026-10-08; timing registers, the PLL formula and the in-band `0x16` register list are now in protocol-t2.md |
+| ~~[rhgndf/trigger2](https://github.com/rhgndf/trigger2)~~ | ~~a GPL DRM driver for the Trigger II in j5create JUA230 dongles, by the author of the drm/trigger5 patch~~ | ~~GPL-2.0-only~~ | ~~added 2026-10-12: published 2026-09-25, last change 2026-10-08; timing registers, the PLL formula and the in-band `0x16` register list are now in protocol-t2.md~~ EDIT (2026-10-14): moved to [t2-other-drivers.md](t2-other-drivers.md) |
 | [JingYenLoh/trigger6](https://github.com/JingYenLoh/trigger6) and forks ([y-chan](https://github.com/y-chan/trigger6), [MatthieuLeboeuf](https://github.com/MatthieuLeboeuf/trigger6), [benjaminpotter](https://github.com/benjaminpotter/trigger6)) | the first open kernel driver for the T6, the starting point for mct's T6 work | GPL-2.0 | experimental |
 
 triggerdm's README describes the ChromeOS setup; its code is close to the
@@ -37,7 +37,7 @@ tablet).
 | Monitor hotplug | interrupt events, debounced; polling fallback | EDID read at probe; keepalive work |
 | Error recovery | vendor cancel request, endpoint reset, redraw on request | reset on timeout, circuit breaker after 5 failures |
 | USB 2 links | yes (smaller writes, modes up to 2048 wide) | not addressed |
-| Kernels | 7.2 and later | 5.10 and later |
+| Kernels | ~~7.2 and later~~ EDIT (2026-10-14): 6.12 and later (0.5.0 already had the compatibility layer) | 5.10 and later |
 | Per-device settings | sysfs per device (format, all_modes, lossy) | module parameters (global), per-output enable in sysfs |
 | Device information | board, firmware, functions, mode table, EDID, USB in sysfs / app | metrics in sysfs |
 | Companion app | Rust, GTK 4 / libadwaita window and tray, `mctctl` | Python GTK 4 window, tray, `mct-t6-ctl` |

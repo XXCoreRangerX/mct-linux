@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """wacom-t2d/init-full.bin (359 vendor transfers) -> wacom-t2d/init.bin (78, validated cold 2026-09-24).
 
-Dropped (see docs/reference/init-sequence.md, "Trimmed init"):
+Dropped (see docs/reference/t2-init-sequence.md, "Trimmed init"):
   - 0x05 register reads whose values are unused, 0x91 ID-ROM query
   - 0x90 + 32x1 probe fill at address 0 + 0x90
   - manual scanout programming in bank FC (b1..b4), done by our 0x15 flips

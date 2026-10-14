@@ -1,33 +1,20 @@
 # mct_t6 compared
 
-> **Status**: the feature table at the end is current; the sections before it were written at mct_t6 0.17.1.
+> **Research snapshot** (2026-10-11), with dated additions: the sections before the feature table were written at mct_t6 0.17.1, the feature table at 0.21.0. Later facts are marked EDIT with their date.
 
 How the Trigger 6 driver relates to the T2 driver, to MCT's own drivers and
 to other USB display stacks. The sections before the feature table were
-written at mct_t6 0.17.1; the feature table at the end is current. Details
-and measurements are in [t6-lab-notebook.md](history/t6-lab-notebook.md) and
-[protocol-t6.md](reference/protocol-t6.md).
+written at mct_t6 0.17.1; ~~the feature table at the end is current~~ EDIT
+(2026-10-14): the feature table was written at 0.21.0, and two rows were
+brought up to date at 0.29.8. Details
+and measurements are in [t6-lab-notebook.md](../history/t6-lab-notebook.md) and
+[protocol-t6.md](../reference/protocol-t6.md).
 
 ## mct_t2 and mct_t6
 
-Same skeleton: a DRM/KMS driver with a primary and a cursor plane, a CRTC
-paced by the vblank timer helpers, shmem GEM objects with a shadow copy, a
-worker that sends updates (the newest image wins), partial updates, a
-hardware cursor, debugfs statistics, suspend/resume. mct_t6 was written in
-mct_t2's mould; the code was separate then (mct_t2.c ~1360 lines, mct_t6.c
-~2180); since then both sit on the shared DRM core (shared-core.md).
-
-| | mct_t2 (Wacom DTU-1031X) | mct_t6 (T6 USB Station) |
-|---|---|---|
-| Link | USB 2, ~38 MB/s | USB 3, ~330-400 MB/s |
-| Picture data | own lossless planar RLE; required at that bandwidth | raw pixels (RGB, YUV 4:4:4, NV12); no compression needed |
-| Display | fixed 1024x600 panel, scanned rotated by 180 degrees | any HDMI monitor: EDID, mode table, computed modes up to 1080p144 / 720p240 (later up to 3440x1440@60 and 3840x2160@30) |
-| Bring-up | 78-step register init, reverse engineered from captures | none; the firmware brings the chip up, a few requests set the mode |
-| Buffers | two, explicit flip command | three, flip implied by each frame header |
-| Partial updates | rectangles in 1024-pixel units, compressed | row bands limited to the changed columns, raw; two writes per band for 4:4:4 |
-| Cursor | register lists on a second endpoint | control requests, 5 slots per output, alternating slots |
-| Extras | backlight through the pen's HID function, recovery from a parser stuck mid-frame, optional lossy mode | format choice incl. adaptive mode, hotplug events, software gamma, queued USB transfers, exact row diffing |
-| Hard parts | protocol and init reverse engineering, desync recovery | buffer addressing, the chip's scanout limits, CPU reads of GPU memory |
+EDIT (2026-10-14): this section, with its table of the two backends, moved to
+[shared-core.md](../driver/shared-core.md#mct_t2-and-mct_t6), where it is kept
+current.
 
 ## mct_t6 and MCT's Windows / macOS drivers
 
@@ -86,7 +73,8 @@ mct_t2's mould; the code was separate then (mct_t2.c ~1360 lines, mct_t6.c
 - **Dual-output models and HDMI audio** (not present on the 5600; a general
   MCT driver would need them). EDIT (2026-10-12): audio most likely *is*
   present on the 5600 (it goes over the vendor endpoint, not a USB audio
-  interface); see the lab notebook.
+  interface); see the lab notebook. EDIT (2026-10-14): HDMI audio is done in
+  mct_t6 0.29 (ALSA, 48 kHz stereo); dual output is still open.
 - Hardware rotation (request 0x1f) only exists in MCT's Ubuntu driver; the
   5600 stalls on it and the Windows driver leaves rotation to the OS, as
   Linux compositors do.
@@ -111,12 +99,12 @@ mct_t2's mould; the code was separate then (mct_t2.c ~1360 lines, mct_t6.c
   and multi-monitor docks. A JPEG mode would be a separate userspace
   project (an EVDI daemon like wacom-t2d), not part of mct_t6.
 
-## Feature table (2026-10-11, mct_t6 0.21.0)
+## Feature table (2026-10-11, mct_t6 0.21.0; updated 2026-10-14, mct_t6 0.29.8)
 
 | | mct (Linux) | MCT Windows | MCT macOS | MCT Ubuntu (EVDI) |
 |---|---|---|---|---|
 | Frames | raw: exact RGB / YUV 4:4:4 at rest, NV12 in motion | JPEG (q95), lossless idle refresh | JPEG | JPEG, raw NV12/I420 |
-| Refresh | up to 144 Hz (1080p), 60 Hz at 3440x1440 | 60 Hz | 60 Hz | 60 Hz |
+| Refresh | up to 144 Hz (1080p), 60 Hz at 3440x1440; EDIT (2026-10-14): 240 Hz at 720p (tested 2026-10-12) | 60 Hz | 60 Hz | 60 Hz |
 | Sizes on the 5600 | up to 3440x1440@60, 3840x2160@30 | EDID modes (60 Hz) | EDID modes, CVT timings | the device table (2048x1152) |
 | Monitors it can't fully drive | reduced blanking, lower rate, 1440p for 4K | | out-of-range fixes | |
 | Partial updates | raw changed rows, tear-free (3 buffers) | JPEG rectangles | JPEG rectangles | JPEG rectangles |
@@ -127,7 +115,7 @@ mct_t2's mould; the code was separate then (mct_t2.c ~1360 lines, mct_t6.c
 | Transfer errors | cancel (restarts the 5600), resend | cancel | clear stall, retry | cancel |
 | Capability checks | feature level, VRAM, DISP flags | yes | yes | yes |
 | USB 2 link | smaller writes, modes up to 2048 wide | same | smaller packets | JPEG |
-| HDMI audio | not yet (the 5600 most likely has it, over the vendor endpoint) | yes | yes | yes |
+| HDMI audio | ~~not yet (the 5600 most likely has it, over the vendor endpoint)~~ EDIT (2026-10-14): yes, ALSA, 48 kHz stereo (mct_t6 0.29) | yes | yes | yes |
 | Second output | no (the 5600 has one) | yes | yes | yes |
 | Suspend / DPMS | yes | yes | yes | |
 

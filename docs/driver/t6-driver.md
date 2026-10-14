@@ -1,6 +1,6 @@
 # Kernel driver, Trigger 6 backend (`mct_t6.c`)
 
-> **Reference**, kept current with the code. Describes mct_t6 0.26.0.
+> **Reference**, kept current with the code (mct_t6 0.29.8).
 
 How the T6 backend works. The protocol is in
 [protocol-t6.md](../reference/protocol-t6.md), the limits and their measurements in
@@ -11,7 +11,7 @@ How the T6 backend works. The protocol is in
 ## Probe
 
 Interface 0 of the device. Devices other than the tested `0711:5600` and
-`0711:5601` are refused with a log line unless the module parameter
+the untested `0711:5601` are refused with a log line unless the module parameter
 `untested_ids` is set (since 0.29.4; the IDs are in `mct_main.c`). The Wacom
 DTU-1031AX (`0711:5609`, or `056a:039f` on its vendor interface) gets only
 its EDID's own mode (`t6_keep_preferred`), as j5create's macOS driver does. Reads which output has a monitor (`0x87`), the
@@ -42,9 +42,11 @@ a monitor is connected, the last EDID read is used again) and adds:
 including the PLL settings (MCT's formula), and is the single check of what
 the adapter can drive.
 
-`enable` (from the core, updates stopped): allocates the converted image and
-three frame buffer copies for the mode's size, sends set mode, "software
-ready" and output on, forgets what the device's buffers hold. `disable`:
+The converted image and the three frame buffer copies for the mode's size
+are allocated by the core in the CRTC's `atomic_check` (since 0.6.0; a lack
+of memory rejects the mode). `enable` (from the core, updates stopped):
+takes those buffers over, sends set mode, "software ready" and output on,
+forgets what the device's buffers hold. `disable`:
 cursor off, output off.
 
 ## Frames

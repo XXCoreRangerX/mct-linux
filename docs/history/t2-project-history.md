@@ -72,7 +72,7 @@ The decisive first-light findings on 2026-09-24 were:
 `captures/redir2.bin` became the principal initialization capture, while
 `captures/redir4.bin` recorded real partial updates and hardware cursor
 traffic. The obsolete blank-screen hypotheses were retained as research
-history in `docs/history/first-light.md`, not as current instructions.
+history in `docs/history/t2-first-light.md`, not as current instructions.
 
 ## First usable display paths
 
@@ -355,17 +355,22 @@ motion. The user's wish: compression without lines.
 
 ## Detailed source records
 
-- `docs/history/first-light.md`: early failures, resolved hypotheses and first image
+- `docs/history/t2-first-light.md`: early failures, resolved hypotheses and first image
 - `docs/reference/protocol-t2.md`: command framing, RLE, buffers, status experiments,
   cursor, power, brightness and throughput
-- `docs/reference/init-sequence.md`: initialization phases and exact packet roles
-- `docs/research/driver-analysis.md`: Windows stack and DLL reverse engineering
-- `docs/reference/device-dtu1031x.md`: hardware topology, EDID and register facts
-- `docs/driver/display-driver.md`: the earlier EVDI implementation
-- `docs/driver/t2-driver.md`: the T2 backend's design, tests and roadmap (the
+- `docs/reference/t2-init-sequence.md`: initialization phases and exact packet roles
+- `docs/research/t2-vendor-driver-analysis.md`: Windows stack and DLL reverse engineering
+- `docs/reference/t2-device-dtu1031x.md`: hardware topology, EDID and register facts
+- `docs/driver/wacom-t2d.md`: the earlier EVDI implementation
+- `docs/driver/t2-driver.md`: the T2 backend's design~~, tests and roadmap~~ (the
   shared core: `docs/driver/shared-core.md`; the T6: `docs/reference/t6-limits.md`,
-  `docs/history/t6-lab-notebook.md`)
-- `docs/research/capture.md`: Windows VM and usbredir capture procedure
+  `docs/history/t6-lab-notebook.md`) EDIT (2026-10-14): its dated tests and
+  the 2026-09-25 roadmap moved to `docs/history/t2-lab-notebook.md`
+- `docs/research/usb-capture-setup.md`: Windows VM and usbredir capture procedure
+- Added (2026-10-14): [`docs/history/t2-lab-notebook.md`](t2-lab-notebook.md): the
+  dated T2 lab narratives that used to sit in t2-driver.md and protocol-t2.md
+  (recovery soak, half mode, the performance backlog, the probe logs of
+  2026-10-12 and 2026-10-13), continued from here
 
 Together with Git, these are the durable historical record. `HANDOFF.md` (in
 the lab directory, not in this repository) is a current operational summary

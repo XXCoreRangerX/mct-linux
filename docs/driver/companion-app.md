@@ -1,6 +1,6 @@
 # Companion app: design (2026-10-11)
 
-> **Design and interface**: the sysfs table and the identification section are current; the design part records the plan (2026-10-11).
+> **Design** (2026-10-11): the plan for the app, with the identification and saved settings sections kept current. The sysfs files are listed in [ABI-sysfs-mct.txt](ABI-sysfs-mct.txt).
 
 A desktop app for mct devices in the spirit of BetterDisplay or the
 DisplayLink Manager: a tray icon, one page per connected device, settings,
@@ -30,35 +30,12 @@ Per bound device, in `/sys/bus/usb/drivers/mct/<interface>/mct/` (the same
 directory as `/sys/bus/usb/devices/<interface>/mct/`); `<interface>` is
 e.g. `2-2:1.0`. One value per file, newline terminated.
 
-| File | Devices | Access | Content |
-|---|---|---|---|
-| `chip` | all | ro | `t2` or `t6` |
-| `model` | all | ro | the USB product string, e.g. `T6 USB Station` |
-| `driver_version` | all | ro | DRM driver and version, e.g. `mct_t6 0.26.0` (since mct_t6 0.26.0) |
-| `connector` | all | ro | DRM connector name, e.g. `card2-HDMI-A-3` (the compositor calls it `HDMI-A-3`) |
-| `mode` | all | ro | current mode `WxH@Hz`, or `off` |
-| `modes` | all | ro | the modes offered, one `WxH@Hz kHz [preferred]` per line (mct_t6 0.28.0, mct_t2 0.3.22) |
-| `updates` | all | ro | frames sent since probe |
-| `bytes` | all | ro | bytes sent since probe |
-| `errors` | all | ro | transfer errors since probe |
-| `pixel_format` | t6, t2 | ro | format in use: `NV12`, `YUV444`, `RGB24`, `RGB32`, or `-` |
-| `feature_level` | t6 | ro | number, `-1` if unknown |
-| `vram_mb` | t6 | ro | number |
-| `usb_speed` | t6 | ro | `usb2` or `usb3` |
-| `platform` | t6 | ro | `lite` or `super-lite` (since 0.26.0, like the four below) |
-| `board` | t6 | ro | board name ("project code"), e.g. `JUA254H`, or `-`; the app maps it to the product (j5create JUA254) |
-| `firmware` | t6 | ro | boot code and image code, e.g. `16062899 17091401` |
-| `serial` | t6 | ro | chip serial, 16 hex digits, or `-` |
-| `display_flags` | t6 | ro | DISP descriptor flags, hex |
-| `functions` | t6 | ro | one line per device function: id and name (since 0.27.0, like the two below) |
-| `device_modes` | t6 | ro | the adapter's own mode table, one `WxH@Hz kHz` per line |
-| `clock_limits` | t6 | ro | the driver's pixel clock limits in kHz: all modes, wide modes |
-| `recoveries` | t6 | ro | device restarts after transfer errors |
-| `format` | t6 | rw | `auto`, `rgb24`, `rgb32`, `yuv444`, `nv12` |
-| `all_modes` | t6 | rw | `0` / `1`; a change makes userspace re-probe the monitor |
-| `lossy` | t2 | rw | `0` to `8` |
-| `motion` | t2 | rw | `lossy` or `half` (mct_t2 0.3.24) |
-| `backlight` | t2 | ro | name of its backlight device in `/sys/class/backlight/` (brightness is set there, 0 = off, 1 to `max_brightness`) |
+The files, their formats and which chip has which are listed in
+[ABI-sysfs-mct.txt](ABI-sysfs-mct.txt) (the kernel's ABI format), which is
+kept current with the code. Besides the counters and settings there is
+read-only information: what the T6 reports at probe (platform, board,
+firmware, serial, functions, mode table), its HDMI audio (`audio`,
+`audio_volume`, `audio_sink`), and the T2's ID ROM (`vram_mb`, `id_rom`).
 
 The module parameters (`format`, `all_modes`, `lossy`) are the values new
 devices start with; after that each device has its own.

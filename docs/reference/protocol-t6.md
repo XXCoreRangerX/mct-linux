@@ -29,7 +29,7 @@ Nothing here shares code or framing with the T2.
 | USB | 3.1 Gen 1 (5 Gbit/s), `bcdDevice` 0x1010, "MCT Corp." / "T6 USB Station" |
 | Interface 0 | class 0xff, one altsetting, the only interface on the 5600 |
 | EP 0x02 | bulk OUT, 1024 B packets, bMaxBurst 15: frames and other data (V) |
-| EP 0x81 | bulk IN: unused by all known drivers |
+| EP 0x81 | bulk IN: ROM read-back (signature 0x85) and audio capture (signature 0x83) in the vendor code (C); mct doesn't use it |
 | EP 0x83 | interrupt IN, 64 B: frame-done and hotplug events (V) |
 | VRAM | request `0x88` x 1 MiB (5600: 58 MiB, V) |
 | CPU | Andes NDS32 running uC/OS-II (cyrozap) |

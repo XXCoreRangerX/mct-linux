@@ -116,7 +116,7 @@ static int send_cmd(const unsigned char *hdr, int hlen, const unsigned char *pay
 
 static int send_rect(uint32_t base, const unsigned char *src, int stride, int dx, int dy, int w, int h);
 
-/* 8051 pacing rule, validated from cold (docs/reference/init-sequence.md) */
+/* 8051 pacing rule, validated from cold (docs/reference/t2-init-sequence.md) */
 static unsigned pace_us(unsigned ep, const unsigned char *p)
 {
 	if (ep == EP_FB)

@@ -5,7 +5,7 @@
 
 Companion app for the mct driver: settings and status for MCT Trigger USB
 displays (Trigger 6 HDMI adapters, the Wacom DTU-1031X). It talks to the
-driver's sysfs files ([companion-app.md](../docs/driver/companion-app.md), [ABI-sysfs-mct.txt](../docs/driver/ABI-sysfs-mct.txt)).
+driver's sysfs files ([ABI-sysfs-mct.txt](../docs/driver/ABI-sysfs-mct.txt); the app's design: [companion-app.md](../docs/driver/companion-app.md)).
 
 - `mct-manager`: a GTK 4 / libadwaita window, one page per display
 - `mct-manager --tray`: the same with a tray icon (StatusNotifierItem); the

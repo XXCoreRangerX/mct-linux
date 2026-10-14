@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""The T6 JPEG path from userspace (docs/roadmap.md item 8, lab
+"""The T6 JPEG path from userspace (docs/research/t6-jpeg.md, lab
 captures/t6-jpeg/ and captures/t6-research/jpeg-path.md). Run through
 tools/t6_run.sh (driver unbound, bound again at the end). LG at
 1920x1080@60 only; no other timing is touched.

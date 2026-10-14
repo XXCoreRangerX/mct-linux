@@ -9,6 +9,25 @@ drm_info and in the kernel log at probe).
 - T6: the cursor no longer waits for a frame being sent; its requests go
   over the control endpoint with their own buffer and lock, so it stays
   smooth during large updates (mct_t6 0.29.8).
+- debugfs: cursor latency (commit to device, moves and new images) and how
+  many cursor updates were replaced before they went out; measured with
+  `tools/cursor_latency.sh` (mct_t6 0.29.9, mct_t2 0.3.37).
+- Docs: the roadmap lists what's open per chip, parked or dropped; finished
+  items moved to `docs/history/roadmap-done.md`. A Trigger II lab notebook
+  (`docs/history/t2-lab-notebook.md`) holds the dated experiments that were
+  in `t2-driver.md` and `protocol-t2.md`. New: `docs/research/t2-other-drivers.md`.
+  T6 JPEG: work in progress, put aside (USB 2 isn't being tested).
+  Renamed, so the chip comes first: `reference/init-sequence.md` ->
+  `t2-init-sequence.md`, `reference/device-dtu1031x.md` ->
+  `t2-device-dtu1031x.md`, `research/driver-analysis.md` ->
+  `t2-vendor-driver-analysis.md`, `research/optimization-ideas.md` ->
+  `t2-optimization-ideas.md`, `research/wacom-display-settings.md` ->
+  `t2-wacom-display-settings.md`, `research/other-linux-drivers.md` ->
+  `t6-other-drivers.md`, `history/project-history.md` ->
+  `t2-project-history.md`, `history/first-light.md` -> `t2-first-light.md`;
+  and `t6-comparison.md` -> `research/t6-vendor-comparison.md`,
+  `driver/display-driver.md` -> `driver/wacom-t2d.md`,
+  `research/capture.md` -> `research/usb-capture-setup.md`.
 
 ## 0.6.0 (2026-10-13)
 
