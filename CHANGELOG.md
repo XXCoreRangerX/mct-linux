@@ -4,6 +4,12 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
+## Unreleased
+
+- README: what the two cursor times measure (the T6's until the adapter
+  confirms a control request, the tablet's until its USB endpoint has a
+  bulk write), so they aren't read as one being faster.
+
 ## 0.7.0 (2026-10-14)
 
 Driver versions: mct_t6 0.29.11, mct_t2 0.3.38.

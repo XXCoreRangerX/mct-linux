@@ -37,7 +37,7 @@ of the vendor drivers for interoperability, and testing on real hardware.
 | Pixel formats | ✅ RGB24, RGB32, YUV 4:4:4, NV12; automatic or fixed | ✅ RGB24, sent run-length encoded |
 | Picture quality | ✅ lossless at rest; NV12 during large motion (automatic) | ✅ lossless by default; optional lossy mode during heavy motion |
 | Tear-free updates, only changed areas sent | ✅ | ✅ |
-| Hardware cursor | ✅ up to 128 px; moves reach the adapter in under 0.5 ms, recent shapes are kept on the adapter (0.5 ms to switch) | ✅ 64 px; moves reach the tablet in ~0.04 ms, shape changes ~1 ms; the chip clips it at the screen edges |
+| Hardware cursor | ✅ up to 128 px; a move takes 0.12-0.4 ms until the adapter has confirmed it, recent shapes are kept on the adapter (0.5 ms to switch) | ✅ 64 px; a move takes ~0.04 ms until the tablet's USB endpoint has it, shape changes ~1 ms; the chip clips it at the screen edges |
 | Gamma (night light) | ✅ in software | ✅ in software |
 | Brightness | ➖ the monitor's own controls | ✅ standard backlight interface |
 | Hardware rotation | ❌ the compositor rotates | ❌ the compositor rotates |
@@ -66,6 +66,13 @@ of the vendor drivers for interoperability, and testing on real hardware.
 MCT's (and Wacom's) Windows and macOS drivers for the same devices, as far
 as they were analysed; "not measured" means nobody has timed it.
 
+The two cursor times aren't directly comparable: the T6 takes a cursor
+move as a USB control request, which counts as done once its firmware has
+processed and confirmed it, while the tablet takes it as a 16-byte bulk
+write, done once its USB endpoint has the bytes (its controller applies it
+a moment later). Either is a small fraction of one refresh (6.9 ms at
+144 Hz, 16.7 ms at 60 Hz).
+
 **Trigger 6** (j5create JUA254)
 
 | | mct | Vendor drivers (Windows / macOS) |
@@ -73,7 +80,7 @@ as they were analysed; "not measured" means nobody has timed it.
 | Modes | from the monitor's EDID: 1080p up to 144 Hz, 720p up to 240 Hz, 3440x1440@60, 4K30 | from the monitor's EDID, 60 Hz |
 | Picture | exact RGB or YUV 4:4:4 at rest, NV12 during large changes; partial updates as raw changed rows | JPEG (quality 95), partial updates as JPEG rectangles; Windows refreshes losslessly at rest |
 | Frame latency | 9.4 ms from the commit to the adapter for a fullscreen 1080p video (`tools/frame_latency.sh`) | not measured; the adapter's JPEG decode alone took 7.6-11 ms per 1360x768 frame in a Windows capture |
-| Cursor move | 0.12-0.4 ms from the commit to the adapter (`tools/cursor_latency.sh`) | hardware cursor, not measured |
+| Cursor move | 0.12-0.4 ms from the commit until the adapter has confirmed it (`tools/cursor_latency.sh`) | hardware cursor, not measured |
 | Cursor shape change | ~0.5 ms (recent shapes kept on the adapter) | hardware cursor, not measured |
 | HDMI audio | ✅ 48 kHz stereo, volume | ✅ |
 | Gamma / night light | ✅ in software | ❌ on this adapter (Windows uses hardware gamma tables, which need a newer chip) |
@@ -85,7 +92,7 @@ as they were analysed; "not measured" means nobody has timed it.
 | | mct | Vendor drivers (Windows / macOS) |
 |---|---|---|
 | Picture | lossless by default (lossy only if you turn it on), tear-free: updates go to the hidden buffer, then a flip; only changed pixels are sent | slightly lossy: the Windows encoder always merges values within ±4 into runs; partial updates go straight into the buffer on screen |
-| Cursor move | ~0.04 ms from the commit to the tablet | hardware cursor, not measured |
+| Cursor move | ~0.04 ms from the commit until the tablet's USB endpoint has it | hardware cursor, not measured |
 | Cursor shape change | ~1.1 ms | not measured |
 | Backlight (the only display setting Wacom offers) | ✅ standard backlight device | ✅ |
 | Recovery from a confused chip | ✅ automatic | not known |
