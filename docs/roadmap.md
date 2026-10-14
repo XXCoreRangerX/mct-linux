@@ -56,8 +56,8 @@ Never send: T2 `0x1a`, `0x1c`; T6 `0x01`, `0x13`, `0x30`, `0x15`, `0x33`,
 
 - ~~**niri draws the tablet's cursor itself**~~ EDIT (2026-10-14): our
   driver's minimum framebuffer size (1024x600) refused niri's 64x64 cursor
-  buffer; fixed in mct_t2 0.3.38 (64x64 minimum), to test with
-  `tools/cursor_latency.sh t2`.
+  buffer; fixed in mct_t2 0.3.38 (64x64 minimum). Tested: moves 0.04 ms,
+  shape changes ~1.1 ms.
 
 - **Rainbow lines** (analog sampling phase or a DDR/DVO clock phase, ~10-25%
   of inits): look for an auto-adjust/phase command for the RTD2280 scaler,

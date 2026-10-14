@@ -37,7 +37,7 @@ of the vendor drivers for interoperability, and testing on real hardware.
 | Pixel formats | ✅ RGB24, RGB32, YUV 4:4:4, NV12; automatic or fixed | ✅ RGB24, sent run-length encoded |
 | Picture quality | ✅ lossless at rest; NV12 during large motion (automatic) | ✅ lossless by default; optional lossy mode during heavy motion |
 | Tear-free updates, only changed areas sent | ✅ | ✅ |
-| Hardware cursor | ✅ up to 128 px; moves reach the adapter in under 0.5 ms, recent shapes are kept on the adapter (0.5 ms to switch) | ✅ 64 px; the chip clips it at the screen edges |
+| Hardware cursor | ✅ up to 128 px; moves reach the adapter in under 0.5 ms, recent shapes are kept on the adapter (0.5 ms to switch) | ✅ 64 px; moves reach the tablet in ~0.04 ms, shape changes ~1 ms; the chip clips it at the screen edges |
 | Gamma (night light) | ✅ in software | ✅ in software |
 | Brightness | ➖ the monitor's own controls | ✅ standard backlight interface |
 | Hardware rotation | ❌ the compositor rotates | ❌ the compositor rotates |

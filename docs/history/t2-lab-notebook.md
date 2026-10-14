@@ -404,3 +404,16 @@ width"); smithay logs that at debug level ("failed to export framebuffer
 for cursor plane") and draws the cursor into the picture, before any test
 commit. With 64x64 (as the T6 has) niri assigned the cursor to the plane
 and the driver got cursor commits. Fixed in mct_t2 0.3.38.
+
+**Test of mct_t2 0.3.38 on the host** (`tools/cursor_latency.sh t2`, mouse on
+the tablet; video phase skipped): niri now uses the cursor plane.
+
+| Phase | Commits | Replaced | Move average | Shape changes | Shape average |
+|---|---|---|---|---|---|
+| still desktop | 597 | 0 | 0.04 ms | 0 | - |
+| dragging a window | 596 | 0 | 0.04 ms | 1 | 1.14 ms |
+| changing shapes | 592 | 0 | 0.04 ms | 81 | 1.10 ms |
+
+Maximum since load: 1.64 ms for a move, 8.85 ms for a shape (an upload on
+EP2, which waits for a frame being sent). Commits come at the panel's
+60 Hz. Before, every move was a frame update of 16-26 ms.
