@@ -1196,9 +1196,21 @@ frames going out. New images are the slow part: a full upload of up to
 got replaced. Next: keep recent shapes in the adapter's spare cursor slots
 (5 per output per the firmware), so a known shape costs one request.
 
-**Cursor slot cache (mct_t6 0.29.10, to test).** The driver keeps a copy
+**Cursor slot cache (mct_t6 0.29.10, ~~to test~~ EDIT (2026-10-14): tested, below).** The driver keeps a copy
 of what each of its 5 cursor slots holds. A shape already in a slot is
 shown with one select request; a new one is uploaded into the least
 recently used slot that isn't on screen. Slots 2-4 per output weren't used
 before: the firmware's dispatcher says 10 slots shared by both outputs
 (lab feature-gaps analysis).
+
+Test of 0.29.10 (`tools/cursor_latency.sh`, LG at 1080p144; the video
+phase was skipped):
+
+| Phase | Commits | Replaced | Move average | Shape changes | Shape average |
+|---|---|---|---|---|---|
+| still desktop | 1428 | 0 | 0.12 ms | 1 | 0.19 ms |
+| dragging a window | 1393 | 0 | 0.36 ms | 2 | 5.89 ms |
+| changing shapes | 1381 | **0** | 0.12 ms | 150 | **0.47 ms** (was 11.3) |
+
+157 shapes came from the slot cache and 4 were uploaded (each shape's
+first appearance, the 20 ms maximum). Slots 2-4 work.

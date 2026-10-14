@@ -32,8 +32,10 @@ Never send: T2 `0x1a`, `0x1c`; T6 `0x01`, `0x13`, `0x30`, `0x15`, `0x33`,
 
 ### Trigger 6
 
-- **Test the cursor of mct_t6 0.29.8**: its requests no longer wait for
-  `io_lock`, so it should stay smooth during large updates.
+- ~~**Test the cursor of mct_t6 0.29.8**: its requests no longer wait for
+  `io_lock`, so it should stay smooth during large updates.~~ EDIT
+  (2026-10-14): tested; moves take 0.12-0.4 ms from commit to device, and
+  since 0.29.10 a known shape 0.5 ms instead of 11 ms (slot cache).
 - **HDMI audio while the display is off**: playback runs but nothing is
   heard, since HDMI carries audio in the video signal.
 - **Second output**: needs a 5601 or a dock. The protocol can be worked out
