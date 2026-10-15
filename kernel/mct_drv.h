@@ -124,6 +124,7 @@ struct mct_device {
 		u64 px_damage, rows_copied;
 		u64 no_clips, clips, clip_px;	/* damage clips per commit */
 		u64 copies, ns_copy, ns_copy_max;	/* framebuffer -> shadow */
+		u64 copies_unchanged;		/* ... where no row had changed */
 		u64 ns_commit, ns_commit_max;		/* the same incl. CPU access setup */
 		/* cursor: commits, those replaced before they went out, and the
 		 * time from the commit to the end of the USB transfer */

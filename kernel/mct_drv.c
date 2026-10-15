@@ -149,6 +149,7 @@ static void mct_copy_rows(struct mct_device *mdev, struct drm_framebuffer *fb,
 {
 	struct drm_gem_object *obj = drm_gem_fb_get_obj(fb, 0);
 	int w = mdev->width, y;
+	bool any = false;
 	ktime_t t0;
 	u64 ns;
 
@@ -171,6 +172,7 @@ static void mct_copy_rows(struct mct_device *mdev, struct drm_framebuffer *fb,
 				continue;
 			memcpy(dst, src, w * 4);
 			mdev->changed[y] = 1;
+			any = true;
 			mdev->stats.px_damage += w;
 			mdev->stats.rows_copied++;
 		}
@@ -213,6 +215,7 @@ static void mct_copy_rows(struct mct_device *mdev, struct drm_framebuffer *fb,
 			}
 		}
 		memset(mdev->changed + y, 1, n);
+		any = true;
 		mdev->stats.px_damage += (u64)n * w;
 		mdev->stats.rows_copied += n;
 		y += n;
@@ -223,6 +226,16 @@ done:
 	mdev->stats.copies++;
 	mdev->stats.ns_copy += ns;
 	mdev->stats.ns_copy_max = max(mdev->stats.ns_copy_max, ns);
+	/*
+	 * Nothing really changed: no update. Compositors send the last frame's
+	 * damage again with commits that only move the cursor (smithay does), and
+	 * an update would cost the device an empty flip each time.
+	 */
+	if (!any) {
+		mdev->stats.copies_unchanged++;
+		mutex_unlock(&mdev->lock);
+		return;
+	}
 	mdev->dirty = true;
 	if (!mdev->dirty_since)
 		mdev->dirty_since = t0;
@@ -691,7 +704,8 @@ static int mct_stats_show(struct seq_file *m, void *data)
 	mct_print_ms(m, mdev->stats.ns_copy, copies);
 	seq_puts(m, " (max ");
 	mct_print_ms(m, mdev->stats.ns_copy_max, 1);
-	seq_printf(m, ") over %llu copies\n", mdev->stats.copies);
+	seq_printf(m, ") over %llu copies, %llu without a change\n", mdev->stats.copies,
+		   mdev->stats.copies_unchanged);
 	seq_puts(m, "ms per commit    ");
 	mct_print_ms(m, mdev->stats.ns_commit, copies);
 	seq_puts(m, " (max ");

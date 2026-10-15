@@ -20,7 +20,7 @@ come the chip's lines, then the common commit-side lines.
 | `pixels damaged` | pixels in rows that really changed and were copied |
 | `damage clips` | commits without damage clips (whole screen assumed), number of clips and their area as the compositor reported them |
 | `rows changed` | rows copied per commit after comparing with the previous image |
-| `ms per fb copy` | framebuffer to shadow copy per commit (and the maximum); high values mean the framebuffer is in GPU memory |
+| `ms per fb copy` | framebuffer to shadow copy per commit (and the maximum); high values mean the framebuffer is in GPU memory. "without a change": commits whose damaged rows were all the same as before, which send nothing (compositors resend old damage with cursor-only commits) |
 | `ms per commit` | the same including CPU access setup |
 | `cursor` | cursor commits, and how many were replaced by a newer one before they went out (since mct_t6 0.29.9 / mct_t2 0.3.37) |
 | `ms per cursor move` | from the cursor commit to the end of its USB transfer, for position changes (and the maximum); `tools/cursor_latency.sh` reads it per test phase |

@@ -6,6 +6,12 @@ drm_info and in the kernel log at probe).
 
 ## Unreleased
 
+- No update, and so no empty flip, for commits where no damaged row really
+  changed. niri (smithay) sends the last frame's damage again with every
+  cursor-only commit: the T6 got an 80-byte empty flip per cursor move and,
+  on an idle niri desktop at 1080p120, 120 a second; the tablet 23 bytes
+  per move. debugfs counts these commits ("without a change").
+  mct_t6 0.29.14, mct_t2 0.3.41.
 - README and docs/research/vendor-vm-comparison.md: mct measured against
   MCT's Windows driver (both chips) and its Linux EVDI daemon (T6) through
   the same VM path: cursor latency and bytes, video, traffic at rest.
