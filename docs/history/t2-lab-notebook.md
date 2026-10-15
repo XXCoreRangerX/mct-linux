@@ -417,3 +417,13 @@ the tablet; video phase skipped): niri now uses the cursor plane.
 Maximum since load: 1.64 ms for a move, 8.85 ms for a shape (an upload on
 EP2, which waits for a frame being sent). Commits come at the panel's
 60 Hz. Before, every move was a frame update of 16-26 ms.
+
+## 2026-10-15
+
+**Immediate cursor (niri patches, mct_t2 0.3.42) on the real desktop.**
+`cursor_latency.sh t2 10`: desktop 10418 commits, 9575 between frames, 7792
+sent, 0.03 ms commit -> device; fullscreen video 6806 / 6270 / 5441, 0.06 ms;
+hovering 2362 between frames, 96 shapes at 0.79 ms. One shape took 28.8 ms
+during a (poorly done) window drag: shape uploads (0x12 on EP2) take io_lock
+and wait for a frame in progress; moves (EP4 lists) don't. Interleaving a
+cursor upload into a frame's payload would desync the chip, so this stays.

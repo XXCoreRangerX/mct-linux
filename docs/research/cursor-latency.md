@@ -75,6 +75,22 @@ the LG at 1080p120, GPU rendering, an 8 kHz gaming mouse.
   out, only the newest is sent, about 500-600 moves a second.
 - Cursor shapes: 164 from the adapter's slot cache, 6 uploaded.
 
+The tablet (DTU-1031X, 1024x600@60 over USB 2), same setup,
+`tools/cursor_latency.sh t2 10`:
+
+| Phase | Cursor commits | Moved between frames | Sent | Commit -> device |
+|---|---|---|---|---|
+| circles on the desktop | 10418 | 9575 (92%) | 7792 | 0.03 ms |
+| circles over a fullscreen video | 6806 | 6270 (92%) | 5441 | 0.06 ms |
+| hovering text fields and links | 3036 | 2362 | 2791 moves, 96 shapes | 0.04 ms, shapes 0.79 ms |
+
+One shape change took 28.8 ms while a window was dragged. On the tablet a
+new cursor image goes over the same USB endpoint as the picture, so it waits
+for a frame being sent (up to ~30 ms at full screen over USB 2); moves use a
+different endpoint and never wait. The endpoint can't interleave the two: a
+frame's data has to arrive in one piece, or the chip loses track (see the
+recovery notes in [t2-driver.md](../driver/t2-driver.md)).
+
 ## Why Wayland compositors wait
 
 Modern compositors drive the display with **atomic modesetting**: each
@@ -152,4 +168,4 @@ of step 1; mutter and KWin weren't measured here.
 | mct: no empty flips for cursor-only commits | ✅ mct_t6 0.29.14 / mct_t2 0.3.41 |
 | mct: cursor moves between frames (async cursor plane) | ✅ mct_t6 0.29.15 / mct_t2 0.3.42; a prototype measured in the VM |
 | smithay / niri fast path | ✅ VM: desktop at the Windows and X11 level; real hardware: 78-83% of moves go out between frames, also during video |
-| Measured with the final patches | T6 in the VM and on real hardware done; the tablet to do |
+| Measured with the final patches | ✅ T6 in the VM and on real hardware, tablet on real hardware |
