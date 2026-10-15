@@ -61,6 +61,7 @@ status line. Material about the other chip goes to that chip's file instead.
 | File | Status | What's in it |
 |---|---|---|
 | [t6-jpeg.md](research/t6-jpeg.md) | Research, ongoing (2026-10-13) | the T6's JPEG decoder, tested from userspace; work in progress, put aside |
+| [vendor-vm-comparison.md](research/vendor-vm-comparison.md) | Research snapshot (2026-10-15) | mct against MCT's Windows and Linux drivers on both chips, measured through the same VM path: cursor latency, bytes, video, idle traffic |
 | [t6-vendor-comparison.md](research/t6-vendor-comparison.md) | Research snapshot (2026-10-11), with dated additions | mct_t6 against MCT's Windows, macOS and Ubuntu drivers, JPEG on Linux, a feature table |
 | [t6-vendor-review.md](research/t6-vendor-review.md) | Research snapshot (2026-10-11), with a status per item | what MCT's T6 drivers do that mct didn't, and what became of each item |
 | [t6-other-drivers.md](research/t6-other-drivers.md) | Research snapshot (2026-10-11), with dated additions | MCT's triggerdm, ramifriedman's trigger6 and the trigger6 forks, compared with mct |

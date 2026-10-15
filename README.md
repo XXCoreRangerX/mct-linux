@@ -80,8 +80,8 @@ a moment later). Either is a small fraction of one refresh (6.9 ms at
 | Modes | from the monitor's EDID: 1080p up to 144 Hz, 720p up to 240 Hz, 3440x1440@60, 4K30 | from the monitor's EDID, 60 Hz |
 | Picture | exact RGB or YUV 4:4:4 at rest, NV12 during large changes; partial updates as raw changed rows | JPEG (quality 95), partial updates as JPEG rectangles; Windows refreshes losslessly at rest |
 | Frame latency | 9.4 ms from the commit to the adapter for a fullscreen 1080p video (`tools/frame_latency.sh`) | not measured; the adapter's JPEG decode alone took 7.6-11 ms per 1360x768 frame in a Windows capture |
-| Cursor move | 0.12-0.4 ms from the commit until the adapter has confirmed it (`tools/cursor_latency.sh`) | hardware cursor, not measured |
-| Cursor shape change | ~0.5 ms (recent shapes kept on the adapter) | hardware cursor, not measured |
+| Cursor move | 0.12-0.4 ms from the commit until the adapter has confirmed it (`tools/cursor_latency.sh`) | hardware cursor; Windows measured below |
+| Cursor shape change | ~0.5 ms (recent shapes kept on the adapter) | recent shapes kept on the adapter (Windows) |
 | HDMI audio | ✅ 48 kHz stereo, volume | ✅ |
 | Gamma / night light | ✅ in software | ❌ on this adapter (Windows uses hardware gamma tables, which need a newer chip) |
 | Second output (docks) | ❌ | ✅ |
@@ -92,10 +92,39 @@ a moment later). Either is a small fraction of one refresh (6.9 ms at
 | | mct | Vendor drivers (Windows / macOS) |
 |---|---|---|
 | Picture | lossless by default (lossy only if you turn it on), tear-free: updates go to the hidden buffer, then a flip; only changed pixels are sent | slightly lossy: the Windows encoder always merges values within ±4 into runs; partial updates go straight into the buffer on screen |
-| Cursor move | ~0.04 ms from the commit until the tablet's USB endpoint has it | hardware cursor, not measured |
-| Cursor shape change | ~1.1 ms | not measured |
+| Cursor move | ~0.04 ms from the commit until the tablet's USB endpoint has it | hardware cursor; Windows measured below |
+| Cursor shape change | ~1.1 ms | not measured; like mct, Windows uploads the image again on every change |
 | Backlight (the only display setting Wacom offers) | ✅ standard backlight device | ✅ |
 | Recovery from a confused chip | ✅ automatic | not known |
+
+**Measured side by side (2026-10-15).** Each driver in a VM, all seeing
+the device through the same usb-redir path, mouse moves injected the same
+way. The absolute numbers include that path, so only the differences
+count. MCT's Linux driver for the T6 is its EVDI daemon; there is none for
+the T2.
+
+| Trigger 6, 1080p60 | mct | MCT Windows | MCT Linux (EVDI daemon) |
+|---|---|---|---|
+| Mouse move → USB, median / p95 | 0.75 / 8.4 ms | 0.48 / 0.70 ms | 10.1 / 14.9 ms (no hardware cursor) |
+| Bytes per move | 88 (position + an empty flip) | 8 | ~42 KB (a whole JPEG frame) |
+| Cursor shapes kept on the adapter | ✅ | ✅ | – |
+| 1080p50 video | 50 fps, raw, steadiest pacing (p95 21 ms) | 50 fps, JPEG, bursty (p95 34 ms) | 50 fps, JPEG (p95 25 ms) |
+| USB traffic at rest | none | none | none |
+
+| Trigger II | mct | MCT Windows |
+|---|---|---|
+| Mouse move → USB, median / p95 | 0.74 / 8.4 ms | 0.52 / 0.74 ms |
+| USB traffic at rest | none | re-sends the 16 KB cursor image every 3 s |
+| Video | 29.5 fps, steady (p95 37 ms) | 28.8 fps, stalls up to 174 ms |
+
+mct's slower worst case for cursor moves doesn't come from the USB path,
+which takes 0.3 ms. A compositor can't commit a move while its previous
+commit is still waiting for its flip event, and mct paces those events at
+the refresh rate, so some moves wait up to one refresh. Windows sends the
+position as soon as the pointer moves. Closing this gap is being worked on.
+Method, all numbers and how the devices were kept safe (firmware writes
+blocked) are in
+[vendor-vm-comparison.md](docs/research/vendor-vm-comparison.md).
 
 The analysis behind this is in
 [t6-vendor-comparison.md](docs/research/t6-vendor-comparison.md),

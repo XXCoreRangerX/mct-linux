@@ -6,6 +6,9 @@ drm_info and in the kernel log at probe).
 
 ## Unreleased
 
+- README and docs/research/vendor-vm-comparison.md: mct measured against
+  MCT's Windows driver (both chips) and its Linux EVDI daemon (T6) through
+  the same VM path: cursor latency and bytes, video, traffic at rest.
 - README: what the two cursor times measure (the T6's until the adapter
   confirms a control request, the tablet's until its USB endpoint has a
   bulk write), so they aren't read as one being faster.

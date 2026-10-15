@@ -35,14 +35,27 @@ In this order:
 1. **T6 frame latency, lossless:** convert and send band by band, overlapped,
    instead of converting the whole frame first (up to ~1 ms of the 9.4 ms
    per 1080p frame measured with `tools/frame_latency.sh`).
-2. **Vendor comparison through the same VM path:** the vendor driver in the
+2. ~~**Vendor comparison through the same VM path:** the vendor driver in the
    Windows VM and mct in a NixOS VM, both seeing the device through the
    same usb-redir tunnel, with mouse moves injected by QMP the same way.
    Measured on both: injected move -> cursor packet on USB, bytes per
    cursor move and shape change, shape caching, and for a fullscreen 1080p
    video the frame rate, bytes per frame and what is sent at rest. T6
    first, then the tablet; results into the README comparison, noting how
-   they were measured.
+   they were measured.~~ EDIT (2026-10-15): done, see
+   [vendor-vm-comparison.md](research/vendor-vm-comparison.md). mct matches
+   or beats Windows on video and idle traffic, but its cursor worst case is
+   worse (p95 8.4 ms against 0.7 ms at 60 Hz), which item 2a is about.
+2a. **Cursor worst case below Windows (both chips):** a move waits up to one
+   refresh when the compositor's previous commit still waits for its flip
+   event (mct sends those at the next refresh tick). Ideas: complete commits
+   that change only the cursor at once instead of at the tick; don't send an
+   empty flip (T6: 80 B, T2: 23 B) when nothing in the picture changed;
+   async cursor updates for compositors that use them. Measure with mouse
+   rates of real mice (125-1000 Hz), not only 57/s, through the same VM path,
+   against Windows.
+2b. **Why 1080p120 used YUV 4:4:4 for video** where 1080p60 used NV12
+   (seen in the VM comparison, not looked into).
 3. **T2 resync as a work item:** recovery from a confused chip (up to 45 s)
    blocks probe and resume and holds `io_lock` (the cursor freezes).
 4. **T2 frame latency statistics,** like the T6's.
