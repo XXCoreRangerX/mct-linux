@@ -121,7 +121,7 @@ mct's slower worst case for cursor moves doesn't come from the USB path,
 which takes 0.3 ms. A compositor can't commit a move while its previous
 commit is still waiting for its flip event, and mct paces those events at
 the refresh rate, so some moves wait up to one refresh. Windows sends the
-position as soon as the pointer moves. Closing this gap is being worked on.
+position as soon as the pointer moves. See "Cursor latency" below.
 Method, all numbers and how the devices were kept safe (firmware writes
 blocked) are in
 [vendor-vm-comparison.md](docs/research/vendor-vm-comparison.md).
@@ -130,6 +130,25 @@ The analysis behind this is in
 [t6-vendor-comparison.md](docs/research/t6-vendor-comparison.md),
 [t6-vendor-review.md](docs/research/t6-vendor-review.md) and
 [t2-vendor-driver-analysis.md](docs/research/t2-vendor-driver-analysis.md).
+
+## Cursor latency under Wayland
+
+With a fast mouse, a cursor move reaches the T6 in about 0.4 ms under X11
+or MCT's Windows driver, but waits for the next frame under Wayland
+compositors: about 9 ms typical and 17 ms worst case at 60 Hz (measured
+with niri and sway). Wayland compositors commit the cursor as part of a
+whole frame, and the kernel allows only one pending frame; X11 moves the
+cursor with the kernel's legacy cursor call, which doesn't wait.
+
+- **Driver side, done:** mct applies legacy cursor moves at once, even
+  while a frame is in flight (mct_t6 0.29.15 / mct_t2 0.3.42), and sends no
+  empty flips for cursor-only commits (0.29.14 / 0.3.41).
+- **Compositor side, being built:** a fast path for smithay and niri that
+  moves the cursor between frames with the legacy call. A first test in a
+  VM brought niri's typical move from 9 ms to 0.4 ms.
+
+Details, measurements and the plan:
+[cursor-latency.md](docs/research/cursor-latency.md).
 
 ## Features
 

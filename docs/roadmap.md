@@ -46,14 +46,13 @@ In this order:
    [vendor-vm-comparison.md](research/vendor-vm-comparison.md). mct matches
    or beats Windows on video and idle traffic, but its cursor worst case is
    worse (p95 8.4 ms against 0.7 ms at 60 Hz), which item 2a is about.
-2a. **Cursor worst case below Windows (both chips):** a move waits up to one
-   refresh when the compositor's previous commit still waits for its flip
-   event (mct sends those at the next refresh tick). Ideas: complete commits
-   that change only the cursor at once instead of at the tick; don't send an
-   empty flip (T6: 80 B, T2: 23 B) when nothing in the picture changed;
-   async cursor updates for compositors that use them. Measure with mouse
-   rates of real mice (125-1000 Hz), not only 57/s, through the same VM path,
-   against Windows.
+2a. **Cursor worst case below Windows (both chips):** see
+   [cursor-latency.md](research/cursor-latency.md). Done in mct: no empty
+   flips (0.29.14 / 0.3.41), async cursor moves (0.29.15 / 0.3.42). Next:
+   the smithay/niri fast path with the legacy cursor call, as patches with
+   a Nix overlay; measure it in the VM (T6 and tablet, 250/1000 Hz,
+   desktop and video, shape changes) against X11 and Windows; offer it
+   upstream.
 2b. **Why 1080p120 used YUV 4:4:4 for video** where 1080p60 used NV12
    (seen in the VM comparison, not looked into).
 3. **T2 resync as a work item:** recovery from a confused chip (up to 45 s)
