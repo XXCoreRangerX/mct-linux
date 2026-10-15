@@ -44,6 +44,15 @@ and appletbdrm):
   copies damaged rows into the shadow. The cursor plane's stores the image,
   position and on/off under `cur_lock` and queues `cur_work`, which calls
   `cursor_set`/`cursor_hide`; moves in between collapse into the last one.
+- **Cursor moves between frames** (since mct_t6 0.29.15 / mct_t2 0.3.42).
+  The cursor plane has `atomic_async_check`/`atomic_async_update`, so a
+  legacy cursor ioctl that only moves the cursor already shown is applied
+  at once, without waiting for the flip event of a frame in flight. X11
+  moves the cursor this way; a compositor that moves it between frames
+  gets the same.
+- **No update for unchanged damage.** A commit whose damaged rows all equal
+  the shadow kicks no update (smithay sends the last frame's damage again
+  with cursor-only commits), so the device gets no empty flip.
   CRTC enable/disable still set the mode and power over USB, as udl and
   gud do.
 - **No allocations in a commit.** The shadow and the chip's `mode_bufs`

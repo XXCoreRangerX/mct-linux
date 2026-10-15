@@ -48,6 +48,15 @@
 #define MCT_CONN_MODE_CONST const
 #endif
 
+/* the plane's atomic_async_check has a flip argument since 6.13 */
+#ifdef MCT_COMPAT_ASYNC_CHECK_NO_FLIP
+#define MCT_ASYNC_CHECK_ARGS struct drm_plane *plane, struct drm_atomic_commit *state
+#define MCT_ASYNC_FLIP false
+#else
+#define MCT_ASYNC_CHECK_ARGS struct drm_plane *plane, struct drm_atomic_commit *state, bool flip
+#define MCT_ASYNC_FLIP flip
+#endif
+
 struct drm_crtc;
 struct drm_device;
 struct device;

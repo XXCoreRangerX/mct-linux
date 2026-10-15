@@ -6,6 +6,13 @@ drm_info and in the kernel log at probe).
 
 ## Unreleased
 
+- Cursor moves between frames: the cursor plane supports asynchronous
+  updates, so a cursor move through the legacy cursor ioctl no longer
+  waits for the flip of a frame in flight. X11 already moved the cursor
+  this way; in a VM test, niri with a patch that moves the cursor between
+  frames (`NIRI_IMMEDIATE_CURSOR`) went from 9 ms to 0.4-0.6 ms (median,
+  1000 Hz mouse, T6 at 1080p60), the level of X11 and MCT's Windows driver.
+  debugfs counts these moves. mct_t6 0.29.15, mct_t2 0.3.42.
 - No update, and so no empty flip, for commits where no damaged row really
   changed. niri (smithay) sends the last frame's damage again with every
   cursor-only commit: the T6 got an 80-byte empty flip per cursor move and,

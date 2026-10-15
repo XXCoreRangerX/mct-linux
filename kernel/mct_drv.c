@@ -377,6 +377,17 @@ static int mct_cursor_atomic_check(struct drm_plane *plane, struct drm_atomic_co
 						   true, true);
 }
 
+/* a cursor change to send; cur_lock held */
+static void mct_cursor_pending(struct mct_device *mdev)
+{
+	mdev->stats.cur_commits++;
+	if (mdev->cur_pending)
+		mdev->stats.cur_coalesced++;	/* the last one never went out */
+	else
+		mdev->cur_since = ktime_get();
+	mdev->cur_pending = true;
+}
+
 static void mct_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_commit *state)
 {
 	struct mct_device *mdev = to_mct(plane->dev);
@@ -400,15 +411,59 @@ static void mct_cursor_atomic_update(struct drm_plane *plane, struct drm_atomic_
 		mdev->cur_y = new_state->crtc_y;
 	}
 	mdev->cur_on = on;
-	mdev->stats.cur_commits++;
-	if (mdev->cur_pending)
-		mdev->stats.cur_coalesced++;	/* the last one never went out */
-	else
-		mdev->cur_since = ktime_get();
-	mdev->cur_pending = true;
+	mct_cursor_pending(mdev);
 	mutex_unlock(&mdev->cur_lock);
 	if (on)
 		drm_gem_fb_end_cpu_access(fb, DMA_FROM_DEVICE);
+	queue_work(system_highpri_wq, &mdev->cur_work);
+}
+
+/*
+ * Cursor moves without waiting for the frame in flight: legacy cursor
+ * ioctls (X11, and compositors that move the cursor between frames) come
+ * here instead of a commit that waits for the previous commit's flip
+ * event. Only a new position of the cursor already shown; anything else
+ * goes the normal way.
+ */
+static int mct_cursor_atomic_async_check(MCT_ASYNC_CHECK_ARGS)
+{
+	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
+	struct drm_plane_state *cur = plane->state;
+	struct drm_crtc_state *crtc_state;
+
+	if (MCT_ASYNC_FLIP || !new_state->crtc || !cur->fb || !cur->visible ||
+	    new_state->fb != cur->fb || new_state->crtc_w != cur->crtc_w || new_state->crtc_h != cur->crtc_h ||
+	    new_state->src_w != cur->src_w || new_state->src_h != cur->src_h ||
+	    new_state->src_x || new_state->src_y)
+		return -EINVAL;
+	crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
+	if (!crtc_state || !crtc_state->active)
+		return -EINVAL;
+	if (drm_atomic_helper_check_plane_state(new_state, crtc_state, DRM_PLANE_NO_SCALING,
+						DRM_PLANE_NO_SCALING, true, true) ||
+	    !new_state->visible)
+		return -EINVAL;
+	return 0;
+}
+
+static void mct_cursor_atomic_async_update(struct drm_plane *plane,
+					   struct drm_atomic_commit *state)
+{
+	struct mct_device *mdev = to_mct(plane->dev);
+	struct drm_plane_state *new_state = drm_atomic_get_new_plane_state(state, plane);
+
+	/* async updates change the current state in place (same framebuffer) */
+	plane->state->crtc_x = new_state->crtc_x;
+	plane->state->crtc_y = new_state->crtc_y;
+	plane->state->src = new_state->src;
+	plane->state->dst = new_state->dst;
+
+	mutex_lock(&mdev->cur_lock);
+	mdev->cur_x = new_state->crtc_x;
+	mdev->cur_y = new_state->crtc_y;
+	mdev->stats.cur_async++;
+	mct_cursor_pending(mdev);
+	mutex_unlock(&mdev->cur_lock);
 	queue_work(system_highpri_wq, &mdev->cur_work);
 }
 
@@ -416,6 +471,8 @@ static const struct drm_plane_helper_funcs mct_cursor_helper_funcs = {
 	DRM_GEM_SHADOW_PLANE_HELPER_FUNCS,
 	.atomic_check = mct_cursor_atomic_check,
 	.atomic_update = mct_cursor_atomic_update,
+	.atomic_async_check = mct_cursor_atomic_async_check,
+	.atomic_async_update = mct_cursor_atomic_async_update,
 };
 
 /* ------------------------------------------------------------------ */
@@ -711,8 +768,8 @@ static int mct_stats_show(struct seq_file *m, void *data)
 	seq_puts(m, " (max ");
 	mct_print_ms(m, mdev->stats.ns_commit_max, 1);
 	seq_puts(m, ") incl. cpu access setup\n");
-	seq_printf(m, "cursor           %llu commits, %llu replaced before sending\n",
-		   mdev->stats.cur_commits, mdev->stats.cur_coalesced);
+	seq_printf(m, "cursor           %llu commits, %llu replaced before sending, %llu moves between frames\n",
+		   mdev->stats.cur_commits, mdev->stats.cur_coalesced, mdev->stats.cur_async);
 	seq_puts(m, "ms per cursor move  ");
 	mct_print_ms(m, mdev->stats.ns_cur_move, max_t(u64, mdev->stats.cur_moves, 1));
 	seq_puts(m, " (max ");

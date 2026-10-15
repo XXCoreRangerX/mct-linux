@@ -38,3 +38,7 @@ ifeq ($(shell grep -A1 -s 'mode_valid..struct drm_connector \*connector' \
 	$(mct_inc)/drm/drm_modeset_helper_vtables.h | grep -c 'const struct drm_display_mode'),0)
 ccflags-y += -DMCT_COMPAT_MODE_VALID_NONCONST
 endif
+ifeq ($(shell grep -A1 -s 'atomic_async_check..struct drm_plane' \
+	$(mct_inc)/drm/drm_modeset_helper_vtables.h | grep -c 'bool flip'),0)
+ccflags-y += -DMCT_COMPAT_ASYNC_CHECK_NO_FLIP
+endif

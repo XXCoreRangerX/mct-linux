@@ -22,7 +22,7 @@ come the chip's lines, then the common commit-side lines.
 | `rows changed` | rows copied per commit after comparing with the previous image |
 | `ms per fb copy` | framebuffer to shadow copy per commit (and the maximum); high values mean the framebuffer is in GPU memory. "without a change": commits whose damaged rows were all the same as before, which send nothing (compositors resend old damage with cursor-only commits) |
 | `ms per commit` | the same including CPU access setup |
-| `cursor` | cursor commits, and how many were replaced by a newer one before they went out (since mct_t6 0.29.9 / mct_t2 0.3.37) |
+| `cursor` | cursor commits, how many were replaced by a newer one before they went out (since mct_t6 0.29.9 / mct_t2 0.3.37), and how many were moves between frames: asynchronous legacy cursor moves that didn't wait for the frame in flight (since mct_t6 0.29.15 / mct_t2 0.3.42) |
 | `ms per cursor move` | from the cursor commit to the end of its USB transfer, for position changes (and the maximum); `tools/cursor_latency.sh` reads it per test phase |
 | `ms per cursor shape` | the same for new cursor images (an upload, or on the T6 a slot select for a shape it still holds) |
 | `cursor images` | (T6) cursor shapes shown from the slot cache vs. uploaded (since mct_t6 0.29.10) |

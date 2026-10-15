@@ -128,7 +128,7 @@ struct mct_device {
 		u64 ns_commit, ns_commit_max;		/* the same incl. CPU access setup */
 		/* cursor: commits, those replaced before they went out, and the
 		 * time from the commit to the end of the USB transfer */
-		u64 cur_commits, cur_coalesced;
+		u64 cur_commits, cur_coalesced, cur_async;	/* async: moves between frames */
 		u64 cur_moves, ns_cur_move, ns_cur_move_max;	/* position only */
 		u64 cur_shapes, ns_cur_shape, ns_cur_shape_max;	/* new image */
 		ktime_t since;
