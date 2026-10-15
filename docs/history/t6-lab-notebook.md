@@ -1252,3 +1252,28 @@ But "commit -> worker" starts when the commit begins copying the
 framebuffer into the shadow (`dirty_since` is taken before the row compare
 and copy, ~8 MB for a full 1080p frame), so it is mostly that copy, which no
 queue priority shortens. Removed in mct_t6 0.29.13 / mct_t2 0.3.40.
+
+**Vendor comparison in VMs, and where mct's cursor worst case comes from.**
+Results in [vendor-vm-comparison.md](../research/vendor-vm-comparison.md):
+at 1080p60, injected move -> cursor packet on USB is 0.75 / 8.4 ms (median /
+p95) for mct and 0.48 / 0.70 ms for MCT's Windows driver. The driver's own
+part is 0.28 ms. Reading the kernel, smithay 0.7 and niri 26.04 sources:
+
+- The kernel refuses a nonblocking commit while the previous commit's flip
+  event is pending (`stall_checks`, "busy with a previous commit"), so a
+  compositor can update the cursor at most once per flip event. mct sends
+  flip events at the next tick of its refresh-rate timer
+  (`drm_crtc_vblank_atomic_flush`), so a move that comes while an event is
+  pending waits up to one refresh. A real mouse (125-1000 Hz) hits that on
+  most moves; the 57/s injections only sometimes.
+- Completing cursor-only commits at once wouldn't help niri: its
+  `VBlankThrottle` holds back flip events whose timestamp is less than half
+  a refresh after the previous one, and an event sent between ticks carries
+  the last tick's timestamp. So under niri, cursor updates are bound to the
+  refresh rate whatever the driver does. Windows' indirect display driver
+  gets cursor positions outside the frame cycle.
+- On every cursor-only commit smithay sends the whole plane state again,
+  including the primary plane with the previous frame's damage clips. mct
+  compares those rows with its shadow, finds nothing changed and still sends
+  an empty flip (T6 80 B, T2 23 B). On the host's niri at 1080p120 the T6
+  `updates` counter grew by 120 per second, 80 B each, with the desktop idle.
