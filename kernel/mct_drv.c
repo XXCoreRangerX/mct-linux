@@ -38,12 +38,12 @@
 
 void mct_kick(struct mct_device *mdev)
 {
-	queue_work(system_long_wq, &mdev->work);
+	queue_work(mdev->wq, &mdev->work);
 }
 
 void mct_settle(struct mct_device *mdev, unsigned int ms)
 {
-	mod_delayed_work(system_long_wq, &mdev->settle_work, msecs_to_jiffies(ms));
+	mod_delayed_work(mdev->wq, &mdev->settle_work, msecs_to_jiffies(ms));
 }
 
 static void mct_update_work(struct work_struct *work)
@@ -883,6 +883,8 @@ static void mct_release(struct drm_device *dev, void *res)
 	cancel_delayed_work_sync(&mdev->settle_work);
 	cancel_work_sync(&mdev->work);
 	cancel_work_sync(&mdev->cur_work);
+	if (mdev->wq)
+		destroy_workqueue(mdev->wq);
 	kvfree(mdev->shadow);
 	for (i = 0; i < mdev->nmode_bufs; i++)
 		kvfree(mdev->mode_buf[i]);
@@ -902,6 +904,9 @@ int mct_init(struct mct_device *mdev, const struct mct_config *cfg)
 	ret = mct_attrs_init(mdev, cfg);
 	if (ret)
 		return ret;
+	mdev->wq = alloc_workqueue("mct_%s", WQ_HIGHPRI | WQ_UNBOUND, 1, cfg->chip);
+	if (!mdev->wq)
+		return -ENOMEM;
 	INIT_WORK(&mdev->work, mct_update_work);
 	INIT_DELAYED_WORK(&mdev->settle_work, mct_settle_work);
 	INIT_WORK(&mdev->cur_work, mct_cursor_work);

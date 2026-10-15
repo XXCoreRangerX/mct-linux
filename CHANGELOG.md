@@ -9,6 +9,9 @@ drm_info and in the kernel log at probe).
 - README: what the two cursor times measure (the T6's until the adapter
   confirms a control request, the tablet's until its USB endpoint has a
   bulk write), so they aren't read as one being faster.
+- Core: the update worker runs on each device's own high-priority queue
+  instead of the shared system queue, so a frame starts going out sooner
+  (it waited ~0.3 ms for the worker; mct_t6 0.29.12, mct_t2 0.3.39).
 
 ## 0.7.0 (2026-10-14)
 

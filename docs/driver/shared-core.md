@@ -56,6 +56,10 @@ and appletbdrm):
   coordinates), so a few extra rows at worst.
 - **USB buffers** are kmalloc'd bounce buffers or coherent URB buffers,
   never vmalloc'd memory.
+- **Workers:** the update worker and the settle timer run on the device's
+  own high-priority, unbound workqueue (`mdev->wq`, "mct_t2"/"mct_t6",
+  since 2026-10-15); on the shared system queue a frame waited ~0.3 ms for
+  the worker to start. The cursor worker uses `system_highpri_wq`.
 
 ## mct_t2 and mct_t6
 

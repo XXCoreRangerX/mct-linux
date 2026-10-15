@@ -67,7 +67,7 @@ MODULE_PARM_DESC(half_motion, "Experimental, off by default. Default for new dev
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	38
+#define DRIVER_PATCH	39
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
