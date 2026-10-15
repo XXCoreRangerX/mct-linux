@@ -153,6 +153,5 @@ None of the cycles reset the device (see above).
 
 - Everything ran in VMs with software rendering (llvmpipe under niri, Windows' IDD path with no GPU). Frame rates above 50 fps were not tested.
 - The Linux daemon and mct ran under niri; Windows ran its own compositor (DWM). Cursor timing includes each compositor's behaviour.
-- The Windows eval ISO (build 26100.1742) is past its evaluation date. The VM clock was set to 2025-01-15 to avoid the expired-licence hourly shutdown.
 - The vendor daemon's cursor latency is "injection → next JPEG flip". It has no position packet, and the flip that carries the moved cursor may be a later one.
 - The T2 frame-size comparison uses different rendered content (see the T2 notes).
