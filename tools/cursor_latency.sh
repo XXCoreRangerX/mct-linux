@@ -23,7 +23,7 @@ grep -q "^ms per cursor move" "$f" || {
 snap() {
 	awk '/^ms per cursor move/ { print "move", $5, $9 }
 	     /^ms per cursor shape/ { print "shape", $5, $9 }
-	     /^cursor / { print "commits", $2, $4 }' "$f"
+	     /^cursor / { print "commits", $2, $4; print "between", $8, 0 }' "$f"
 }
 
 delta() {	# before after -> per-phase average and counts
@@ -32,8 +32,11 @@ delta() {	# before after -> per-phase average and counts
 		{ b[$1] = $2; m[$1] = $3 }
 		END {
 			c = b["commits"] - a["commits"]; r = m["commits"] - n["commits"]
-			printf "  %s: %d cursor commits, %d replaced before sending\n", name, c, r
-			for (k in b) if (k != "commits") {
+			printf "  %s: %d cursor commits, %d replaced before sending", name, c, r
+			if ("between" in b && b["between"] != "")
+				printf ", %d moved between frames (no wait for a frame)", b["between"] - a["between"]
+			printf "\n"
+			for (k in b) if (k != "commits" && k != "between") {
 				cnt = m[k] - n[k]
 				if (cnt > 0)
 					printf "    %-5s %5d, average %.2f ms commit -> device\n", k, cnt,
