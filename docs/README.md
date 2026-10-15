@@ -34,6 +34,7 @@ status line. Material about the other chip goes to that chip's file instead.
 |---|---|---|
 | [install.md](install.md) | Reference | installing from a release, building from source, older kernels, the NixOS module and its options |
 | [usage.md](usage.md) | Reference | the per-display settings, MCT Display Manager and `mctctl`, debugging |
+| [immediate-cursor.md](immediate-cursor.md) | Reference | the niri immediate cursor option: what it does, why the legacy cursor call, why it is opt-in |
 | [comparison.md](comparison.md) | Reference | mct compared with MCT's drivers: what each does, and numbers measured side by side |
 | [roadmap.md](roadmap.md) | Status | where the driver stands against the vendor drivers and the chips, what's open, parked or dropped |
 

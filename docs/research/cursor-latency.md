@@ -156,8 +156,8 @@ adds `DrmCompositor::move_cursor_immediately()` to smithay, and
 calls it from niri on every pointer and tablet motion (niri 26.04, which
 uses smithay at `ff5fa7df`). On NixOS, the module's `niriFix` and
 `niriImmediateCursor` options build niri with them; `NIRI_IMMEDIATE_CURSOR=0`
-turns the fast path off at run time. They will be offered upstream once
-tested. Other Wayland compositors
+turns the fast path off at run time. Why this is an option and not the
+default: [immediate-cursor.md](../immediate-cursor.md). Other Wayland compositors
 (wlroots for sway and Hyprland, mutter, KWin) would need their own version
 of step 1; mutter and KWin weren't measured here.
 
@@ -190,8 +190,7 @@ has no refresh the computer can see: mct's refresh deadline is a timer,
 and the adapter refreshes on its own clock. So committing just before
 mct's deadline would still hold a move for part of a frame, and sending it
 at once is what helps most. The legacy call is the only way to do that
-today. Upstream, smithay may prefer the KWin-style design; asking its
-maintainers before sending patches is the sensible first step.
+today.
 
 Sources:
 [RFC: ASYNC_UPDATE flag (2018)](https://lists.freedesktop.org/archives/dri-devel/2018-June/181513.html),

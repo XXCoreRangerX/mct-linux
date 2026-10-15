@@ -87,5 +87,5 @@ without a reboot.
 | `driver = "evdi"` | the legacy EVDI + wacom-t2d route for the tablet instead of the kernel driver |
 | `consoleMap` | text consoles on the tablet (adds `fbcon=map:...`, e.g. `"01"` for every second VT) |
 | `niriFix` | build niri with the patches in `nix/`: clean up the output of a removed USB display; render USB displays into system memory, which makes reading frames many times faster |
-| `niriImmediateCursor` | with `niriFix`: also the niri and smithay patches that move the cursor at once instead of with the next frame ([why](research/cursor-latency.md)). `NIRI_IMMEDIATE_CURSOR=0` turns it off at run time |
+| `niriImmediateCursor` | with `niriFix`: also the niri and smithay patches that move the cursor at once instead of with the next frame ([what and why](immediate-cursor.md)). `NIRI_IMMEDIATE_CURSOR=0` turns it off at run time |
 | `app.enable`, `app.tray` | install MCT Display Manager and `mctctl`; start the tray icon with the session |

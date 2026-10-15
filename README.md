@@ -100,8 +100,9 @@ library it's built on) do that. A move then takes about 0.4 ms, the same as
 X11 and Windows.
 
 On NixOS, turn on `niriFix` and `niriImmediateCursor`. Other Wayland
-desktops would need a similar change.
-[Why this happens, and the measurements.](docs/research/cursor-latency.md)
+desktops would need a similar change. Why this is an option:
+[docs/immediate-cursor.md](docs/immediate-cursor.md); the measurements:
+[cursor-latency.md](docs/research/cursor-latency.md).
 
 ## Compared with the vendor drivers
 
