@@ -52,6 +52,29 @@ The method, the safety measures and all the runs are in
 [vendor-vm-comparison.md](vendor-vm-comparison.md) and the lab notebook
 ([t6-lab-notebook.md](../history/t6-lab-notebook.md), 2026-10-15).
 
+### On real hardware (2026-10-15)
+
+niri with the patches and mct 0.29.15 on the developer's desktop: T6 with
+the LG at 1080p120, GPU rendering, an 8 kHz gaming mouse.
+`tools/cursor_latency.sh t6 10`, 10 s per phase:
+
+| Phase | Cursor commits | Moved between frames | Sent (newest wins) | Commit -> device |
+|---|---|---|---|---|
+| circles on the desktop | 11118 | 8767 (79%) | 5329 | 0.08 ms |
+| circles over a fullscreen 1080p50 video | 8091 | 6676 (83%) | 5881 | 0.09 ms |
+| dragging a window | 10607 | 8297 (78%) | 4435 | 0.14 ms |
+| hovering text fields and links | 2336 | 1000 | 1906 moves, 128 shapes | 0.10 ms, shapes 0.64 ms |
+
+- Most moves now go out between frames, also while a video plays: on real
+  hardware niri renders on the GPU, so its main thread keeps up with the
+  mouse. The VM's video case was its software rendering.
+- The rest come with niri's frames (120 a second here), which carry the
+  cursor too.
+- "Sent" is lower than the commits because the mouse reports up to 8000
+  times a second: when a newer position comes before the last one has gone
+  out, only the newest is sent, about 500-600 moves a second.
+- Cursor shapes: 164 from the adapter's slot cache, 6 uploaded.
+
 ## Why Wayland compositors wait
 
 Modern compositors drive the display with **atomic modesetting**: each
@@ -128,5 +151,5 @@ of step 1; mutter and KWin weren't measured here.
 |---|---|
 | mct: no empty flips for cursor-only commits | ✅ mct_t6 0.29.14 / mct_t2 0.3.41 |
 | mct: cursor moves between frames (async cursor plane) | ✅ mct_t6 0.29.15 / mct_t2 0.3.42; a prototype measured in the VM |
-| smithay / niri fast path | ✅ measured in the VM: desktop at the Windows and X11 level; video case to be measured on real hardware |
-| Measured with the final patches | T6 in the VM done; the tablet and real hardware (video) to do |
+| smithay / niri fast path | ✅ VM: desktop at the Windows and X11 level; real hardware: 78-83% of moves go out between frames, also during video |
+| Measured with the final patches | T6 in the VM and on real hardware done; the tablet to do |

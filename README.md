@@ -147,8 +147,9 @@ cursor with the kernel's legacy cursor call, which doesn't wait.
   between frames with the legacy call. Measured in a VM with a 1000 Hz
   mouse: niri went from 9.3 / 16.9 ms (median / p95) to 0.44 / 0.50 ms on
   the desktop, the level of X11 (0.41 / 0.47) and MCT's Windows driver
-  (0.39 / 0.48). On NixOS: the module's `niriImmediateCursor` option.
-  During video playback this still has to be measured on real hardware.
+  (0.39 / 0.48). On real hardware about 80% of cursor moves now go out
+  between frames, during video too, 0.1 ms from niri to the adapter. On
+  NixOS: the module's `niriImmediateCursor` option.
 
 Details, measurements and the plan:
 [cursor-latency.md](docs/research/cursor-latency.md).

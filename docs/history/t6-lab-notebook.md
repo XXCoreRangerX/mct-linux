@@ -1298,3 +1298,12 @@ renders the video with llvmpipe in the VM and handles input in between. To
 be measured on real hardware. No WARN or lockdep in the guest, no errors in
 niri's log, cursor shapes still change (slot cache hits), proxy blocked
 nothing, devices back with 0 errors. Lab: captures/vendor-vm/2026-10-15-cursor/t6-mct15-imm.
+
+**Immediate cursor on the real desktop.** After rebuild and reboot (mct_t6
+0.29.15, mct_t2 0.3.42, niri with the immediate cursor patches; LG at
+1080p120; Pulsar 8K mouse): the T6 sends nothing at idle (was 120 empty
+flips a second). `cursor_latency.sh t6 10`: desktop 11118 commits, 8767
+between frames, 5329 sent, 0.08 ms commit -> device; fullscreen video 8091 /
+6676 / 5881, 0.09 ms; window drag 10607 / 8297 / 4435, 0.14 ms; shapes 128
+at 0.64 ms, slot cache 164 hits, 6 uploads. During video the fast path works
+on real hardware (GPU rendering), unlike in the VM (llvmpipe).
