@@ -161,6 +161,47 @@ tested. Other Wayland compositors
 (wlroots for sway and Hyprland, mutter, KWin) would need their own version
 of step 1; mutter and KWin weren't measured here.
 
+## Prior work and other approaches (looked up 2026-10-15)
+
+- **In the kernel, async cursor updates through the atomic interface have
+  been proposed and not merged.** An RFC in 2018 added an `ASYNC_UPDATE`
+  flag to the atomic ioctl, with cursor updates as the motivation; Helen
+  Koike's RFC v3 (2019) hooked the existing `atomic_async_check/update` up
+  to `DRM_MODE_PAGE_FLIP_ASYNC`. What was merged later (Linux 6.8) is async
+  page flips through atomic, and those only allow changing a plane's
+  framebuffer, not its position. A 2026 Intel RFC makes async flips a
+  per-plane property, still framebuffer-only. KWin's developer wrote in 2023
+  that fixing this in the kernel "has been tried before, but noone has been
+  successful with it so far".
+- **KWin doesn't use the legacy call.** It commits from a separate thread
+  shortly (about 1.8 ms) before the display's refresh deadline and puts the
+  newest cursor position into that commit, and it can commit the cursor
+  separately when the picture isn't ready. On a graphics card, where the
+  cursor is picked up at the next refresh anyway, that gets close to what
+  the legacy call gives, while staying atomic. Other compositors (ShojiWM)
+  report going from over 30 ms to 3-6 ms the same way.
+- **Smithay** can already skip cursor-only updates with VRR (an option the
+  compositor chooses); niri doesn't skip them.
+
+What this means here: on a graphics card, "commit late with the newest
+cursor" (KWin) and "move the cursor with the legacy call" (our patch) end
+up close, since the card shows either at its next refresh. A USB display
+has no refresh the computer can see: mct's refresh deadline is a timer,
+and the adapter refreshes on its own clock. So committing just before
+mct's deadline would still hold a move for part of a frame, and sending it
+at once is what helps most. The legacy call is the only way to do that
+today. Upstream, smithay may prefer the KWin-style design; asking its
+maintainers before sending patches is the sensible first step.
+
+Sources:
+[RFC: ASYNC_UPDATE flag (2018)](https://lists.freedesktop.org/archives/dri-devel/2018-June/181513.html),
+[RFC v3: async_check/update with PAGE_FLIP_ASYNC (2019)](https://lkml.iu.edu/1904.1/05028.html),
+[atomic async page-flip (merged)](https://lwn.net/Articles/948826/),
+[RFC v3: per-plane async flip (2026)](https://ratatoskr.run/intel-gfx/2026/01/9269314/t),
+[KWin: getting rid of cursor stutter](https://zamundaaa.github.io/wayland/2023/08/29/getting-rid-of-cursor-stutter.html),
+[Wayland cursor lag notes](https://gist.github.com/generic-internet-user/e8eec46ce159571032115f6fb064523c),
+[smithay #1610](https://github.com/Smithay/smithay/issues/1610).
+
 ## Status
 
 | Part | State |
