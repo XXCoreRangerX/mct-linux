@@ -1,6 +1,6 @@
 # Cursor latency: X11, Wayland and the legacy cursor call
 
-> **Research and work in progress** (2026-10-15): why a mouse move takes longer to reach a USB display under Wayland compositors than under X11 or MCT's Windows driver, what mct does about it, and the compositor fix being built.
+> **Research and work in progress** (2026-10-15, final VM measurement added the same day): why a mouse move takes longer to reach a USB display under Wayland compositors than under X11 or MCT's Windows driver, what mct does about it, and the compositor fix being built.
 
 ## In short
 
@@ -32,10 +32,20 @@ means moving while a fullscreen 1080p50 video plays.
 | niri, mct | 9.1 / 16.5 | 13.5 / 21.1 | 9.1 / 16.6 |
 | sway, mct | 9.2 / 16.7 | 27.6 / 46.6 | 9.1 / 16.5 |
 | niri with a quick test patch that moves the cursor between frames, mct with async cursor moves | 0.42 / 14.2 | 9.0 / 16.0 | 0.60 / 9.1 |
+| **niri with the immediate cursor patches (below), mct 0.29.15** | **0.44 / 0.50** | 8.9 / 16.1 | **0.62 / 0.93** |
+| the same niri with the fast path off (`NIRI_IMMEDIATE_CURSOR=0`) | 9.3 / 16.9 | 14.0 / 21.5 | 9.1 / 16.7 |
 
-The last row is a first experiment. Typical moves are already at the X11
-level; the worst cases and the video case need the proper compositor change
-described below. sway with wlroots' legacy (non-atomic) backend measured
+With the patches, niri on an idle desktop matches X11 and MCT's Windows
+driver, worst cases included: every one of 6000 moves at 1000/s went out
+on its own, none waited for a frame.
+
+While a video plays, it doesn't help yet in this test. The moves do go out
+between frames, but they reach niri in bursts: in the VM, niri renders the
+video in software on its main thread, and input waits while it does (6400
+cursor moves in the 1000/s case, 4900 of them replaced by a newer one
+before going out). X11 in the same VM shows the same pattern. On real
+hardware, niri renders on the GPU and its main thread is far less busy, so
+this case still has to be measured outside the VM. sway with wlroots' legacy (non-atomic) backend measured
 the same as plain sway: it also moves the cursor only with each frame.
 
 The method, the safety measures and all the runs are in
@@ -118,5 +128,5 @@ of step 1; mutter and KWin weren't measured here.
 |---|---|
 | mct: no empty flips for cursor-only commits | ✅ mct_t6 0.29.14 / mct_t2 0.3.41 |
 | mct: cursor moves between frames (async cursor plane) | ✅ mct_t6 0.29.15 / mct_t2 0.3.42; a prototype measured in the VM |
-| smithay / niri fast path | 🚧 written, builds (niri's tests pass); not yet measured |
-| Measured with the final patches, T6 and tablet | to do |
+| smithay / niri fast path | ✅ measured in the VM: desktop at the Windows and X11 level; video case to be measured on real hardware |
+| Measured with the final patches | T6 in the VM done; the tablet and real hardware (video) to do |

@@ -143,9 +143,12 @@ cursor with the kernel's legacy cursor call, which doesn't wait.
 - **Driver side, done:** mct applies legacy cursor moves at once, even
   while a frame is in flight (mct_t6 0.29.15 / mct_t2 0.3.42), and sends no
   empty flips for cursor-only commits (0.29.14 / 0.3.41).
-- **Compositor side, being built:** a fast path for smithay and niri that
-  moves the cursor between frames with the legacy call. A first test in a
-  VM brought niri's typical move from 9 ms to 0.4 ms.
+- **Compositor side, patches for smithay and niri:** they move the cursor
+  between frames with the legacy call. Measured in a VM with a 1000 Hz
+  mouse: niri went from 9.3 / 16.9 ms (median / p95) to 0.44 / 0.50 ms on
+  the desktop, the level of X11 (0.41 / 0.47) and MCT's Windows driver
+  (0.39 / 0.48). On NixOS: the module's `niriImmediateCursor` option.
+  During video playback this still has to be measured on real hardware.
 
 Details, measurements and the plan:
 [cursor-latency.md](docs/research/cursor-latency.md).

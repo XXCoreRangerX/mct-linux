@@ -1277,3 +1277,24 @@ part is 0.28 ms. Reading the kernel, smithay 0.7 and niri 26.04 sources:
   compares those rows with its shadow, finds nothing changed and still sends
   an empty flip (T6 80 B, T2 23 B). On the host's niri at 1080p120 the T6
   `updates` counter grew by 120 per second, 80 B each, with the desktop idle.
+
+**Immediate cursor patches measured (VM, T6 at 1080p60, mct 0.29.15).**
+niri 26.04 with nix/niri-immediate-cursor.patch and smithay with
+nix/smithay-immediate-cursor.patch, the fast path on and off in the same
+build, against X11 + i3. Injection -> cursor packet on USB, median / p95 ms:
+
+| | desktop 1000/s | desktop 250/s | video 1000/s |
+|---|---|---|---|
+| niri, fast path off | 9.33 / 16.9 | 9.14 / 16.7 | 13.96 / 21.5 |
+| niri, fast path on | 0.44 / 0.50 | 0.62 / 0.93 | 8.89 / 16.1 |
+| X11 + i3 | 0.41 / 0.47 | 0.61 / 0.83 | 1.84 / 14.5 |
+| (MCT Windows, earlier run) | 0.39 / 0.48 | 0.49 / 0.70 | 0.51 / 5.7 |
+
+On the desktop, every move went out between frames (debugfs: 6000 commits,
+6000 "moves between frames", 1 replaced). During video, the moves went out
+between frames too (5640 of 6396) but came in bursts, so 4886 were replaced
+before sending, and commit -> device stayed 0.30 ms: niri's main thread
+renders the video with llvmpipe in the VM and handles input in between. To
+be measured on real hardware. No WARN or lockdep in the guest, no errors in
+niri's log, cursor shapes still change (slot cache hits), proxy blocked
+nothing, devices back with 0 errors. Lab: captures/vendor-vm/2026-10-15-cursor/t6-mct15-imm.
