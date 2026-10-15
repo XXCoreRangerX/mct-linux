@@ -101,12 +101,6 @@ struct mct_device {
 	int width, height;		/* current image, 0 while off */
 	int refresh;
 
-	/*
-	 * The update worker and the settle timer run on this device's own
-	 * high-priority queue: on the shared system queue a frame waited
-	 * ~0.3 ms for the worker to start (2026-10-15).
-	 */
-	struct workqueue_struct *wq;
 	struct work_struct work;	/* runs funcs->update */
 	struct delayed_work settle_work;	/* marks dirty and runs the worker */
 	int cur_size;

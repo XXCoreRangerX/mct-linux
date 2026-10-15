@@ -1241,3 +1241,14 @@ conversion 0.31 ms and USB queueing 1.81 ms per update since load. What's
 left that the driver can shorten without loss: the worker start (normal-
 priority workqueue) and the ~1 ms conversion of a full frame; the rest is
 the USB transfer of the frame.
+
+**High-priority update worker: no gain, taken out again.** mct_t6 0.29.12
+ran the update worker on a per-device WQ_HIGHPRI | WQ_UNBOUND queue. Same
+video, 20 s: 960 updates at 48 per second, commit -> worker 0.43 ms,
+commit -> on device 9.69 ms (baseline 0.32 / 9.14). Not comparable
+one-to-one: the T6 had moved from USB port 2-2 to 7-3 in the replug, and the
+system load (~4) and CPU clocks (powersave governor, balanced profile) vary.
+But "commit -> worker" starts when the commit begins copying the
+framebuffer into the shadow (`dirty_since` is taken before the row compare
+and copy, ~8 MB for a full 1080p frame), so it is mostly that copy, which no
+queue priority shortens. Removed in mct_t6 0.29.13 / mct_t2 0.3.40.
