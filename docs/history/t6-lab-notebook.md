@@ -1231,3 +1231,13 @@ a near-full 1080p frame, ~8.9 ms at the adapter's ~350 MB/s: the frame
 latency is almost all USB transfer. What's left to gain without loss is
 the ~1 ms of conversion, by converting band by band and sending each band
 at once (overlap); less data would need JPEG (lossy, and slower to decode).
+
+## 2026-10-15
+
+**Frame latency baseline before tuning (mct_t6 0.29.11, same fullscreen
+video, 20 s):** 1000 updates at 50 per second, none replaced; commit ->
+worker 0.32 ms, commit -> on device 9.14 ms (9.42 ms on 2026-10-14);
+conversion 0.31 ms and USB queueing 1.81 ms per update since load. What's
+left that the driver can shorten without loss: the worker start (normal-
+priority workqueue) and the ~1 ms conversion of a full frame; the rest is
+the USB transfer of the frame.
