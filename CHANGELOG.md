@@ -4,27 +4,49 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
-## Unreleased
+## 0.8.0 (2026-10-15)
 
-- Cursor moves between frames: the cursor plane supports asynchronous
-  updates, so a cursor move through the legacy cursor ioctl no longer
-  waits for the flip of a frame in flight. X11 already moved the cursor
-  this way; in a VM test, niri with a patch that moves the cursor between
-  frames (`NIRI_IMMEDIATE_CURSOR`) went from 9 ms to 0.4-0.6 ms (median,
-  1000 Hz mouse, T6 at 1080p60), the level of X11 and MCT's Windows driver.
-  debugfs counts these moves. mct_t6 0.29.15, mct_t2 0.3.42.
+Driver versions: mct_t6 0.29.15, mct_t2 0.3.42.
+
+**Cursor moves without waiting for a frame**
+- Under Wayland compositors a cursor move waited for the next frame: about
+  9 ms typical and 17 ms worst case at 60 Hz with a fast mouse, where X11
+  and MCT's Windows driver take about 0.4 ms. The reasons, the
+  measurements and the fix are in docs/research/cursor-latency.md.
+- The driver's cursor plane supports asynchronous updates: a cursor move
+  through the legacy cursor ioctl goes out at once, without waiting for the
+  flip of a frame in flight. debugfs counts these moves ("moves between
+  frames"); `tools/cursor_latency.sh` shows them per phase.
+- Patches for smithay and niri (`nix/smithay-immediate-cursor.patch`,
+  `nix/niri-immediate-cursor.patch`, niri 26.04) move the hardware cursor
+  between frames with that call, and turn themselves off on drivers that
+  don't apply such moves at once. On NixOS: the module's new
+  `niriImmediateCursor` option, with `niriFix`; `nix/niri.nix` builds niri
+  with all the patches (flake package `niri`).
+- Measured: in a VM with a 1000 Hz mouse, niri went from 9.3 / 16.9 ms
+  (median / p95) to 0.44 / 0.50 ms on the T6, the level of X11 and the
+  Windows driver. On real hardware about 80% of moves on the T6 and 92% on
+  the tablet go out between frames, also during fullscreen video, 0.03-0.1
+  ms from niri's commit to the device.
 - No update, and so no empty flip, for commits where no damaged row really
-  changed. niri (smithay) sends the last frame's damage again with every
-  cursor-only commit: the T6 got an 80-byte empty flip per cursor move and,
-  on an idle niri desktop at 1080p120, 120 a second; the tablet 23 bytes
-  per move. debugfs counts these commits ("without a change").
-  mct_t6 0.29.14, mct_t2 0.3.41.
-- README and docs/research/vendor-vm-comparison.md: mct measured against
-  MCT's Windows driver (both chips) and its Linux EVDI daemon (T6) through
-  the same VM path: cursor latency and bytes, video, traffic at rest.
-- README: what the two cursor times measure (the T6's until the adapter
-  confirms a control request, the tablet's until its USB endpoint has a
-  bulk write), so they aren't read as one being faster.
+  changed: niri sends the last frame's damage again with every cursor-only
+  commit, which cost the T6 an 80-byte flip per move and 120 a second on an
+  idle desktop at 120 Hz. debugfs counts these commits ("without a
+  change").
+
+**Compared with the vendor drivers, measured**
+- MCT's Windows driver (both chips) and its Linux EVDI daemon (T6) measured
+  against mct through the same VM path, with firmware writes blocked:
+  cursor latency and bytes, video, traffic at rest
+  (docs/research/vendor-vm-comparison.md, README). mct sends nothing at
+  rest and paces video most steadily; Windows' T2 driver re-sends the
+  cursor image every 3 s.
+
+**Tools and docs**
+- `tools/make_test_video.sh`: the 1080p50 test video used for the video
+  phases.
+- README: what the T6 and tablet cursor times measure, a section on cursor
+  latency under Wayland.
 
 ## 0.7.0 (2026-10-14)
 
