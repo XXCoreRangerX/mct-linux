@@ -215,7 +215,7 @@ above).
 |---|---|
 | [`kernel/`](kernel) | the driver, module `mct`: a shared DRM core (`mct_drv.c`) and a backend per chip (`mct_t2.c`, `mct_t6.c`) |
 | [`app/`](app) | MCT Display Manager (GTK 4 window and tray icon) and `mctctl` (command line) |
-| [`nix/`](nix) | flake package and NixOS module, two optional niri patches |
+| [`nix/`](nix) | flake package and NixOS module, optional niri and smithay patches |
 | [`packaging/`](packaging) | release files: DKMS config, udev rules, the app's install script, the release build script (run by [`.github/workflows/`](.github/workflows) on a version tag) |
 | [`docs/`](docs) | protocol references, limits, driver notes, lab notes ([index](docs/README.md)) |
 | [`tools/`](tools) | test and research scripts ([index](tools/README.md)) |
@@ -301,6 +301,7 @@ without a reboot).
 | `driver = "evdi"` | the EVDI + wacom-t2d route for the tablet instead of the kernel driver |
 | `consoleMap` | text consoles on the tablet (adds `fbcon=map:...`, e.g. `"01"` for every second VT) |
 | `niriFix` | build niri with the two patches in `nix/`: drop a removed USB display's output; render display-only devices into system memory, which makes reading frames many times faster |
+| `niriImmediateCursor` | with `niriFix`, also build niri and smithay with the immediate cursor patches: pointer moves go to the hardware cursor at once instead of with the next frame ([cursor-latency.md](docs/research/cursor-latency.md)); off by default until measured |
 | `app.enable`, `app.tray` | install MCT Display Manager and `mctctl`; start the tray icon with the session |
 
 ## Settings

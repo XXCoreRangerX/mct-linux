@@ -50,6 +50,20 @@ in
         NIRI_DISPLAY_ONLY_PRIMARY_ALLOC=1 forces the old behaviour.
       '';
     };
+    niriImmediateCursor = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        With niriFix: also build niri with nix/niri-immediate-cursor.patch
+        and smithay with nix/smithay-immediate-cursor.patch, which move the
+        hardware cursor on every pointer move with the legacy cursor call
+        instead of waiting for the next frame (docs/research/cursor-latency.md).
+        Drivers that apply such moves at once (mct since mct_t6 0.29.15 /
+        mct_t2 0.3.42, amdgpu, i915) then show cursor moves without frame
+        delay; on others it turns itself off. NIRI_IMMEDIATE_CURSOR=0 turns
+        it off at run time.
+      '';
+    };
     lossy = lib.mkOption {
       type = lib.types.ints.between 0 8;
       default = 0;
@@ -124,12 +138,9 @@ in
     })
 
     (lib.mkIf cfg.niriFix {
-      programs.niri.package = pkgs.niri.overrideAttrs (o: {
-        patches = (o.patches or [ ]) ++ [
-          ./niri-device-removed-fix.patch
-          ./niri-display-only-sysmem.patch
-        ];
-      });
+      programs.niri.package = pkgs.callPackage ./niri.nix {
+        immediateCursor = cfg.niriImmediateCursor;
+      };
     })
 
     (lib.mkIf (cfg.driver == "kernel") {

@@ -1,0 +1,203 @@
+diff --git a/src/backend/drm/compositor/mod.rs b/src/backend/drm/compositor/mod.rs
+index 289ce5bf..563b0c75 100644
+--- a/src/backend/drm/compositor/mod.rs
++++ b/src/backend/drm/compositor/mod.rs
+@@ -852,6 +852,20 @@ struct CursorState<G: AsFd + 'static> {
+     pixman_renderer: Option<PixmanRenderer>,
+ }
+ 
++/// State of [`DrmCompositor::move_cursor_immediately`]
++#[derive(Debug, Default)]
++struct ImmediateCursor {
++    /// Turned off: the driver doesn't apply legacy cursor moves at once, or refused one
++    disabled: bool,
++    /// Consecutive moves that took longer than [`IMMEDIATE_CURSOR_SLOW`]
++    slow: u8,
++}
++
++/// A legacy cursor move that takes longer than this waited for the frame in flight
++const IMMEDIATE_CURSOR_SLOW: std::time::Duration = std::time::Duration::from_millis(2);
++/// After this many slow moves in a row, immediate cursor moves are turned off
++const IMMEDIATE_CURSOR_MAX_SLOW: u8 = 3;
++
+ #[derive(Debug, thiserror::Error, Copy, Clone)]
+ enum ExportBufferError {
+     #[error("the buffer has no underlying storage")]
+@@ -1075,6 +1089,7 @@ where
+ 
+     cursor_size: Size<i32, Physical>,
+     cursor_state: Option<CursorState<G>>,
++    immediate_cursor: ImmediateCursor,
+ 
+     element_states: IndexMap<Id, ElementState<<F as ExportFramebuffer<A::Buffer>>::Framebuffer>>,
+     previous_element_states: IndexMap<Id, ElementState<<F as ExportFramebuffer<A::Buffer>>::Framebuffer>>,
+@@ -1257,6 +1272,7 @@ where
+                         framebuffer_exporter,
+                         cursor_size,
+                         cursor_state,
++                        immediate_cursor: ImmediateCursor::default(),
+                         surface,
+                         damage_tracker,
+                         output_mode_source,
+@@ -1439,6 +1455,7 @@ where
+             framebuffer_exporter,
+             cursor_size,
+             cursor_state,
++            immediate_cursor: ImmediateCursor::default(),
+             surface,
+             damage_tracker,
+             output_mode_source,
+@@ -1677,6 +1694,153 @@ where
+         Ok((swapchain, use_opaque))
+     }
+ 
++    /// Moves the hardware cursor to the current location of `element` right away,
++    /// without rendering or committing a frame.
++    ///
++    /// Atomic commits are synchronized to frames, and only one can be pending: while a
++    /// frame is in flight, a cursor on the cursor plane can only move with the next frame.
++    /// This moves it with the legacy cursor ioctl instead, which the kernel treats as
++    /// unsynchronized: drivers that support asynchronous cursor updates apply it at once,
++    /// even while a frame is in flight.
++    ///
++    /// Only a pure move is done: `element` has to be the element on the cursor plane in
++    /// the latest frame, unchanged (same commit and size, same output scale and transform),
++    /// and the plane has to stay on the output. Anything else returns `Ok(false)` and is
++    /// left to the next frame, as is the cursor in every case when this returns an error.
++    /// Render the next frame as usual either way; it carries the same position, and if
++    /// nothing else changed it has nothing to commit.
++    ///
++    /// The kernel doesn't tell whether a driver applies legacy cursor moves at once. A
++    /// driver that doesn't makes the call wait for the frame in flight, so after a few
++    /// slow moves in a row (or one that fails) this turns itself off for this compositor.
++    pub fn move_cursor_immediately<E>(&mut self, element: &E) -> Result<bool, DrmError>
++    where
++        E: Element,
++    {
++        if self.immediate_cursor.disabled
++            || !self.surface.is_active()
++            || self.planes.cursor.len() != 1
++            || element.kind() != Kind::Cursor
++        {
++            return Ok(false);
++        }
++        let Some(cursor_state) = self.cursor_state.as_ref() else {
++            return Ok(false);
++        };
++        let Ok((current_size, output_scale, output_transform)) =
++            <(Size<i32, Physical>, Scale<f64>, Transform)>::try_from(&self.output_mode_source)
++        else {
++            return Ok(false);
++        };
++        let output_transform = output_transform.invert();
++        let output_geometry: Rectangle<_, Physical> =
++            Rectangle::from_size(output_transform.transform_size(current_size));
++        if cursor_state.previous_output_transform != Some(output_transform)
++            || cursor_state.previous_output_scale != Some(output_scale)
++        {
++            return Ok(false);
++        }
++
++        // the frame the cursor plane will show last: queued, else pending, else current
++        let plane = self.planes.cursor[0].handle;
++        let latest = self
++            .queued_frame
++            .as_ref()
++            .map(|queued| &queued.prepared_frame.frame)
++            .or_else(|| self.pending_frame.as_ref().map(|pending| &pending.frame))
++            .unwrap_or(&self.current_frame);
++        let Some((element_state, config)) = latest
++            .plane_state(plane)
++            .and_then(|state| state.element_state.as_ref().zip(state.config.as_ref()))
++        else {
++            return Ok(false);
++        };
++        let element_size = output_transform.transform_size(element.geometry(output_scale).size);
++        if element_state.id != *element.id()
++            || element_state.commit != element.current_commit()
++            || element_state.cursor_size != Some(element_size)
++        {
++            return Ok(false);
++        }
++
++        // the same location as try_assign_cursor_plane computes
++        let cursor_plane_size = config.properties.dst.size;
++        let location = output_transform.transform_point_in(element.location(output_scale), &output_geometry.size)
++            - output_transform.transform_point_in(Point::default(), &cursor_plane_size);
++        if location == config.properties.dst.loc {
++            return Ok(true);
++        }
++        // a legacy move sizes the plane like its framebuffer, and a plane that leaves the
++        // output can't be updated asynchronously
++        let src_size = config.properties.src.size;
++        if src_size.w != cursor_plane_size.w as f64
++            || src_size.h != cursor_plane_size.h as f64
++            || !Rectangle::new(location, cursor_plane_size).overlaps(Rectangle::from_size(current_size))
++        {
++            return Ok(false);
++        }
++
++        let start = std::time::Instant::now();
++        #[allow(deprecated)]
++        let res = self
++            .surface
++            .device_fd()
++            .move_cursor(self.surface.crtc(), (location.x, location.y));
++        let took = start.elapsed();
++        if let Err(err) = res {
++            info!("legacy cursor move failed, turning immediate cursor moves off: {err}");
++            self.immediate_cursor.disabled = true;
++            return Err(DrmError::Access(AccessError {
++                errmsg: "Failed to move the cursor",
++                dev: self.surface.dev_path(),
++                source: err,
++            }));
++        }
++        if took > IMMEDIATE_CURSOR_SLOW {
++            self.immediate_cursor.slow += 1;
++            if self.immediate_cursor.slow >= IMMEDIATE_CURSOR_MAX_SLOW {
++                info!(
++                    "legacy cursor moves wait for frames ({took:?}), the driver doesn't apply them \
++                     at once: turning immediate cursor moves off"
++                );
++                self.immediate_cursor.disabled = true;
++            }
++        } else {
++            self.immediate_cursor.slow = 0;
++        }
++
++        // keep what we know of the plane in line with what the kernel has now
++        let frames = [
++            Some(&mut self.current_frame),
++            self.pending_frame.as_mut().map(|pending| &mut pending.frame),
++            self.queued_frame
++                .as_mut()
++                .map(|queued| &mut queued.prepared_frame.frame),
++        ];
++        for frame in frames.into_iter().flatten() {
++            if let Some(state) = frame.plane_state_mut(plane) {
++                if state
++                    .element_state
++                    .as_ref()
++                    .is_some_and(|element_state| element_state.id == *element.id())
++                {
++                    if let Some(config) = state.config.as_mut() {
++                        config.properties.dst.loc = location;
++                    }
++                }
++            }
++        }
++        trace!("moved the cursor plane to {location:?} without a frame");
++        Ok(true)
++    }
++
++    /// Whether [`DrmCompositor::move_cursor_immediately`] is still in use
++    ///
++    /// It turns itself off on drivers that don't apply legacy cursor moves at once.
++    pub fn immediate_cursor_available(&self) -> bool {
++        !self.immediate_cursor.disabled
++    }
++
+     /// Render the next frame
+     ///
+     /// - `elements` for this frame in front-to-back order

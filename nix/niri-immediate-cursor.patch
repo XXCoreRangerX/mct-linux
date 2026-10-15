@@ -1,0 +1,154 @@
+diff --git a/src/backend/mod.rs b/src/backend/mod.rs
+index 49fbc6b..a7e1660 100644
+--- a/src/backend/mod.rs
++++ b/src/backend/mod.rs
+@@ -83,6 +83,14 @@ impl Backend {
+         }
+     }
+ 
++    /// Moves the hardware cursor on `output` right away, ahead of the next frame, where the
++    /// backend can.
++    pub fn move_cursor_immediately(&mut self, niri: &mut Niri, output: &Output) {
++        if let Backend::Tty(tty) = self {
++            tty.move_cursor_immediately(niri, output);
++        }
++    }
++
+     pub fn render(
+         &mut self,
+         niri: &mut Niri,
+diff --git a/src/backend/tty.rs b/src/backend/tty.rs
+index fe94f4d..1dd9e7f 100644
+--- a/src/backend/tty.rs
++++ b/src/backend/tty.rs
+@@ -1891,6 +1891,67 @@ impl Tty {
+         Some(f(renderer.as_gles_renderer()))
+     }
+ 
++    /// Moves the hardware cursor on `output` right away, without waiting for the next frame.
++    ///
++    /// A frame commit carries the cursor position, and only one frame can be in flight, so
++    /// with frames alone a pointer move waits for the frame in flight to be shown first:
++    /// up to a refresh interval. Smithay can move the cursor plane in between with the
++    /// legacy cursor ioctl, which drivers with asynchronous cursor updates apply at once.
++    /// Only a pure move of an unchanged cursor on the cursor plane is done here; the
++    /// redraw queued by the caller still renders the frame as usual.
++    pub fn move_cursor_immediately(&mut self, niri: &mut Niri, output: &Output) {
++        let _span = tracy_client::span!("Tty::move_cursor_immediately");
++
++        if !niri.pointer_visibility.is_visible() {
++            return;
++        }
++        // With VRR, cursor moves are kept off the frame timing on purpose.
++        if niri
++            .output_state
++            .get(output)
++            .is_none_or(|state| state.frame_clock.vrr())
++        {
++            return;
++        }
++
++        let Some(tty_state) = output.user_data().get::<TtyOutputState>() else {
++            return;
++        };
++        let Some(device) = self.devices.get_mut(&tty_state.node) else {
++            return;
++        };
++        if !device.drm.is_active() {
++            return;
++        }
++        let Some(surface) = device.surfaces.get_mut(&tty_state.crtc) else {
++            return;
++        };
++        if !surface.compositor.immediate_cursor_available() {
++            return;
++        }
++
++        let mut renderer = match self.gpu_manager.renderer(
++            &self.primary_render_node,
++            &device.render_node.unwrap_or(self.primary_render_node),
++            surface.compositor.format(),
++        ) {
++            Ok(renderer) => renderer,
++            Err(_) => return,
++        };
++
++        // The same elements as the frame renders for the pointer. Only a single one (no
++        // drag-and-drop icon, no cursor subsurfaces) can be the cursor plane alone.
++        let mut elements = Vec::new();
++        niri.render_pointer(&mut renderer, output, &mut |elem| elements.push(elem));
++        let [element] = elements.as_slice() else {
++            return;
++        };
++
++        if let Err(err) = surface.compositor.move_cursor_immediately(element) {
++            debug!("error moving the cursor immediately: {err:?}");
++        }
++    }
++
+     pub fn render(
+         &mut self,
+         niri: &mut Niri,
+diff --git a/src/input/mod.rs b/src/input/mod.rs
+index f1ad493..2ffc83c 100644
+--- a/src/input/mod.rs
++++ b/src/input/mod.rs
+@@ -2385,6 +2385,28 @@ impl State {
+         }
+     }
+ 
++    /// Moves the hardware cursor right away on the output under it, ahead of the redraw.
++    ///
++    /// Off with `NIRI_IMMEDIATE_CURSOR=0`.
++    fn move_cursor_immediately(&mut self) {
++        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++        if !*ENABLED.get_or_init(|| {
++            std::env::var_os("NIRI_IMMEDIATE_CURSOR").is_none_or(|value| value != "0")
++        }) {
++            return;
++        }
++
++        let pos = self
++            .niri
++            .tablet_cursor_location
++            .unwrap_or_else(|| self.niri.seat.get_pointer().unwrap().current_location());
++        let Some((output, _)) = self.niri.output_under(pos) else {
++            return;
++        };
++        let output = output.clone();
++        self.backend.move_cursor_immediately(&mut self.niri, &output);
++    }
++
+     fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
+         let was_inside_hot_corner = self.niri.pointer_inside_hot_corner;
+         // Any of the early returns here mean that the pointer is not inside the hot corner.
+@@ -2630,7 +2652,8 @@ impl State {
+             }
+         }
+ 
+-        // Redraw to update the cursor position.
++        // Move the hardware cursor now, then redraw to update the cursor position.
++        self.move_cursor_immediately();
+         // FIXME: redraw only outputs overlapping the cursor.
+         self.niri.queue_redraw_all();
+     }
+@@ -2728,7 +2751,8 @@ impl State {
+             }
+         }
+ 
+-        // Redraw to update the cursor position.
++        // Move the hardware cursor now, then redraw to update the cursor position.
++        self.move_cursor_immediately();
+         // FIXME: redraw only outputs overlapping the cursor.
+         self.niri.queue_redraw_all();
+     }
+@@ -3572,7 +3596,8 @@ impl State {
+             self.niri.tablet_cursor_location = Some(pos);
+         }
+ 
+-        // Redraw to update the cursor position.
++        // Move the hardware cursor now, then redraw to update the cursor position.
++        self.move_cursor_immediately();
+         // FIXME: redraw only outputs overlapping the cursor.
+         self.niri.queue_redraw_all();
+     }

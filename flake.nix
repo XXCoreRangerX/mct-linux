@@ -20,6 +20,8 @@
         mct-kmod-6_12 = pkgs.callPackage ./nix/kmod.nix { inherit (pkgs.linuxPackages_6_12) kernel; };
         mct-kmod-6_18 = pkgs.callPackage ./nix/kmod.nix { inherit (pkgs.linuxPackages_6_18) kernel; };
         mct-app = pkgs.callPackage ./nix/mct-app.nix { };
+        # niri with the USB display patches and immediate cursor moves
+        niri = pkgs.callPackage ./nix/niri.nix { };
         default = self.packages.${system}.mct-kmod;
       };
 

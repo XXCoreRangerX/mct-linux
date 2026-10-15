@@ -100,8 +100,15 @@ empty flip to the device.
 4. Turn it off where it could interfere: variable refresh rate, the cursor
    crossing to another output, rotated outputs until tested.
 
-The patches will be in this repository with a Nix overlay for niri, and
-offered upstream to smithay and niri once tested. Other Wayland compositors
+The patches are in this repository:
+[`nix/smithay-immediate-cursor.patch`](../../nix/smithay-immediate-cursor.patch)
+adds `DrmCompositor::move_cursor_immediately()` to smithay, and
+[`nix/niri-immediate-cursor.patch`](../../nix/niri-immediate-cursor.patch)
+calls it from niri on every pointer and tablet motion (niri 26.04, which
+uses smithay at `ff5fa7df`). On NixOS, the module's `niriFix` and
+`niriImmediateCursor` options build niri with them; `NIRI_IMMEDIATE_CURSOR=0`
+turns the fast path off at run time. They will be offered upstream once
+tested. Other Wayland compositors
 (wlroots for sway and Hyprland, mutter, KWin) would need their own version
 of step 1; mutter and KWin weren't measured here.
 
@@ -111,5 +118,5 @@ of step 1; mutter and KWin weren't measured here.
 |---|---|
 | mct: no empty flips for cursor-only commits | ✅ mct_t6 0.29.14 / mct_t2 0.3.41 |
 | mct: cursor moves between frames (async cursor plane) | ✅ mct_t6 0.29.15 / mct_t2 0.3.42; a prototype measured in the VM |
-| smithay / niri fast path | 🚧 being built |
+| smithay / niri fast path | 🚧 written, builds (niri's tests pass); not yet measured |
 | Measured with the final patches, T6 and tablet | to do |
