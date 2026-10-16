@@ -150,6 +150,7 @@ struct mct_device *mct_from_dev(struct device *dev);
 
 /* run the update worker; mark the shadow dirty first (under mdev->lock) */
 void mct_kick(struct mct_device *mdev);
+void mct_cursor_resend(struct mct_device *mdev);
 /* mark dirty and run the worker after ms, unless called again before */
 void mct_settle(struct mct_device *mdev, unsigned int ms);
 

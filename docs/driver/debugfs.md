@@ -75,3 +75,4 @@ goes dark for a few seconds each time.
 | `usb MB/s while busy` | throughput while sending |
 | `over budget` | updates larger than one 60 Hz frame's worth of data, largest payload |
 | `latency ms` | time from damage to the flip, as a histogram |
+| `recoveries` | background recoveries of a chip left in the middle of a command (after a failed frame, or found at probe or resume), "one running" while one runs (since mct_t2 0.3.43) |

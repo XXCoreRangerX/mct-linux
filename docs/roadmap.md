@@ -54,8 +54,12 @@ In this order:
    both devices. Done (0.8.0).
 2b. **Why 1080p120 used YUV 4:4:4 for video** where 1080p60 used NV12
    (seen in the VM comparison, not looked into).
-3. **T2 resync as a work item:** recovery from a confused chip (up to 45 s)
-   blocks probe and resume and holds `io_lock` (the cursor freezes).
+3. ~~**T2 resync as a work item:** recovery from a confused chip (up to 45 s)
+   blocks probe and resume and holds `io_lock` (the cursor freezes).~~
+   EDIT (2026-10-16): done in mct_t2 0.3.43; the recovery runs in the
+   background. Tested in the VM with cut frames (probe path); the
+   failed-frame and resume paths use the same work item but were not
+   provoked.
 4. **T2 frame latency statistics,** like the T6's.
 5. **Upstream readiness:** checkpatch, sparse, KUnit tests for the PLL,
    colour conversion and RLE.
@@ -98,11 +102,11 @@ In this order:
   unknown pen feature reports (read-only, needs an OK); reverse the macOS
   driver's `T2_startDDRclock` and DRAM phase fallback
   ([t6-vendor-review.md](research/t6-vendor-review.md) item 16).
-- **Resync as a work item**: the resync after an interrupted payload (up to
+- ~~**Resync as a work item**: the resync after an interrupted payload (up to
   45 s) runs in probe and resume, blocking the USB hub thread. After a
   failed frame it holds `io_lock` that long: commits no longer wait (the
   cursor goes out from the core's worker), but the cursor worker and
-  DPMS/suspend do.
+  DPMS/suspend do.~~ EDIT (2026-10-16): done, mct_t2 0.3.43.
 - **Soak test**: reloads, interrupted frames, replug, suspend, DPMS,
   brightness, console, lossy video.
 - **Lossy streaks** during heavy motion: column-aware tolerance (the

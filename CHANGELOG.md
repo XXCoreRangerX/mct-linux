@@ -4,6 +4,17 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
+## Unreleased
+
+- Trigger II: recovering a chip left in the middle of a command no longer
+  blocks. The recovery can take up to 45 s while the chip waits out its own
+  timeout; it held up probe and resume (the USB hub thread), and after a
+  failed frame it kept the tablet's I/O lock, so mode changes, DPMS and
+  cursor uploads waited for it. It now runs in the background: probe and
+  resume return at once, and what changes meanwhile (the picture, the
+  cursor, panel power) is applied when the chip answers again. `recoveries`
+  in sysfs and debugfs counts them. mct_t2 0.3.43.
+
 ## 0.8.0 (2026-10-15)
 
 Driver versions: mct_t6 0.29.15, mct_t2 0.3.42.

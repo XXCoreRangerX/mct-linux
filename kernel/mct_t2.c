@@ -49,6 +49,7 @@
 #include <drm/drm_gem_shmem_helper.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_print.h>
+#include <drm/drm_probe_helper.h>
 
 #include "mct.h"
 #include "mct_drv.h"
@@ -67,7 +68,7 @@ MODULE_PARM_DESC(half_motion, "Experimental, off by default. Default for new dev
 #define DRIVER_DESC	"MCT Trigger II USB display"
 #define DRIVER_MAJOR	0
 #define DRIVER_MINOR	3
-#define DRIVER_PATCH	42
+#define DRIVER_PATCH	43
 
 #define T2_WIDTH	1024
 #define T2_HEIGHT	600
@@ -146,9 +147,22 @@ struct mct_t2 {
 	u8 *hw[2];			/* what device buffers A and B hold */
 	bool hw_valid[2];
 
+	/*
+	 * Recovery of a chip left in the middle of a command (t2_resync, up to
+	 * 45 s) runs in recover_work, never in probe, resume or the update
+	 * worker. While recovering is set nothing else talks to EP2/EP3:
+	 * updates, cursor uploads and power changes are kept back (t2_io_lock)
+	 * and applied when the recovery is done.
+	 */
+	struct work_struct recover_work;
+	atomic_t recovering;
+	bool recover_init;		/* also run the device init (probe, resume) */
+	bool recover_stop;		/* unbind or suspend: give up */
+
 	struct {			/* debugfs statistics */
 		u64 lossy_tol[9];	/* lossy updates by highest tolerance used */
 		u64 updates, lossy_updates, rects, px_sent, bytes, errors;
+		u64 recoveries;		/* background recoveries started */
 		u64 half_updates;	/* sent at half resolution */
 		u64 over_budget, max_payload;	/* encoded bytes per update */
 		u64 latency[6];			/* damage to flip: <8 <16 <33 <50 <100 >=100 ms */
@@ -183,6 +197,24 @@ struct mct_t2 {
 static struct usb_device *t2_udev(struct mct_t2 *t2)
 {
 	return interface_to_usbdev(to_usb_interface(t2->base.dev.dev));
+}
+
+/*
+ * io_lock for everything but the recovery: false while a recovery runs
+ * (the caller keeps its change back; t2_recover_work applies it). The
+ * recovery sets the flag before it takes io_lock, so checking again under
+ * the lock closes the window in between.
+ */
+static bool t2_io_lock(struct mct_t2 *t2)
+{
+	if (atomic_read(&t2->recovering))
+		return false;
+	mutex_lock(&t2->io_lock);
+	if (atomic_read(&t2->recovering)) {
+		mutex_unlock(&t2->io_lock);
+		return false;
+	}
+	return true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -811,7 +843,8 @@ static int t2_wreg(struct mct_t2 *t2, u16 reg, u8 val)
 	const u8 cmd[6] = { 0x02, 0x00, 0x01, reg >> 8, reg & 0xff, val };
 	int ret;
 
-	mutex_lock(&t2->io_lock);
+	if (!t2_io_lock(t2))
+		return -EBUSY;
 	ret = t2_out(t2, T2_EP_CMD, cmd, sizeof(cmd));
 	mutex_unlock(&t2->io_lock);
 	return ret;
@@ -1014,6 +1047,19 @@ static void t2_drain_replies(struct mct_t2 *t2)
 			break;
 }
 
+/* whether the command parser waits for the rest of a payload: -ETIMEDOUT */
+static int t2_parser_check(struct mct_t2 *t2)
+{
+	u8 val;
+	int ret;
+
+	mutex_lock(&t2->io_lock);
+	t2_drain_replies(t2);
+	ret = t2_read_reg(t2, 0xfeb0, &val, T2_RESYNC_READ_MS);
+	mutex_unlock(&t2->io_lock);
+	return ret;
+}
+
 static int t2_resync(struct mct_t2 *t2)
 {
 	struct usb_device *udev = t2_udev(t2);
@@ -1029,10 +1075,14 @@ static int t2_resync(struct mct_t2 *t2)
 	if (ret != -ETIMEDOUT)
 		goto out;
 
-	drm_warn(&t2->base.dev, "device busy in the middle of a command, completing it (may take 30 s)\n");
+	drm_warn(&t2->base.dev, "device busy in the middle of a command, completing it in the background (may take 30 s)\n");
 	deadline = ktime_add_ms(ktime_get(), T2_RESYNC_DEADLINE_MS);
 	for (sent = 0; sent < T2_RESYNC_MAX && ktime_before(ktime_get(), deadline);
 	     sent += T2_CHUNK) {
+		if (READ_ONCE(t2->recover_stop)) {
+			ret = -ECANCELED;
+			goto out;
+		}
 		ret = t2_out(t2, T2_EP_FB, NULL, T2_CHUNK);
 		/*
 		 * A chunk can stall once the payload has completed inside it: the
@@ -1130,6 +1180,88 @@ static int t2_hw_init(struct mct_t2 *t2)
 	}
 	drm_err(&t2->base.dev, "device init did not take\n");
 	return -EIO;
+}
+
+/*
+ * Finish a cut command (and with init, set the device up again) without
+ * blocking probe, resume or the update worker. What was kept back in the
+ * meantime goes out afterwards: the power state, the whole picture, the
+ * cursor.
+ */
+static void t2_recover_work(struct work_struct *work)
+{
+	struct mct_t2 *t2 = container_of(work, struct mct_t2, recover_work);
+	bool init = t2->recover_init;
+	int idx, ret = -ENODEV;
+
+	if (drm_dev_enter(&t2->base.dev, &idx)) {
+		ret = init ? t2_hw_init(t2) : t2_resync(t2);
+		drm_dev_exit(idx);
+	}
+	atomic_set(&t2->recovering, 0);
+	if (ret)
+		return;	/* t2_resync and t2_hw_init said why */
+
+	mutex_lock(&t2->power_lock);
+	t2_wreg(t2, T2_REG_PLL_EN, t2->crtc_on && !t2->bl_off);
+	mutex_unlock(&t2->power_lock);
+	mutex_lock(&t2->io_lock);
+	t2->hw_valid[0] = false;
+	t2->hw_valid[1] = false;
+	t2->cur.uploaded = false;
+	t2->cur.sized = false;
+	t2->cur.visible = false;
+	mutex_unlock(&t2->io_lock);
+	mutex_lock(&t2->base.lock);
+	t2->base.dirty = true;
+	mutex_unlock(&t2->base.lock);
+	drm_info(&t2->base.dev, "device back up after the recovery\n");
+	mct_kick(&t2->base);
+	mct_cursor_resend(&t2->base);
+	/* the panel's EDID is read by the init: let the compositor see it */
+	if (init)
+		drm_kms_helper_hotplug_event(&t2->base.dev);
+}
+
+/* start a recovery in the background, unless one runs already */
+static void t2_recover(struct mct_t2 *t2, bool init)
+{
+	if (atomic_xchg(&t2->recovering, 1))
+		return;
+	t2->recover_init = init;
+	t2->stats.recoveries++;
+	queue_work(system_long_wq, &t2->recover_work);
+}
+
+/* stop a recovery (unbind, suspend); waits for its current transfer */
+static void t2_recover_cancel(struct mct_t2 *t2)
+{
+	WRITE_ONCE(t2->recover_stop, true);
+	cancel_work_sync(&t2->recover_work);
+	WRITE_ONCE(t2->recover_stop, false);
+	atomic_set(&t2->recovering, 0);
+}
+
+/*
+ * Probe and resume: a device that is fine gets its init right away (about
+ * 1 s); one left in the middle of a command is registered as it is and
+ * recovered in the background, so the USB core isn't held up for 30 s.
+ * *deferred says whether the init was left to the recovery work.
+ */
+static int t2_start(struct mct_t2 *t2, bool *deferred)
+{
+	int ret = t2_parser_check(t2);
+
+	*deferred = false;
+	if (ret == -ETIMEDOUT) {
+		drm_info(&t2->base.dev, "device not answering, recovering it in the background\n");
+		*deferred = true;
+		atomic_set(&t2->recovering, 1);
+		t2->recover_init = true;
+		t2->stats.recoveries++;
+		return 0;
+	}
+	return t2_hw_init(t2);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1328,7 +1460,11 @@ static void t2_update(struct mct_device *mdev)
 		t2->base.dirty = true;	/* second pass for the other buffer */
 		mct_kick(mdev);
 	}
-	mutex_lock(&t2->io_lock);
+	if (!t2_io_lock(t2)) {
+		/* the recovery sends the whole picture when it is done */
+		mutex_unlock(&t2->base.lock);
+		return;
+	}
 	memcpy(t2->snap, t2->base.shadow, T2_WIDTH * T2_HEIGHT * 4);
 	if (t2->lut_on)
 		t2_apply_gamma(t2);
@@ -1345,20 +1481,9 @@ static void t2_update(struct mct_device *mdev)
 	}
 	mutex_unlock(&t2->io_lock);
 
-	/* finish the cut command on the device, then send whole frames again */
-	if (ret && ret != -ENODEV && ret != -ESHUTDOWN && drm_dev_enter(&t2->base.dev, &idx)) {
-		if (!t2_resync(t2)) {
-			mutex_lock(&t2->io_lock);
-			t2->hw_valid[0] = false;
-			t2->hw_valid[1] = false;
-			mutex_unlock(&t2->io_lock);
-			mutex_lock(&t2->base.lock);
-			t2->base.dirty = true;
-			mutex_unlock(&t2->base.lock);
-			mct_kick(mdev);
-		}
-		drm_dev_exit(idx);
-	}
+	/* finish the cut command on the device in the background */
+	if (ret && ret != -ENODEV && ret != -ESHUTDOWN)
+		t2_recover(t2, false);
 
 	if (!ret && damaged) {
 		static const int bounds[] = { 8, 16, 33, 50, 100 };
@@ -1437,7 +1562,8 @@ static int t2_cursor_upload(struct mct_t2 *t2)
 	};
 	int ret;
 
-	mutex_lock(&t2->io_lock);
+	if (!t2_io_lock(t2))
+		return -EBUSY;	/* sent again after the recovery */
 	ret = t2_out(t2, T2_EP_FB, hdr, sizeof(hdr));
 	if (!ret)
 		ret = t2_out(t2, T2_EP_FB, t2->cur.img, T2_CUR_BYTES);
@@ -1594,6 +1720,8 @@ static void t2_stats(struct mct_device *mdev, struct seq_file *m)
 	seq_printf(m, "latency ms       <8:%llu <16:%llu <33:%llu <50:%llu <100:%llu >=100:%llu\n",
 		   t2->stats.latency[0], t2->stats.latency[1], t2->stats.latency[2],
 		   t2->stats.latency[3], t2->stats.latency[4], t2->stats.latency[5]);
+	seq_printf(m, "recoveries       %llu%s\n", t2->stats.recoveries,
+		   atomic_read(&t2->recovering) ? " (one running)" : "");
 }
 
 /* ------------------------------------------------------------------ */
@@ -1638,6 +1766,7 @@ static DEVICE_ATTR_RO(_name)
 T2_SHOW_U64(updates, t2->stats.updates);
 T2_SHOW_U64(bytes, t2->stats.bytes);
 T2_SHOW_U64(errors, t2->stats.errors);
+T2_SHOW_U64(recoveries, t2->stats.recoveries);
 
 /* from the ID ROM; "-" if it wasn't read or its checksum is wrong */
 static ssize_t vram_mb_show(struct device *dev, struct device_attribute *attr, char *buf)
@@ -1750,6 +1879,7 @@ static struct attribute *t2_attrs[] = {
 	&dev_attr_updates.attr,
 	&dev_attr_bytes.attr,
 	&dev_attr_errors.attr,
+	&dev_attr_recoveries.attr,
 	&dev_attr_backlight.attr,
 	&dev_attr_lossy.attr,
 	&dev_attr_motion.attr,
@@ -1810,6 +1940,7 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	struct mct_t2 *t2;
 	struct drm_device *dev;
 	struct device *dma_dev;
+	bool deferred;
 	int ret;
 	static const u8 bulk_eps[] = { T2_EP_FB, T2_EP_CMD, T2_EP_MCU, T2_EP_IN, 0 };
 
@@ -1864,29 +1995,46 @@ static int t2_usb_probe(struct usb_interface *interface, const struct usb_device
 	ret = mct_shadow_alloc(&t2->base, T2_WIDTH, T2_HEIGHT);
 	if (ret)
 		return ret;
-	ret = t2_hw_init(t2);
+	INIT_WORK(&t2->recover_work, t2_recover_work);
+	ret = t2_start(t2, &deferred);
 	if (ret)
 		return ret;
-	return mct_register(&t2->base, interface);
+	ret = mct_register(&t2->base, interface);
+	if (ret)
+		return ret;
+	if (deferred)
+		queue_work(system_long_wq, &t2->recover_work);
+	return 0;
 }
 
 static void t2_usb_disconnect(struct usb_interface *interface)
 {
-	mct_unplug(to_mct(usb_get_intfdata(interface)));
+	struct mct_device *mdev = to_mct(usb_get_intfdata(interface));
+
+	t2_recover_cancel(to_t2(mdev));
+	mct_unplug(mdev);
 }
 
 static int t2_suspend(struct usb_interface *interface, pm_message_t message)
 {
-	return mct_suspend(to_mct(usb_get_intfdata(interface)));
+	struct mct_device *mdev = to_mct(usb_get_intfdata(interface));
+
+	/* resume checks the device again */
+	t2_recover_cancel(to_t2(mdev));
+	return mct_suspend(mdev);
 }
 
 static int t2_resume(struct usb_interface *interface)
 {
 	struct mct_device *mdev = to_mct(usb_get_intfdata(interface));
+	struct mct_t2 *t2 = to_t2(mdev);
+	bool deferred;
 	int ret;
 
 	/* resume the DRM side even if the device stays dark */
-	ret = t2_hw_init(to_t2(mdev));
+	ret = t2_start(t2, &deferred);
+	if (deferred)
+		queue_work(system_long_wq, &t2->recover_work);
 	return mct_resume(mdev) ?: ret;
 }
 

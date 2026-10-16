@@ -111,6 +111,17 @@ static void mct_cursor_work(struct work_struct *work)
 	}
 }
 
+/* send the cursor state again: the device lost it (a chip re-init) */
+void mct_cursor_resend(struct mct_device *mdev)
+{
+	mutex_lock(&mdev->cur_lock);
+	if (!mdev->cur_pending)
+		mdev->cur_since = ktime_get();
+	mdev->cur_pending = true;
+	mutex_unlock(&mdev->cur_lock);
+	queue_work(system_highpri_wq, &mdev->cur_work);
+}
+
 static void mct_stop_updates(struct mct_device *mdev)
 {
 	/* the worker re-arms the settle timer and the timer queues the worker */

@@ -246,6 +246,18 @@ stops taking data and answers only after an internal timeout of about
 15-30 s; the driver waits for it, with a 45 s deadline (since 0.3.17). A USB
 reset of the stuck chip is worse (it stops answering control requests until
 a power cycle or replug), so the driver never sends one.
+
+Since 0.3.43 that wait runs in the background (`recover_work`). Probe and
+resume check the parser with a 200 ms register read: a chip that answers
+gets the init right away, one that doesn't is registered as it is and
+recovered (padding, then the init) by the work item. A frame that fails
+starts the same work item, without the init. While it runs, `recovering`
+is set and nothing else uses EP2 or EP3 (`t2_io_lock`): updates, cursor
+uploads and panel power changes are kept back, and when the chip answers
+again the work item sets the panel power, sends the whole picture and the
+cursor, and (after an init) sends a hotplug event for the panel's EDID.
+Unbind and suspend stop a running recovery. `recoveries` in sysfs and
+debugfs counts them.
 `tools/t2_recovery_test.py` tests the recovery; the soak results and the
 experiments behind it (0.3.13 to 0.3.17) are in
 [t2-lab-notebook.md](../history/t2-lab-notebook.md).

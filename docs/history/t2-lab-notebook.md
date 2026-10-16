@@ -427,3 +427,27 @@ hovering 2362 between frames, 96 shapes at 0.79 ms. One shape took 28.8 ms
 during a (poorly done) window drag: shape uploads (0x12 on EP2) take io_lock
 and wait for a frame in progress; moves (EP4 lists) don't. Interleaving a
 cursor upload into a frame's payload would desync the chip, so this stays.
+
+## 2026-10-16
+
+**Recovery in the background (mct_t2 0.3.43).** The resync of a chip left
+mid-command moved from probe, resume and the update worker into a work item
+(`t2_recover_work`); while it runs, updates, cursor uploads and panel power
+are kept back and applied afterwards. Tested in a VM (the tablet's display
+function through the filtering usb-redir proxy, the pen not attached) with
+`tools/t2_recovery_test.py`, which unbinds, cuts a full-screen 0x13 frame at
+a random point, binds again and waits for the recovery:
+
+- clean unbind/bind: bind 1.1 s (init in probe, as before), 2/2 pass;
+- cut frames: bind 0.26 s every time, 5/5 pass. The chip answered again
+  after 3-5 s in four cycles and after 30 s in one (its own timeout; the
+  bind still returned in 0.26 s), "device back up" about 1 s after that;
+- no kernel warnings, no proxy blocks, the device back on the host with 0
+  errors.
+
+The first runs failed in the test tool, not the driver: it waited only for
+the connector (which comes up at bind now), and it filtered the kernel log
+for "mct_t2", which the driver's messages haven't contained since the two
+drivers became one module ("mct 1-2:1.0: [drm] ..."). Both fixed. Not
+provoked: a frame failing on its own, and resume with a stuck chip (same
+work item). Lab: captures/vendor-vm/2026-10-16-t2-recovery/.

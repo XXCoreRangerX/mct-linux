@@ -6,6 +6,8 @@ Each cycle unbinds the display interface from mct_t2, optionally leaves the
 T2 firmware halfway through a 0x13 frame (header plus part of its payload),
 then binds the driver again and checks the kernel log and the DRM connector:
 the driver must recover (or find the device idle), initialize and connect.
+Since mct_t2 0.3.43 the recovery runs in the background: binding must return
+within a few seconds, and "device back up after the recovery" follows.
 
 The interface is always rebound on exit, including on errors and Ctrl-C.
 Needs write access to /sys/bus/usb/drivers/mct/{bind,unbind} and to the
@@ -37,6 +39,23 @@ def connector_status():
     return st[0] if st else "absent"
 
 
+def recoveries(intf):
+    try:
+        return int(open(f"/sys/bus/usb/devices/{intf}/mct/recoveries").read())
+    except (OSError, ValueError):
+        return 0
+
+
+DONE = ("back up after the recovery", "does not respond", "init did not take", "init failed")
+
+
+def recovery_running(intf, rec0, cursor):
+    """A background recovery started (the counter went up) and hasn't ended in the log."""
+    if recoveries(intf) <= rec0:
+        return False
+    return not any(d in l for l in kernel_log_after(cursor) for d in DONE)
+
+
 def journal_cursor():
     out = subprocess.run(["journalctl", "-k", "-n", "0", "--show-cursor", "--no-pager"],
                          capture_output=True, text=True).stdout
@@ -47,7 +66,8 @@ def kernel_log_after(cursor):
     """Kernel messages after a journal cursor (immune to wall-clock jumps)."""
     out = subprocess.run(["journalctl", "-k", "--no-pager", "-o", "cat", "--after-cursor", cursor],
                          capture_output=True, text=True).stdout
-    return [l for l in out.splitlines() if "mct_t2" in l]
+    # "mct <interface>: [drm] ..." and "[drm] Initialized mct_t2 ..."
+    return [l for l in out.splitlines() if "mct" in l]
 
 
 def interrupt_frame(fraction):
@@ -78,15 +98,24 @@ def cycle(intf, clean):
     frac = random.uniform(0.1, 0.9)
     if not clean:
         left = interrupt_frame(frac)
+    rec0 = recoveries(intf)
+    t0 = time.monotonic()
     sysfs_write("bind", intf)
-    for _ in range(240):                    # init takes about 1 s; recovery 3 s, or ~30 s
-        time.sleep(0.25)                    # when the chip waits out its own timeout
-        if connector_status() == "connected":
+    bind_s = time.monotonic() - t0          # probe: must not wait for the recovery
+    # init takes about 1 s; a recovery 3 s, or ~30 s when the chip waits out
+    # its own timeout, in the background since mct_t2 0.3.43
+    for _ in range(320):
+        time.sleep(0.25)
+        if connector_status() == "connected" and not recovery_running(intf, rec0, cursor):
             break
     time.sleep(1)
     log = kernel_log_after(cursor)
     return {
         "frac": round(frac, 3),
+        "bind_s": round(bind_s, 2),
+        "back_up": any("back up after the recovery" in l for l in log),
+        "recoveries": recoveries(intf) - rec0,
+        "still_running": recovery_running(intf, rec0, cursor),
         "left": left,
         "bound": bound(intf),
         "connector": connector_status(),
@@ -109,11 +138,16 @@ def main():
     try:
         for i in range(args.cycles):
             r = cycle(args.intf, args.clean)
+            recovered = r["recovered"] or r["recoveries"] > 0
             good = (r["bound"] and r["connector"] == "connected" and r["initialized"]
-                    and not r["errors"] and (args.clean or r["recovered"]))
+                    and not r["errors"] and r["bind_s"] < 5 and not r["still_running"]
+                    and (args.clean or recovered)
+                    and (not r["recoveries"] or r["back_up"]))
             ok += good
             print(f"cycle {i + 1}: {'PASS' if good else 'FAIL'}  frac={r['frac']} left={r['left']}  "
-                  f"recovered={r['recovered']} connector={r['connector']} errors={r['errors']}",
+                  f"bind={r['bind_s']}s recovered={r['recovered']} recoveries={r['recoveries']} "
+                  f"back_up={r['back_up']} still_running={r['still_running']} "
+                  f"connector={r['connector']} errors={r['errors']}",
                   flush=True)
             if not good:
                 break

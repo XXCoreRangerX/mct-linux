@@ -69,6 +69,8 @@ Description:
 
 		backlight	name of the backlight device in
 				/sys/class/backlight/, or "-"
+		recoveries	recoveries of a chip left in the middle of
+				a command (since mct_t2 0.3.43)
 
 		Read-write:
 
