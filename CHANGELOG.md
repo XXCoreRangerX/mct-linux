@@ -4,7 +4,9 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
-## Unreleased
+## 0.8.1 (2026-10-16)
+
+Driver versions: mct_t6 0.29.15, mct_t2 0.3.43.
 
 - Trigger II: recovering a chip left in the middle of a command no longer
   blocks. The recovery can take up to 45 s while the chip waits out its own
