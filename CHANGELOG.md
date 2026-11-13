@@ -4,6 +4,12 @@ The package version (nix/kmod.nix) counts releases of the module as a whole;
 each backend has its own DRM driver version (`mct_t2`, `mct_t6`, shown by
 drm_info and in the kernel log at probe).
 
+## Unreleased
+
+- MCT Display Manager: the empty window asks for "a USB display with an
+  MCT Trigger chip" instead of naming only the Trigger 6 adapter and the
+  DTU-1031X.
+
 ## 0.8.1 (2026-10-16)
 
 Driver versions: mct_t6 0.29.15, mct_t2 0.3.43.

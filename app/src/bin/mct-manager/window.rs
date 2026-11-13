@@ -293,7 +293,7 @@ impl SimpleComponent for App {
             &adw::StatusPage::builder()
                 .icon_name("video-display-symbolic")
                 .title("No MCT displays connected")
-                .description("Connect a Trigger 6 adapter or the DTU-1031X")
+                .description("Connect a USB display with an MCT Trigger chip")
                 .build(),
         ));
 
