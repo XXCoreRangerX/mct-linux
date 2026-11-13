@@ -49,7 +49,7 @@ X11 desktop and the text console.
 | Second output (docks) | ❌ | ➖ |
 | Hardware rotation | ❌ the desktop rotates instead | ❌ the desktop rotates instead |
 
-Linux 6.12 or later; mainly developed on 7.2.
+Linux 6.12 or later; developed on 7.2 and 7.3.
 
 ## Supported devices
 

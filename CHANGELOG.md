@@ -6,6 +6,10 @@ drm_info and in the kernel log at probe).
 
 ## Unreleased
 
+- Linux 7.3: the cursor plane declares its blend mode (premultiplied alpha,
+  what DRM assumed before), which 7.3 warns about at probe otherwise
+  ("pixel format with alpha exposed but blend mode not setup"). Built and
+  run on 7.3.1. mct_t6 0.29.16, mct_t2 0.3.44.
 - MCT Display Manager: the empty window asks for "a USB display with an
   MCT Trigger chip" instead of naming only the Trigger 6 adapter and the
   DTU-1031X.

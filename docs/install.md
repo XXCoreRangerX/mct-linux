@@ -48,7 +48,7 @@ The app: `cargo build --release` in `app/` (see
 
 ### Older kernels
 
-The driver is written for the DRM API of Linux 7.2 and mainly tested there.
+The driver is written for the DRM API of Linux 7.2 and tested on 7.2 and 7.3.
 On 6.12 to 7.1, `kernel/Kbuild` detects which newer interfaces the kernel
 lacks and `kernel/mct_compat.h` maps them onto the older ones (the renamed
 atomic state, the vblank timer helpers, the fbdev setup, the DMA device for

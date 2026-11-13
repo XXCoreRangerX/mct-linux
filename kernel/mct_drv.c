@@ -18,6 +18,7 @@
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_atomic_state_helper.h>
+#include <drm/drm_blend.h>
 #include <drm/drm_cache.h>
 #include <drm/drm_color_mgmt.h>
 #include <drm/drm_crtc_helper.h>
@@ -1026,6 +1027,14 @@ int mct_init(struct mct_device *mdev, const struct mct_config *cfg)
 	if (ret)
 		return ret;
 	drm_plane_helper_add(&mdev->cursor, &mct_cursor_helper_funcs);
+	/*
+	 * Cursor images are premultiplied, as DRM assumes without this property
+	 * and compositors send them. Since 7.3 the core warns about planes with
+	 * alpha formats that don't say so.
+	 */
+	ret = drm_plane_create_blend_mode_property(&mdev->cursor, BIT(DRM_MODE_BLEND_PREMULTI));
+	if (ret)
+		return ret;
 
 	ret = drm_crtc_init_with_planes(dev, &mdev->crtc, &mdev->primary, &mdev->cursor,
 					&mct_crtc_funcs, NULL);
